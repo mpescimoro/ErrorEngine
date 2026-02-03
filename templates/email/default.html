@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+</head>
+<body style="margin:0; padding:20px; font-family:Arial,Helvetica,sans-serif; font-size:14px; color:#333; background:#f2f2f2;">
+<table width="100%" cellpadding="0" cellspacing="0">
+<tr>
+<td align="center">
+
+<table width="700" cellpadding="0" cellspacing="0" style="background:#ffffff;">
+
+    <!-- HEADER -->
+    <tr>
+        <td style="padding:20px 24px; background:#0d9488; color:#ffffff;">
+            <div style="font-size:12px; font-weight:bold; letter-spacing:0.5px;">
+                {% if email_type == 'reminder' %}
+                    ⏰ REMINDER
+                {% else %}
+                    🔔 NUOVO ERRORE
+                {% endif %}
+            </div>
+            <div style="font-size:18px; font-weight:bold; margin-top:6px;">
+                {{ query_name }}
+            </div>
+            {% if query_description %}
+            <div style="font-size:13px; color:#e6f4f1; margin-top:4px;">
+                {{ query_description }}
+            </div>
+            {% endif %}
+        </td>
+    </tr>
+
+    <!-- INFO -->
+    <tr>
+        <td style="padding:20px 24px;">
+            <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                    <td style="padding:12px; background:#f7f7f7;">
+                        <div style="font-size:11px; color:#666; text-transform:uppercase;">
+                            Data controllo
+                        </div>
+                        <div style="font-weight:bold; margin-bottom:10px;">
+                            {{ check_time|localtime('%d/%m/%Y %H:%M:%S') }}
+                        </div>
+
+                        <div style="font-size:11px; color:#666; text-transform:uppercase;">
+                            {% if email_type == 'reminder' %}Errori ancora attivi{% else %}Nuovi errori{% endif %}
+                        </div>
+                        <div style="font-weight:bold;">
+                            {{ error_count }}
+                        </div>
+                    </td>
+                </tr>
+            </table>
+
+            {% if email_type == 'reminder' %}
+            <div style="margin-top:16px; padding:10px; background:#fff7e6; color:#8a5a00; font-size:13px;">
+                ⚠️ <strong>Promemoria:</strong> questi errori non sono ancora stati risolti.
+            </div>
+            {% endif %}
+        </td>
+    </tr>
+
+    <!-- TABLE -->
+    <tr>
+        <td style="padding:0 24px 24px 24px;">
+            <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+                <tr>
+                    {% for col in columns %}
+                    <th style="background:#0d9488; color:#ffffff; padding:8px 10px; font-size:12px; text-align:left;">
+                        {{ col }}
+                    </th>
+                    {% endfor %}
+                </tr>
+                {% for error in errors %}
+                <tr>
+                    {% for col in columns %}
+                    <td style="padding:8px 10px; font-size:13px; border-bottom:1px solid #eeeeee;">
+                        {{ error[col] if error[col] is not none else '—' }}
+                    </td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </table>
+        </td>
+    </tr>
+
+    <!-- FOOTER -->
+    <tr>
+        <td style="padding:14px 24px; background:#f7f7f7; text-align:center;">
+            <span style="font-size:12px; color:#777;">
+                Generato da <strong style="color:#0d9488;">ErrorEngine</strong>
+            </span>
+        </td>
+    </tr>
+
+</table>
+
+</td>
+</tr>
+</table>
+</body>
+</html>

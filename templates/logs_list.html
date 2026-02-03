@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+
+{% block title %}Log Esecuzioni - ErrorEngine{% endblock %}
+
+{% block content %}
+<!-- Page Header -->
+<div class="page-header">
+    <h1 class="page-title">
+        <i class="bi bi-journal-text"></i>
+        Log Esecuzioni
+    </h1>
+    
+    <!-- Filter -->
+    <form method="GET" class="flex items-center gap-sm">
+        <select name="query_id" class="form-control form-select" onchange="this.form.submit()" style="width: auto;">
+            <option value="">Tutte le consultazioni</option>
+            {% for q in queries %}
+            <option value="{{ q.id }}" {{ 'selected' if selected_query_id == q.id }}>{{ q.name }}</option>
+            {% endfor %}
+        </select>
+    </form>
+</div>
+
+{% if logs %}
+<div class="card">
+    <div class="table-container">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Data/Ora</th>
+                    <th>Consultazione</th>
+                    <th>Stato</th>
+                    <th>Righe</th>
+                    <th>Nuovi</th>
+                    <th>Risolti</th>
+                    <th>Reminder</th>
+                    <th>Tempo</th>
+                    <th>Note</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in logs %}
+                <tr>
+                    <td>
+                        <span class="font-mono" style="font-size: 0.8125rem;">
+                            {{ log.executed_at|localtime('%d/%m/%y %H:%M:%S') }}
+                        </span>
+                    </td>
+                    <td>
+                        <a href="{{ url_for('main.query_detail', query_id=log.query_id) }}" class="query-name">
+                            {{ log.monitored_query.name }}
+                        </a>
+                    </td>
+                    <td>
+                        {% if log.status == 'success' %}
+                        <span class="badge badge-success" title="Eseguita con successo">
+                            <i class="bi bi-check"></i> OK
+                        </span>
+                        {% elif log.status == 'skipped' %}
+                        <span class="badge badge-warning" title="Saltata (fuori orario o disattivata)">
+                            <i class="bi bi-skip-forward"></i> Skip
+                        </span>
+                        {% else %}
+                        <span class="badge badge-danger" title="Errore durante l'esecuzione">
+                            <i class="bi bi-x"></i> Errore
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td>{{ log.rows_returned }}</td>
+                    <td>
+                        {% if log.new_errors > 0 %}
+                        <span class="badge badge-danger">+{{ log.new_errors }}</span>
+                        {% else %}
+                        <span class="text-muted">0</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if log.resolved_errors > 0 %}
+                        <span class="badge badge-success">-{{ log.resolved_errors }}</span>
+                        {% else %}
+                        <span class="text-muted">0</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if log.reminders_sent > 0 %}
+                        <span class="badge badge-warning">{{ log.reminders_sent }}</span>
+                        {% else %}
+                        <span class="text-muted">0</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <span class="text-muted">{{ log.execution_time_ms }}ms</span>
+                    </td>
+                    <td>
+                        {% if log.error_message %}
+                        <span class="text-danger truncate" style="max-width: 200px; display: block;" title="{{ log.error_message }}">
+                            {{ log.error_message[:50] }}{{ '...' if log.error_message|length > 50 }}
+                        </span>
+                        {% else %}
+                        <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="card">
+    <div class="empty-state">
+        <div class="empty-state-icon">
+            <i class="bi bi-journal"></i>
+        </div>
+        <h3 class="empty-state-title">Nessun log disponibile</h3>
+        <p class="empty-state-description">
+            I log delle esecuzioni appariranno qui dopo il primo controllo.
+        </p>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,261 @@
+{% extends "base.html" %}
+
+{% block title %}{{ 'Modifica' if connection else 'Nuova' }} Connessione - ErrorEngine{% endblock %}
+
+{% block content %}
+<!-- Breadcrumb -->
+<nav aria-label="Breadcrumb" class="mb-lg">
+    <ol class="flex items-center gap-sm text-muted" style="list-style: none; padding: 0; margin: 0;">
+        <li><a href="{{ url_for('main.connections_list') }}" class="text-muted">Connessioni</a></li>
+        <li><i class="bi bi-chevron-right"></i></li>
+        <li aria-current="page">{{ 'Modifica' if connection else 'Nuova' }}</li>
+    </ol>
+</nav>
+
+<!-- Page Header -->
+<div class="page-header">
+    <h1 class="page-title">
+        <i class="bi bi-{{ 'pencil' if connection else 'plus-lg' }}"></i>
+        {{ 'Modifica Connessione' if connection else 'Nuova Connessione' }}
+    </h1>
+</div>
+
+<form method="POST" id="connectionForm">
+    <div class="grid" style="grid-template-columns: 2fr 1fr; gap: var(--space-xl); align-items: start;">
+        
+        <!-- Main Column -->
+        <div>
+            <div class="card mb-lg">
+                <div class="card-header">
+                    <i class="bi bi-database"></i>
+                    Configurazione
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label for="name" class="form-label">
+                            Nome Connessione <span class="required">*</span>
+                        </label>
+                        <input type="text" 
+                               class="form-control" 
+                               id="name" 
+                               name="name" 
+                               value="{{ connection.name if connection else '' }}"
+                               placeholder="Es: Database Produzione"
+                               required>
+                        <div class="form-text">Nome descrittivo per identificare questa connessione</div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="db_type" class="form-label">
+                            Tipo Database <span class="required">*</span>
+                        </label>
+                        <select class="form-control form-select" id="db_type" name="db_type" required onchange="updateDefaultPort()">
+                            {% for key, label in drivers.items() %}
+                            <option value="{{ key }}" 
+                                    {{ 'selected' if connection and connection.db_type == key }}
+                                    data-port="{{ {'oracle': 1521, 'postgres': 5432, 'mysql': 3306, 'sqlserver': 1433, 'sqlite': ''}[key] }}">
+                                {{ label }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    
+                    <div id="networkFields">
+                        <div class="grid grid-cols-2 gap-md">
+                            <div class="form-group">
+                                <label for="host" class="form-label">Host</label>
+                                <input type="text" 
+                                       class="form-control" 
+                                       id="host" 
+                                       name="host" 
+                                       value="{{ connection.host if connection else '' }}"
+                                       placeholder="192.168.1.100 o hostname">
+                            </div>
+                            
+                            <div class="form-group">
+                                <label for="port" class="form-label">Porta</label>
+                                <input type="number" 
+                                       class="form-control" 
+                                       id="port" 
+                                       name="port" 
+                                       value="{{ connection.port if connection else '' }}"
+                                       placeholder="Default in base al tipo">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="database" class="form-label">
+                            <span id="databaseLabel">Database / Service Name</span>
+                        </label>
+                        <input type="text" 
+                               class="form-control" 
+                               id="database" 
+                               name="database" 
+                               value="{{ connection.database if connection else '' }}"
+                               placeholder="">
+                        <div class="form-text" id="databaseHelp">
+                            Per Oracle: Service Name (es: X3V11). Per SQLite: percorso file.
+                        </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-2 gap-md" id="credentialFields">
+                        <div class="form-group">
+                            <label for="username" class="form-label">Username</label>
+                            <input type="text" 
+                                   class="form-control" 
+                                   id="username" 
+                                   name="username" 
+                                   value="{{ connection.username if connection else '' }}"
+                                   autocomplete="off">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="password" class="form-label">
+                                Password
+                                {% if connection %}<span class="text-muted">(lascia vuoto per non modificare)</span>{% endif %}
+                            </label>
+                            <input type="password" 
+                                   class="form-control" 
+                                   id="password" 
+                                   name="password"
+                                   autocomplete="new-password">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Test Results -->
+            <div class="card mb-lg">
+                <div class="card-header">
+                    <i class="bi bi-plug"></i>
+                    Test Connessione
+                </div>
+                <div class="card-body">
+                    <div id="testResult"></div>
+                    <button type="button" class="btn btn-secondary" onclick="testConnection()">
+                        <i class="bi bi-play"></i>
+                        Testa Connessione
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Sidebar -->
+        <div>
+            <!-- Status -->
+            <div class="card mb-lg">
+                <div class="card-header">
+                    <i class="bi bi-toggle-on"></i>
+                    Stato
+                </div>
+                <div class="card-body">
+                    <label class="form-check form-switch">
+                        <input type="checkbox" 
+                               class="form-check-input" 
+                               id="is_active" 
+                               name="is_active"
+                               {{ 'checked' if not connection or connection.is_active }}>
+                        <span class="form-check-label">Connessione Attiva</span>
+                    </label>
+                    <div class="form-text">Se disattivata, non sarà disponibile per le consultazioni</div>
+                </div>
+            </div>
+            
+            <!-- Actions -->
+            <div class="card">
+                <div class="card-body">
+                    <button type="submit" class="btn btn-primary w-full mb-sm">
+                        <i class="bi bi-check-lg"></i>
+                        {{ 'Salva Modifiche' if connection else 'Crea Connessione' }}
+                    </button>
+                    <a href="{{ url_for('main.connections_list') }}" class="btn btn-secondary w-full">
+                        Annulla
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Aggiorna porta di default in base al tipo DB
+function updateDefaultPort() {
+    const select = document.getElementById('db_type');
+    const option = select.options[select.selectedIndex];
+    const port = option.dataset.port;
+    const portInput = document.getElementById('port');
+    
+    // Aggiorna placeholder
+    portInput.placeholder = port ? `Default: ${port}` : 'N/A';
+    
+    // Mostra/nascondi campi per SQLite
+    const isSqlite = select.value === 'sqlite';
+    document.getElementById('networkFields').style.display = isSqlite ? 'none' : 'block';
+    document.getElementById('credentialFields').style.display = isSqlite ? 'none' : 'grid';
+    
+    // Aggiorna label database
+    const dbLabel = document.getElementById('databaseLabel');
+    const dbHelp = document.getElementById('databaseHelp');
+    if (isSqlite) {
+        dbLabel.textContent = 'Percorso File';
+        dbHelp.textContent = 'Percorso completo del file SQLite (es: /path/to/database.db)';
+    } else if (select.value === 'oracle') {
+        dbLabel.textContent = 'Service Name';
+        dbHelp.textContent = 'Service Name Oracle (es: X3V11, ORCL)';
+    } else {
+        dbLabel.textContent = 'Database';
+        dbHelp.textContent = 'Nome del database';
+    }
+}
+
+// Test connessione
+async function testConnection() {
+    const container = document.getElementById('testResult');
+    container.innerHTML = '<div class="flex items-center gap-sm"><div class="spinner"></div> Test in corso...</div>';
+    
+    const data = {
+        db_type: document.getElementById('db_type').value,
+        host: document.getElementById('host').value,
+        port: document.getElementById('port').value,
+        database: document.getElementById('database').value,
+        username: document.getElementById('username').value,
+        password: document.getElementById('password').value
+    };
+    
+    {% if connection %}
+    // Se modifica e password vuota, usa quella esistente (test via ID)
+    if (!data.password) {
+        try {
+            const result = await api.post('/api/connections/{{ connection.id }}/test');
+            showTestResult(container, result);
+            return;
+        } catch (error) {
+            container.innerHTML = `<div class="alert alert-danger"><i class="alert-icon bi bi-x-circle-fill"></i><div class="alert-content">${escapeHtml(error.message)}</div></div>`;
+            return;
+        }
+    }
+    {% endif %}
+    
+    try {
+        const result = await api.post('/api/connections/test', data);
+        showTestResult(container, result);
+    } catch (error) {
+        container.innerHTML = `<div class="alert alert-danger"><i class="alert-icon bi bi-x-circle-fill"></i><div class="alert-content">${escapeHtml(error.message)}</div></div>`;
+    }
+}
+
+function showTestResult(container, result) {
+    if (result.status === 'ok') {
+        container.innerHTML = `<div class="alert alert-success mb-md"><i class="alert-icon bi bi-check-circle-fill"></i><div class="alert-content">${escapeHtml(result.message)}</div></div>`;
+    } else {
+        container.innerHTML = `<div class="alert alert-danger mb-md"><i class="alert-icon bi bi-x-circle-fill"></i><div class="alert-content">${escapeHtml(result.message)}</div></div>`;
+    }
+}
+
+// Init
+document.addEventListener('DOMContentLoaded', updateDefaultPort);
+</script>
+{% endblock %}

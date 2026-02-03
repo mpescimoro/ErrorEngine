@@ -1,0 +1,332 @@
+{% extends "base.html" %}
+
+{% block title %}Statistiche - ErrorEngine{% endblock %}
+
+{% block content %}
+<!-- Page Header -->
+<div class="page-header">
+    <h1 class="page-title">
+        <i class="bi bi-graph-up"></i>
+        Statistiche
+    </h1>
+    <select id="periodFilter" class="form-control form-select" style="width: auto;" onchange="statsPage.reload()">
+        <option value="7">Ultimi 7 giorni</option>
+        <option value="14" selected>Ultimi 14 giorni</option>
+        <option value="30">Ultimi 30 giorni</option>
+        <option value="90">Ultimi 90 giorni</option>
+    </select>
+</div>
+
+<!-- Overview Stat Cards -->
+<div class="grid grid-cols-4 gap-lg mb-xl">
+    <!-- Errori Oggi -->
+    <div class="card stat-card">
+        <div class="card-body">
+            <div class="flex justify-between items-start">
+                <div>
+                    <div class="stat-label">Errori Oggi</div>
+                    <div class="stat-value" id="statToday">-</div>
+                </div>
+                <div class="stat-icon">
+                    <i class="bi bi-calendar-event"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Errori Periodo -->
+    <div class="card stat-card stat-warning">
+        <div class="card-body">
+            <div class="flex justify-between items-start">
+                <div>
+                    <div class="stat-label">Errori Periodo</div>
+                    <div class="stat-value" id="statPeriod">-</div>
+                    <div class="mt-xs" id="statTrend"></div>
+                </div>
+                <div class="stat-icon">
+                    <i class="bi bi-bar-chart-line"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Non Risolti -->
+    <div class="card stat-card stat-danger">
+        <div class="card-body">
+            <div class="flex justify-between items-start">
+                <div>
+                    <div class="stat-label">Non Risolti</div>
+                    <div class="stat-value" id="statActive">-</div>
+                    <div class="mt-xs">
+                        <span class="text-muted">Attualmente aperti</span>
+                    </div>
+                </div>
+                <div class="stat-icon">
+                    <i class="bi bi-exclamation-triangle"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tempo Medio Risoluzione -->
+    <div class="card stat-card stat-success">
+        <div class="card-body">
+            <div class="flex justify-between items-start">
+                <div>
+                    <div class="stat-label">Tempo Medio Risoluzione</div>
+                    <div class="stat-value" id="statResolution">-</div>
+                    <div class="mt-xs">
+                        <span class="text-muted">Ultimi 30 giorni</span>
+                    </div>
+                </div>
+                <div class="stat-icon">
+                    <i class="bi bi-clock-history"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Chart + Top Queries -->
+<div class="grid" style="grid-template-columns: 2fr 1fr; gap: var(--space-xl); align-items: start;">
+    <!-- Timeline Chart -->
+    <div class="card">
+        <div class="card-header">
+            <div class="flex items-center gap-sm">
+                <i class="bi bi-bar-chart"></i>
+                Errori nel Tempo
+            </div>
+        </div>
+        <div class="card-body">
+            <div id="timelineChart" style="height: 280px;">
+                <div class="flex items-center justify-center" style="height: 100%;">
+                    <div class="spinner"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Top Queries -->
+    <div class="card">
+        <div class="card-header">
+            <div class="flex items-center gap-sm">
+                <i class="bi bi-trophy"></i>
+                Top Consultazioni
+            </div>
+        </div>
+        <div class="card-body">
+            <div id="topQueries">
+                <div class="flex items-center justify-center p-lg">
+                    <div class="spinner"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Detailed Table -->
+<div class="card mt-xl">
+    <div class="card-header">
+        <div class="flex items-center gap-sm">
+            <i class="bi bi-table"></i>
+            Dettaglio per Consultazione
+        </div>
+    </div>
+    <div id="queryDetails">
+        <div class="flex items-center justify-center p-lg">
+            <div class="spinner"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+var statsPage = {
+    init: function() {
+        this.reload();
+    },
+
+    reload: function() {
+        var days = document.getElementById('periodFilter').value;
+        this.loadOverview(days);
+        this.loadTimeline(days);
+        this.loadQueryDetails(days);
+    },
+
+    loadOverview: function(days) {
+        var self = this;
+        api.get('/api/stats/overview?days=' + days).then(function(data) {
+            document.getElementById('statToday').textContent = data.errors_today;
+            document.getElementById('statPeriod').textContent = data.errors_week;
+            document.getElementById('statActive').textContent = data.errors_active;
+            document.getElementById('statResolution').textContent =
+                data.avg_resolution_hours > 0 ? data.avg_resolution_hours + 'h' : '-';
+
+            // Trend
+            var trendEl = document.getElementById('statTrend');
+            if (data.trend_percent !== 0) {
+                var icon = data.trend_direction === 'up' ? '↑' : '↓';
+                var cls = data.trend_direction === 'up' ? 'negative' : 'positive';
+                trendEl.innerHTML = '<span class="stat-change ' + cls + '">' + icon + ' ' + Math.abs(data.trend_percent) + '% vs periodo prec.</span>';
+            } else {
+                trendEl.innerHTML = '<span class="text-muted">= stabile</span>';
+            }
+
+            // Top queries
+            self.renderTopQueries(data.top_queries);
+        }).catch(function(error) {
+            console.error('Error loading overview:', error);
+        });
+    },
+
+    renderTopQueries: function(queries) {
+        var container = document.getElementById('topQueries');
+
+        if (!queries || queries.length === 0) {
+            container.innerHTML = '<div class="empty-state" style="padding: var(--space-lg);">' +
+                '<div class="empty-state-icon" style="font-size: 2rem;"><i class="bi bi-check-circle"></i></div>' +
+                '<p class="text-muted mb-0">Nessun errore nel periodo</p></div>';
+            return;
+        }
+
+        var maxCount = queries[0].count;
+        var html = '';
+
+        queries.forEach(function(q, i) {
+            var barWidth = (q.count / maxCount) * 100;
+            html += '<div style="margin-bottom: var(--space-md);">' +
+                '<div class="flex justify-between items-center mb-xs">' +
+                    '<a href="/queries/' + q.id + '" class="query-name" style="font-size: 0.875rem;">' + escapeHtml(q.name) + '</a>' +
+                    '<span class="badge badge-danger">' + q.count + '</span>' +
+                '</div>' +
+                '<div style="background: var(--color-border-light); height: 6px; border-radius: 3px;">' +
+                    '<div style="background: var(--color-primary); height: 100%; width: ' + barWidth + '%; border-radius: 3px; transition: width 0.3s;"></div>' +
+                '</div>' +
+            '</div>';
+        });
+
+        container.innerHTML = html;
+    },
+
+    loadTimeline: function(days) {
+        var container = document.getElementById('timelineChart');
+        if (!container) return;
+
+        api.get('/api/stats/timeline?days=' + days).then(function(data) {
+            if (data.length === 0 || data.every(function(d) { return d.count === 0; })) {
+                container.innerHTML = '<div class="empty-state" style="height: 100%; display: flex; align-items: center; justify-content: center;">' +
+                    '<div><div class="empty-state-icon" style="font-size: 2rem;"><i class="bi bi-bar-chart"></i></div>' +
+                    '<p class="text-muted mb-0">Nessun errore nel periodo</p></div></div>';
+                return;
+            }
+
+            var maxCount = Math.max.apply(null, data.map(function(d) { return d.count; }));
+            if (maxCount < 1) maxCount = 1;
+            var chartHeight = 220;
+
+            // Smart label interval
+            var showEvery = data.length > 28 ? 4 : (data.length > 14 ? 2 : 1);
+
+            // Build bars
+            var barsHtml = '';
+            data.forEach(function(d, i) {
+                var barHeight = Math.max(Math.round((d.count / maxCount) * chartHeight), d.count > 0 ? 4 : 0);
+                var showLabel = (i % showEvery === 0) || (i === data.length - 1);
+                var countLabel = d.count > 0
+                    ? '<span style="font-size: 0.7rem; color: var(--color-text-muted); margin-bottom: 2px;">' + d.count + '</span>'
+                    : '';
+                var dateLabel = showLabel ? d.label : '';
+
+                barsHtml += '<div style="flex: 1; display: flex; flex-direction: column; align-items: center; min-width: 0;">' +
+                    '<div style="flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; width: 100%;">' +
+                        countLabel +
+                        '<div style="width: 60%; max-width: 28px; height: ' + barHeight + 'px; background: var(--color-primary); border-radius: 3px 3px 0 0; transition: height 0.3s;" ' +
+                             'title="' + d.label + ': ' + d.count + ' errori"></div>' +
+                    '</div>' +
+                    '<div style="font-size: 0.65rem; color: var(--color-text-light); margin-top: 6px; height: 16px; white-space: nowrap;">' + dateLabel + '</div>' +
+                '</div>';
+            });
+
+            // Grid lines - avoid duplicate values
+            var gridValues = [];
+            var gridHtml = '';
+            [0.25, 0.5, 0.75, 1].forEach(function(ratio) {
+                var val = Math.round(maxCount * ratio);
+                if (val > 0 && gridValues.indexOf(val) === -1) {
+                    gridValues.push(val);
+                    var bottom = (val / maxCount) * chartHeight;
+                    gridHtml += '<div style="position: absolute; bottom: ' + (bottom + 22) + 'px; left: 0; right: 0; border-top: 1px dashed var(--color-border); pointer-events: none;">' +
+                        '<span style="position: absolute; left: 0; top: -10px; font-size: 0.65rem; color: var(--color-text-light);">' + val + '</span>' +
+                    '</div>';
+                }
+            });
+
+            container.innerHTML = '<div style="position: relative; height: 100%; padding-left: 28px;">' +
+                gridHtml +
+                '<div style="display: flex; align-items: flex-end; height: ' + (chartHeight + 22) + 'px; gap: 2px; position: relative;">' +
+                    barsHtml +
+                '</div>' +
+            '</div>';
+
+        }).catch(function(error) {
+            console.error('Error loading timeline:', error);
+            container.innerHTML = '<p class="text-danger text-center" style="line-height: 280px;">Errore caricamento</p>';
+        });
+    },
+
+    loadQueryDetails: function(days) {
+        var container = document.getElementById('queryDetails');
+
+        api.get('/api/stats/all-queries?days=' + days).then(function(data) {
+            if (data.length === 0) {
+                container.innerHTML = '<div class="card-body"><div class="empty-state" style="padding: var(--space-lg);">' +
+                    '<div class="empty-state-icon" style="font-size: 2rem;"><i class="bi bi-inbox"></i></div>' +
+                    '<p class="text-muted mb-0">Nessuna consultazione con errori nel periodo</p></div></div>';
+                return;
+            }
+
+            var html = '<div class="table-container"><table class="table">' +
+                '<thead><tr>' +
+                    '<th>Consultazione</th>' +
+                    '<th>Tag</th>' +
+                    '<th>Errori</th>' +
+                    '<th>Non Risolti</th>' +
+                    '<th>Ultimo Errore</th>' +
+                '</tr></thead><tbody>';
+
+            data.forEach(function(q) {
+                var tags = q.tags
+                    ? q.tags.split(',').map(function(t) {
+                        return '<span class="badge badge-secondary">' + escapeHtml(t.trim()) + '</span>';
+                    }).join(' ')
+                    : '<span class="text-muted">—</span>';
+
+                var activeHtml = q.active_count > 0
+                    ? '<span class="text-danger" style="font-weight: 600;">' + q.active_count + '</span>'
+                    : '<span class="text-muted">0</span>';
+
+                html += '<tr>' +
+                    '<td><a href="/queries/' + q.id + '" class="query-name">' + escapeHtml(q.name) + '</a></td>' +
+                    '<td>' + tags + '</td>' +
+                    '<td><span class="badge badge-danger">' + q.error_count + '</span></td>' +
+                    '<td>' + activeHtml + '</td>' +
+                    '<td><span class="text-muted" style="font-size: 0.8125rem;">' + (q.last_error || '—') + '</span></td>' +
+                '</tr>';
+            });
+
+            html += '</tbody></table></div>';
+            container.innerHTML = html;
+
+        }).catch(function(error) {
+            console.error('Error loading query details:', error);
+            container.innerHTML = '<div class="card-body"><p class="text-danger text-center">Errore caricamento</p></div>';
+        });
+    }
+};
+
+document.addEventListener('DOMContentLoaded', function() {
+    statsPage.init();
+});
+</script>
+{% endblock %}

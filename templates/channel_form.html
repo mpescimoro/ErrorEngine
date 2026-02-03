@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+
+{% block title %}{{ 'Modifica' if channel else 'Nuovo' }} Canale - ErrorEngine{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title">
+        <i class="bi bi-broadcast"></i>
+        {{ 'Modifica Canale' if channel else 'Nuovo Canale' }}
+    </h1>
+</div>
+
+<form method="POST" id="channelForm">
+    <div class="grid grid-cols-2 gap-lg">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-gear"></i>
+                Configurazione
+            </div>
+            <div class="card-body">
+                <div class="form-group">
+                    <label for="name" class="form-label">Nome Canale <span class="required">*</span></label>
+                    <input type="text" class="form-control" id="name" name="name"
+                           value="{{ channel.name if channel else '' }}"
+                           placeholder="Es: Notifiche Produzione" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="channel_type" class="form-label">Tipo <span class="required">*</span></label>
+                    <select class="form-control form-select" id="channel_type" name="channel_type" 
+                            onchange="toggleConfig()" required>
+                        <option value="">-- Seleziona --</option>
+                        {% for key, label in channel_types.items() %}
+                        <option value="{{ key }}" {{ 'selected' if channel and channel.channel_type == key }}>
+                            {{ label }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                
+                <div class="form-group mb-0">
+                    <label class="form-check form-switch">
+                        <input type="checkbox" class="form-check-input" name="is_active" {{ 'checked' if not channel or channel.is_active }}>
+                        <span class="form-check-label">Canale attivo</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-send"></i>
+                Test
+            </div>
+            <div class="card-body">
+                <div id="testResult" class="mb-lg"></div>
+                {% if channel %}
+                <button type="button" class="btn btn-secondary" onclick="testChannel()">
+                    <i class="bi bi-send"></i> Invia Test
+                </button>
+                {% else %}
+                <p class="text-muted">Salva il canale per testarlo.</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    
+    <!-- Webhook Config -->
+    <div class="card mt-lg hidden" id="config-webhook">
+        <div class="card-header">
+            <i class="bi bi-globe"></i>
+            Configurazione Webhook
+        </div>
+        <div class="card-body">
+            <div class="form-group">
+                <label class="form-label">URL <span class="required">*</span></label>
+                <input type="url" class="form-control" id="webhook_url" name="webhook_url"
+                       value="{{ channel.get_config().url if channel and channel.channel_type == 'webhook' else '' }}"
+                       placeholder="https://esempio.com/webhook">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Metodo</label>
+                <select class="form-control form-select" id="webhook_method" name="webhook_method">
+                    <option value="POST" {{ 'selected' if not channel or channel.get_config().get('method', 'POST') == 'POST' }}>POST</option>
+                    <option value="PUT" {{ 'selected' if channel and channel.get_config().get('method') == 'PUT' }}>PUT</option>
+                </select>
+            </div>
+            <div class="form-group mb-0">
+                <label class="form-label">Headers (JSON)</label>
+                <textarea class="form-control font-mono" id="webhook_headers" name="webhook_headers" rows="2"
+                          placeholder='{"Authorization": "Bearer xxx"}'>{{ channel.get_config().get('headers', {})|tojson if channel and channel.channel_type == 'webhook' else '{}' }}</textarea>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Telegram Config -->
+    <div class="card mt-lg hidden" id="config-telegram">
+        <div class="card-header">
+            <i class="bi bi-telegram"></i>
+            Configurazione Telegram
+        </div>
+        <div class="card-body">
+            <div class="form-group">
+                <label class="form-label">Bot Token <span class="required">*</span></label>
+                <input type="text" class="form-control font-mono" id="telegram_bot_token" name="telegram_bot_token"
+                       value="{{ channel.get_config().bot_token if channel and channel.channel_type == 'telegram' else '' }}"
+                       placeholder="123456789:ABCdefGHI...">
+                <small class="form-text text-muted">Da <a href="https://t.me/BotFather" target="_blank">@BotFather</a></small>
+            </div>
+            <div class="form-group mb-0">
+                <label class="form-label">Chat ID <span class="required">*</span></label>
+                <input type="text" class="form-control font-mono" id="telegram_chat_id" name="telegram_chat_id"
+                       value="{{ channel.get_config().chat_id if channel and channel.channel_type == 'telegram' else '' }}"
+                       placeholder="-1001234567890">
+                <small class="form-text text-muted">Usa <a href="https://t.me/userinfobot" target="_blank">@userinfobot</a> per trovarlo</small>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Teams Config -->
+    <div class="card mt-lg hidden" id="config-teams">
+        <div class="card-header">
+            <i class="bi bi-microsoft-teams"></i>
+            Configurazione Teams
+        </div>
+        <div class="card-body">
+            <div class="form-group mb-0">
+                <label class="form-label">Webhook URL <span class="required">*</span></label>
+                <input type="url" class="form-control font-mono" id="teams_webhook_url" name="teams_webhook_url"
+                       value="{{ channel.get_config().webhook_url if channel and channel.channel_type == 'teams' else '' }}"
+                       placeholder="https://outlook.office.com/webhook/...">
+                <small class="form-text text-muted">Canale → Connettori → Incoming Webhook</small>
+            </div>
+        </div>
+    </div>
+    
+    <div class="flex gap-md mt-lg">
+        <button type="submit" class="btn btn-primary">
+            <i class="bi bi-check-lg"></i>
+            {{ 'Salva' if channel else 'Crea' }}
+        </button>
+        <a href="{{ url_for('main.channels_list') }}" class="btn btn-ghost">Annulla</a>
+    </div>
+</form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function toggleConfig() {
+    const type = document.getElementById('channel_type').value;
+    document.getElementById('config-webhook').classList.add('hidden');
+    document.getElementById('config-telegram').classList.add('hidden');
+    document.getElementById('config-teams').classList.add('hidden');
+    if (type) {
+        document.getElementById('config-' + type)?.classList.remove('hidden');
+    }
+}
+
+{% if channel %}
+async function testChannel() {
+    const result = document.getElementById('testResult');
+    result.innerHTML = '<div class="spinner"></div>';
+    try {
+        const res = await api.post('/api/channels/{{ channel.id }}/test');
+        result.innerHTML = res.success 
+            ? '<div class="alert alert-success"><i class="alert-icon bi bi-check-circle-fill"></i><div class="alert-content">' + res.message + '</div></div>'
+            : '<div class="alert alert-danger"><i class="alert-icon bi bi-x-circle-fill"></i><div class="alert-content">' + res.message + '</div></div>';
+    } catch (e) {
+        result.innerHTML = '<div class="alert alert-danger"><i class="alert-icon bi bi-x-circle-fill"></i><div class="alert-content">' + e.message + '</div></div>';
+    }
+}
+{% endif %}
+
+document.addEventListener('DOMContentLoaded', toggleConfig);
+</script>
+{% endblock %}

@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+
+{% block title %}Impostazioni - ErrorEngine{% endblock %}
+
+{% block content %}
+<!-- Page Header -->
+<div class="page-header">
+    <h1 class="page-title">
+        <i class="bi bi-gear"></i>
+        Impostazioni
+    </h1>
+</div>
+
+<!-- Hero / About Section -->
+<div class="card mb-xl" style="overflow: hidden;">
+    <div style="background: linear-gradient(135deg, var(--color-bg-sidebar) 0%, #1e3a5f 100%); padding: var(--space-2xl) var(--space-xl); color: white; display: flex; align-items: center; gap: var(--space-xl);">
+        <!-- Logo Area -->
+        <div style="flex-shrink: 0;">
+            <div style="width: 88px; height: 88px;">
+                <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="ErrorEngine" style="height: inherit;">
+            </div>
+        </div>
+        <!-- Info -->
+        <div style="flex: 1;">
+            <h2 style="margin: 0 0 0.25rem 0; font-size: 1.75rem; font-weight: 700; color: white;">ErrorEngine</h2>
+            <p style="margin: 0 0 0.75rem 0; opacity: 0.7; font-size: 0.9375rem;">
+                A self-hosted error monitoring system.
+            </p>
+            <div style="display: flex; gap: var(--space-sm); flex-wrap: wrap;">
+                <span style="background: rgba(255,255,255,0.15); padding: 0.25rem 0.75rem; border-radius: var(--radius-full); font-size: 0.8125rem; font-weight: 500;">
+                    v2.1
+                </span>
+                <a href="https://github.com/mpescimoro/ErrorEngine" target="_blank" 
+                   style="background: rgba(255,255,255,0.15); padding: 0.25rem 0.75rem; border-radius: var(--radius-full); font-size: 0.8125rem; color: white; text-decoration: none; display: inline-flex; align-items: center; gap: 0.375rem; transition: background 0.2s;">
+                    <i class="bi bi-github"></i> GitHub
+                </a>
+                <span style="background: rgba(255,255,255,0.15); padding: 0.25rem 0.75rem; border-radius: var(--radius-full); font-size: 0.8125rem;">
+                    MIT License
+                </span>
+            </div>
+        </div>
+        <!-- Author -->
+        <div style="flex-shrink: 0; text-align: right;">
+            <div style="font-size: 0.75rem; opacity: 0.5; margin-bottom: 0.25rem;">Sviluppato da</div>
+            <div style="font-weight: 600;">Mattia Pescimoro</div>
+            <div style="font-size: 0.8125rem; opacity: 0.6; margin-top: 0.125rem;">&lt;°))&gt;&lt;</div>
+        </div>
+    </div>
+</div>
+
+<div class="grid grid-cols-2 gap-lg">
+    <!-- Email Configuration -->
+    <div class="card">
+        <div class="card-header">
+            <i class="bi bi-envelope"></i>
+            Configurazione Email
+        </div>
+        <div class="card-body">
+            <p class="text-muted mb-lg">
+                Verifica la configurazione SMTP inviando un'email di test.
+            </p>
+            
+            <div class="form-group">
+                <label for="testEmailRecipient" class="form-label">Email destinatario</label>
+                <input type="email" 
+                       class="form-control" 
+                       id="testEmailRecipient"
+                       placeholder="tuo@email.com">
+            </div>
+            
+            <button type="button" 
+                    class="btn btn-primary" 
+                    id="testEmailBtn"
+                    onclick="testConnections.email(document.getElementById('testEmailRecipient').value)">
+                <i class="bi bi-send"></i>
+                Invia Email Test
+            </button>
+        </div>
+    </div>
+    
+    <!-- Connessioni DB Status -->
+    <div class="card">
+        <div class="card-header">
+            <div class="flex items-center gap-sm">
+                <i class="bi bi-database-gear"></i>
+                Connessioni Database
+            </div>
+            <a href="{{ url_for('main.connections_list') }}" class="btn btn-ghost btn-sm">
+                Gestisci
+                <i class="bi bi-arrow-right"></i>
+            </a>
+        </div>
+        <div class="card-body">
+            <div id="connectionsStatus">
+                <div class="flex items-center justify-center p-md">
+                    <div class="spinner"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- System Info -->
+    <div class="card">
+        <div class="card-header">
+            <i class="bi bi-cpu"></i>
+            Informazioni Sistema
+        </div>
+        <div class="card-body">
+            <div class="table-container">
+                <table class="table">
+                    <tbody>
+                        <tr>
+                            <td class="text-muted" style="width: 45%;">Scheduler</td>
+                            <td>
+                                <span class="badge badge-success">
+                                    <i class="bi bi-activity"></i>
+                                    Attivo
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Frequenza check</td>
+                            <td>Ogni minuto</td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Cleanup automatico</td>
+                            <td>Ogni giorno alle 03:00</td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Database</td>
+                            <td>SQLite (locale)</td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Timezone</td>
+                            <td>Europe/Rome</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Maintenance with auto-loaded stats -->
+    <div class="card">
+        <div class="card-header">
+            <i class="bi bi-wrench"></i>
+            Manutenzione e Statistiche
+        </div>
+        <div class="card-body">
+            <!-- Stats auto-loaded -->
+            <div id="cleanupStats" class="mb-lg">
+                <div class="flex items-center justify-center p-md">
+                    <div class="spinner"></div>
+                </div>
+            </div>
+            
+            <button type="button" 
+                    class="btn btn-warning w-full"
+                    onclick="settingsPage.runCleanup()">
+                <i class="bi bi-trash"></i>
+                Esegui Cleanup Manuale
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- API Documentation -->
+<div class="card mt-lg">
+    <div class="card-header">
+        <i class="bi bi-code-slash"></i>
+        API Endpoints
+    </div>
+    <div class="card-body">
+        <p class="text-muted mb-lg">
+            Endpoint REST disponibili per l'integrazione con sistemi esterni.
+        </p>
+        
+        <div class="table-container">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Metodo</th>
+                        <th>Endpoint</th>
+                        <th>Descrizione</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="badge badge-success">GET</span></td>
+                        <td><code>/api/health</code></td>
+                        <td>Health check</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-success">GET</span></td>
+                        <td><code>/api/queries</code></td>
+                        <td>Lista consultazioni</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-info">POST</span></td>
+                        <td><code>/api/queries/{id}/run</code></td>
+                        <td>Esegue consultazione</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-success">GET</span></td>
+                        <td><code>/api/queries/{id}/status</code></td>
+                        <td>Stato consultazione</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-success">GET</span></td>
+                        <td><code>/api/errors</code></td>
+                        <td>Lista errori attivi</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-info">POST</span></td>
+                        <td><code>/api/errors/{id}/resolve</code></td>
+                        <td>Risolvi errore manualmente</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-success">GET</span></td>
+                        <td><code>/api/stats/overview</code></td>
+                        <td>Statistiche generali (param: <code>days</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-success">GET</span></td>
+                        <td><code>/api/stats/timeline</code></td>
+                        <td>Errori per giorno (param: <code>days</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-success">GET</span></td>
+                        <td><code>/api/scheduler/next</code></td>
+                        <td>Prossimo check schedulato</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-success">GET</span></td>
+                        <td><code>/api/connections</code></td>
+                        <td>Lista connessioni DB</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-success">GET</span></td>
+                        <td><code>/api/channels</code></td>
+                        <td>Lista canali notifica</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

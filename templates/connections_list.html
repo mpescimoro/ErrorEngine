@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+
+{% block title %}Connessioni Database - ErrorEngine{% endblock %}
+
+{% block content %}
+<!-- Page Header -->
+<div class="page-header">
+    <h1 class="page-title">
+        <i class="bi bi-database-gear"></i>
+        Connessioni Database
+        <span class="badge badge-secondary">{{ connections|length }}</span>
+    </h1>
+    <a href="{{ url_for('main.connection_create') }}" class="btn btn-primary">
+        <i class="bi bi-plus-lg"></i>
+        Nuova Connessione
+    </a>
+</div>
+
+{% if connections %}
+<div class="card">
+    <div class="table-container">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Nome</th>
+                    <th>Tipo</th>
+                    <th>Host</th>
+                    <th>Database</th>
+                    <th>Stato</th>
+                    <th>Consultazioni</th>
+                    <th class="text-right">Azioni</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for conn in connections %}
+                <tr>
+                    <td>
+                        <strong>{{ conn.name }}</strong>
+                    </td>
+                    <td>
+                        <span class="badge badge-primary">{{ driver_labels.get(conn.db_type, conn.db_type) }}</span>
+                    </td>
+                    <td>
+                        <code>{{ conn.host }}{% if conn.port %}:{{ conn.port }}{% endif %}</code>
+                    </td>
+                    <td>
+                        <code>{{ conn.database }}</code>
+                    </td>
+                    <td>
+                        {% if conn.is_active %}
+                        <span class="status-indicator status-active">
+                            <span class="status-dot"></span>
+                            Attiva
+                        </span>
+                        {% else %}
+                        <span class="status-indicator status-inactive">
+                            <span class="status-dot"></span>
+                            Disattiva
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% set query_count = conn.queries.count() %}
+                        {% if query_count > 0 %}
+                        <span class="badge badge-secondary">{{ query_count }}</span>
+                        {% else %}
+                        <span class="text-muted">0</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-right">
+                        <div class="actions" style="justify-content: flex-end;">
+                            <button type="button" 
+                                    class="btn btn-ghost btn-sm btn-icon"
+                                    onclick="testConnection({{ conn.id }})"
+                                    title="Testa connessione">
+                                <i class="bi bi-plug"></i>
+                            </button>
+                            <a href="{{ url_for('main.connection_edit', conn_id=conn.id) }}" 
+                               class="btn btn-ghost btn-sm btn-icon"
+                               title="Modifica">
+                                <i class="bi bi-pencil"></i>
+                            </a>
+                            <form method="POST" action="{{ url_for('main.connection_delete', conn_id=conn.id) }}" 
+                                  style="display: inline;"
+                                  onsubmit="return confirm('Eliminare la connessione {{ conn.name }}?')">
+                                <button type="submit" 
+                                        class="btn btn-ghost btn-sm btn-icon text-danger"
+                                        title="Elimina"
+                                        {% if conn.queries.count() > 0 %}disabled{% endif %}>
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="card">
+    <div class="empty-state">
+        <div class="empty-state-icon">
+            <i class="bi bi-database-add"></i>
+        </div>
+        <h3 class="empty-state-title">Nessuna connessione configurata</h3>
+        <p class="empty-state-description">
+            Configura la prima connessione per iniziare a monitorare i tuoi database.
+        </p>
+        <a href="{{ url_for('main.connection_create') }}" class="btn btn-primary">
+            <i class="bi bi-plus-lg"></i>
+            Nuova Connessione
+        </a>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+async function testConnection(connId) {
+    toast.info('Test connessione in corso...');
+    try {
+        const result = await api.post(`/api/connections/${connId}/test`);
+        if (result.status === 'ok') {
+            toast.success('Connessione riuscita!');
+        } else {
+            toast.error(`Errore: ${result.message}`);
+        }
+    } catch (error) {
+        toast.error(`Errore: ${error.message}`);
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+
+{% block title %}Errori Attivi - ErrorEngine{% endblock %}
+
+{% block content %}
+<!-- Page Header -->
+<div class="page-header">
+    <h1 class="page-title">
+        <i class="bi bi-exclamation-triangle"></i>
+        Errori Attivi
+        {% if errors %}
+        <span class="badge badge-danger">{{ errors|length }}</span>
+        {% endif %}
+    </h1>
+    
+    <!-- Filter -->
+    <form method="GET" class="flex items-center gap-sm">
+        <select name="query_id" class="form-control form-select" onchange="this.form.submit()" style="width: auto;">
+            <option value="">Tutte le consultazioni</option>
+            {% for q in queries %}
+            <option value="{{ q.id }}" {{ 'selected' if selected_query_id == q.id }}>{{ q.name }}</option>
+            {% endfor %}
+        </select>
+    </form>
+</div>
+
+{% if errors %}
+<div class="card">
+    <div class="table-container">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Consultazione</th>
+                    <th>Dati Errore</th>
+                    <th>Prima rilevazione</th>
+                    <th>Occorrenze</th>
+                    <th>Reminder</th>
+                    <th class="text-right">Azioni</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for error in errors %}
+                {% set data = error.get_error_data() %}
+                {% set items_list = data.items()|list %}
+                {% set max_show = 3 %}
+                <tr>
+                    <td>
+                        <a href="{{ url_for('main.query_detail', query_id=error.query_id) }}" class="query-name">
+                            {{ error.monitored_query.name }}
+                        </a>
+                    </td>
+                    <td>
+                        <div style="max-width: 400px;">
+                            <!-- Preview dei primi campi -->
+                            {% for key, value in items_list[:max_show] %}
+                            <div class="truncate" title="{{ key }}: {{ value }}">
+                                <span class="text-muted">{{ key }}:</span> 
+                                <strong>{{ value }}</strong>
+                            </div>
+                            {% endfor %}
+                            
+                            <!-- Link per espandere se ci sono più campi -->
+                            {% if items_list|length > max_show %}
+                            <button type="button" 
+                                    class="expandable-trigger"
+                                    onclick="errorExpander.toggle(this, {{ error.id }})"
+                                    aria-expanded="false"
+                                    aria-controls="error-details-{{ error.id }}">
+                                <i class="bi bi-chevron-down"></i>
+                                +{{ items_list|length - max_show }} altri campi
+                            </button>
+                            
+                            <!-- Contenuto espandibile -->
+                            <div id="error-details-{{ error.id }}" class="expandable-content">
+                                {% for key, value in items_list %}
+                                <div class="error-field">
+                                    <span class="error-field-key">{{ key }}:</span>
+                                    <span class="error-field-value">{{ value }}</span>
+                                </div>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+                    </td>
+                    <td>
+                        <span title="{{ error.first_seen_at|localtime('%d/%m/%Y %H:%M:%S') }}">
+                            {{ error.first_seen_at|localtime('%d/%m/%y %H:%M') }}                        
+                        </span>
+                    </td>
+                    <td>
+                        <span class="badge badge-secondary">{{ error.occurrence_count }}x</span>
+                    </td>
+                    <td>
+                        {% if error.reminder_count > 0 %}
+                        <span class="badge badge-warning">{{ error.reminder_count }} inviati</span>
+                        {% else %}
+                        <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-right">
+                        <button type="button" 
+                                class="btn btn-sm btn-secondary"
+                                onclick="errorManager.resolve({{ error.id }})"
+                                title="Marca come risolto"
+                                aria-label="Risolvi errore">
+                            <i class="bi bi-check-lg"></i>
+                            Risolvi
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="card">
+    <div class="empty-state">
+        <div class="empty-state-icon">
+            <i class="bi bi-check-circle"></i>
+        </div>
+        <h3 class="empty-state-title">Nessun errore attivo</h3>
+        <p class="empty-state-description">
+            {% if selected_query_id %}
+            Non ci sono errori attivi per questa consultazione.
+            {% else %}
+            Ottimo! Non ci sono errori da risolvere al momento.
+            {% endif %}
+        </p>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,514 @@
+{% extends "base.html" %}
+
+{% block title %}{{ query.name }} - ErrorEngine{% endblock %}
+
+{% block content %}
+<!-- Breadcrumb -->
+<nav aria-label="Breadcrumb" class="mb-lg">
+    <ol class="flex items-center gap-sm text-muted" style="list-style: none; padding: 0; margin: 0;">
+        <li><a href="{{ url_for('main.queries_list') }}" class="text-muted">Consultazioni</a></li>
+        <li><i class="bi bi-chevron-right"></i></li>
+        <li aria-current="page">{{ query.name }}</li>
+    </ol>
+</nav>
+
+<!-- Page Header -->
+<div class="page-header">
+    <div>
+        <h1 class="page-title mb-sm">
+            {{ query.name }}
+            {% if query.is_active %}
+                {% if query.is_in_schedule() %}
+                <span class="badge badge-success">Attivo</span>
+                {% else %}
+                <span class="badge badge-warning">Fuori orario</span>
+                {% endif %}
+            {% else %}
+            <span class="badge badge-secondary">Disattivo</span>
+            {% endif %}
+        </h1>
+        {% if query.description %}
+        <p class="text-muted mb-0">{{ query.description }}</p>
+        {% endif %}
+    </div>
+    
+    <div class="flex items-center gap-sm">
+        <button type="button" 
+                class="btn btn-primary"
+                onclick="queryManager.run({{ query.id }})">
+            <i class="bi bi-play-fill"></i>
+            Esegui Ora
+        </button>
+        <a href="{{ url_for('main.query_edit', query_id=query.id) }}" class="btn btn-secondary">
+            <i class="bi bi-pencil"></i>
+            Modifica
+        </a>
+        <button type="button" 
+                class="btn btn-ghost btn-icon"
+                onclick="queryManager.toggle({{ query.id }})"
+                title="{{ 'Disattiva' if query.is_active else 'Attiva' }}">
+            <i class="bi bi-{{ 'pause' if query.is_active else 'play-circle' }}"></i>
+        </button>
+    </div>
+</div>
+
+<!-- Stats Row -->
+<div class="grid grid-cols-4 gap-md mb-xl">
+    <div class="card stat-card">
+        <div class="card-body">
+            <div class="flex justify-between items-start">
+                <div>
+                    <div class="stat-label">Errori Attivi</div>
+                    <div class="stat-value">{{ active_errors|length }}</div>
+                </div>
+                <div class="stat-icon">
+                    <i class="bi bi-exclamation-triangle"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="card stat-card stat-success">
+        <div class="card-body">
+            <div class="flex justify-between items-start">
+                <div>
+                    <div class="stat-label">Ultimo Check</div>
+                    <div class="stat-value" style="font-size: 1.25rem;">
+                        {% if query.last_check_at %}
+                        {{ query.last_check_at|localtime('%H:%M') }}
+                        {% else %}
+                        Mai
+                        {% endif %}
+                    </div>
+                    {% if query.last_check_at %}
+                    <div class="text-muted" style="font-size: 0.75rem;">
+                        {{ query.last_check_at|localtime('%d/%m/%y') }}
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="stat-icon">
+                    <i class="bi bi-clock-history"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="card stat-card stat-info">
+        <div class="card-body">
+            <div class="flex justify-between items-start">
+                <div>
+                    <div class="stat-label">Intervallo</div>
+                    <div class="stat-value" style="font-size: 1.25rem;">{{ query.check_interval_minutes }} min</div>
+                </div>
+                <div class="stat-icon">
+                    <i class="bi bi-arrow-repeat"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="card stat-card">
+        <div class="card-body">
+            <div class="flex justify-between items-start">
+                <div>
+                    <div class="stat-label">Regole Routing</div>
+                    <div class="stat-value">
+                        {% if query.routing_enabled %}
+                        {{ query.routing_rules|length }}
+                        {% else %}
+                        <span class="text-muted">Off</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="stat-icon">
+                    <i class="bi bi-signpost-split"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="grid" style="grid-template-columns: 2fr 1fr; gap: var(--space-xl); align-items: start;">
+    <!-- Main Column -->
+    <div>
+        <!-- Active Errors -->
+        <div class="card mb-lg">
+            <div class="card-header">
+                <div class="flex items-center gap-sm">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    Errori Attivi
+                    {% if active_errors %}
+                    <span class="badge badge-danger">{{ active_errors|length }}</span>
+                    {% endif %}
+                </div>
+            </div>
+            
+            {% if active_errors %}
+            <div class="table-container">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Dati</th>
+                            <th>Prima rilevazione</th>
+                            <th>Occorrenze</th>
+                            <th class="text-right">Azioni</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for error in active_errors[:10] %}
+                        {% set data = error.get_error_data() %}
+                        {% set items_list = data.items()|list %}
+                        {% set max_show = 2 %}
+                        <tr>
+                            <td>
+                                <div style="max-width: 350px;">
+                                    {% for key, value in items_list[:max_show] %}
+                                    <div class="truncate" title="{{ key }}: {{ value }}">
+                                        <span class="text-muted">{{ key }}:</span> 
+                                        <strong>{{ value }}</strong>
+                                    </div>
+                                    {% endfor %}
+                                    
+                                    {% if items_list|length > max_show %}
+                                    <button type="button" 
+                                            class="expandable-trigger"
+                                            onclick="errorExpander.toggle(this, {{ error.id }})"
+                                            aria-expanded="false"
+                                            aria-controls="error-details-{{ error.id }}">
+                                        <i class="bi bi-chevron-down"></i>
+                                        +{{ items_list|length - max_show }} altri
+                                    </button>
+                                    
+                                    <div id="error-details-{{ error.id }}" class="expandable-content">
+                                        {% for key, value in items_list %}
+                                        <div class="error-field">
+                                            <span class="error-field-key">{{ key }}:</span>
+                                            <span class="error-field-value">{{ value }}</span>
+                                        </div>
+                                        {% endfor %}
+                                    </div>
+                                    {% endif %}
+                                </div>
+                            </td>
+                            <td>
+                                <span title="{{ error.first_seen_at|localtime('%d/%m/%Y %H:%M') }}">
+                                    {{ error.first_seen_at|localtime('%d/%m/%y %H:%M') }}                                
+                                </span>
+                            </td>
+                            <td>
+                                <span class="badge badge-secondary">{{ error.occurrence_count }}x</span>
+                            </td>
+                            <td class="text-right">
+                                <button type="button" 
+                                        class="btn btn-sm btn-ghost"
+                                        onclick="errorManager.resolve({{ error.id }})">
+                                    <i class="bi bi-check-lg"></i>
+                                    Risolvi
+                                </button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if active_errors|length > 10 %}
+            <div class="card-footer">
+                <a href="{{ url_for('main.errors_list', query_id=query.id) }}" class="btn btn-ghost btn-sm">
+                    Vedi tutti gli errori ({{ active_errors|length }})
+                    <i class="bi bi-arrow-right"></i>
+                </a>
+            </div>
+            {% endif %}
+            {% else %}
+            <div class="card-body">
+                <div class="empty-state" style="padding: var(--space-lg);">
+                    <div class="empty-state-icon" style="font-size: 2rem;">
+                        <i class="bi bi-check-circle"></i>
+                    </div>
+                    <p class="text-muted mb-0">Nessun errore attivo al momento</p>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        
+        <!-- Recent Logs -->
+        <div class="card">
+            <div class="card-header">
+                <div class="flex items-center gap-sm">
+                    <i class="bi bi-journal-text"></i>
+                    Ultime Esecuzioni
+                </div>
+                <a href="{{ url_for('main.logs_list', query_id=query.id) }}" class="btn btn-ghost btn-sm">
+                    Tutti i log
+                    <i class="bi bi-arrow-right"></i>
+                </a>
+            </div>
+            
+            {% if recent_logs %}
+            <div class="table-container">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Data/Ora</th>
+                            <th>Stato</th>
+                            <th>Righe</th>
+                            <th>Nuovi</th>
+                            <th>Risolti</th>
+                            <th>Tempo</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for log in recent_logs %}
+                        <tr>
+                            <td>
+                                <span class="font-mono" style="font-size: 0.8125rem;">
+                                    {{ log.executed_at|localtime('%d/%m/%y %H:%M') }}
+                                </span>
+                            </td>
+                            <td>
+                                {% if log.status == 'success' %}
+                                <span class="badge badge-success">OK</span>
+                                {% elif log.status == 'skipped' %}
+                                <span class="badge badge-warning">Skip</span>
+                                {% else %}
+                                <span class="badge badge-danger">Errore</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ log.rows_returned }}</td>
+                            <td>
+                                {% if log.new_errors > 0 %}
+                                <span class="text-danger">+{{ log.new_errors }}</span>
+                                {% else %}
+                                <span class="text-muted">0</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if log.resolved_errors > 0 %}
+                                <span class="text-success">-{{ log.resolved_errors }}</span>
+                                {% else %}
+                                <span class="text-muted">0</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <span class="text-muted">{{ log.execution_time_ms }}ms</span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="card-body">
+                <div class="empty-state" style="padding: var(--space-lg);">
+                    <div class="empty-state-icon" style="font-size: 2rem;">
+                        <i class="bi bi-journal"></i>
+                    </div>
+                    <p class="text-muted mb-0">Nessuna esecuzione registrata</p>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    
+    <!-- Sidebar -->
+    <div>
+        <!-- Configuration -->
+        <div class="card mb-lg">
+            <div class="card-header">
+                <i class="bi bi-gear"></i>
+                Configurazione
+            </div>
+            <div class="card-body">
+                <div class="mb-md">
+                    <div class="text-muted mb-xs" style="font-size: 0.75rem;">Tipo Sorgente</div>
+                    <div>
+                        {% if query.source_type == 'oracle' %}
+                        <span class="badge badge-primary">
+                            <i class="bi bi-database"></i> Oracle
+                        </span>
+                        {% elif query.source_type == 'http' %}
+                        <span class="badge badge-info">
+                            <i class="bi bi-cloud"></i> HTTP
+                        </span>
+                        {% else %}
+                        <span class="badge badge-secondary">
+                            <i class="bi bi-plug"></i> API
+                        </span>
+                        {% endif %}
+                    </div>
+                </div>
+                
+                <div class="mb-md">
+                    <div class="text-muted mb-xs" style="font-size: 0.75rem;">Campi Chiave</div>
+                    <div>
+                        {% for field in query.key_fields.split(',') %}
+                        <code style="margin-right: 0.25rem;">{{ field.strip() }}</code>
+                        {% endfor %}
+                    </div>
+                </div>
+                
+                <div class="mb-md">
+                    <div class="text-muted mb-xs" style="font-size: 0.75rem;">Destinatari Email</div>
+                    <div style="font-size: 0.875rem;">
+                        {{ query.email_recipients or '—' }}
+                    </div>
+                </div>
+                
+                {% if query.schedule_start_time or query.schedule_end_time %}
+                <div class="mb-md">
+                    <div class="text-muted mb-xs" style="font-size: 0.75rem;">Fascia Oraria</div>
+                    <div>
+                        {{ query.schedule_start_time.strftime('%H:%M') if query.schedule_start_time else '00:00' }}
+                        —
+                        {{ query.schedule_end_time.strftime('%H:%M') if query.schedule_end_time else '23:59' }}
+                    </div>
+                </div>
+                {% endif %}
+                
+                <div>
+                    <div class="text-muted mb-xs" style="font-size: 0.75rem;">Giorni Attivi</div>
+                    <div class="day-picker">
+                        {% set active_days = query.get_schedule_days_list() %}
+                        {% for day, label in [(1,'L'), (2,'Ma'), (3,'Me'), (4,'G'), (5,'V'), (6,'S'), (7,'D')] %}
+                        <button type="button" 
+                                class="day-picker-btn {{ 'active' if day in active_days }}" 
+                                style="pointer-events: none; width: 32px; height: 32px; font-size: 0.75rem;"
+                                tabindex="-1">
+                            {{ label }}
+                        </button>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Reminder -->
+        <div class="card mb-lg">
+            <div class="card-header">
+                <i class="bi bi-bell"></i>
+                Promemoria
+            </div>
+            <div class="card-body">
+                {% if query.reminder_enabled %}
+                <div class="flex items-center gap-sm mb-md">
+                    <span class="badge badge-success">Attivo</span>
+                </div>
+                <div class="text-muted" style="font-size: 0.875rem;">
+                    Ogni <strong>{{ query.reminder_interval_minutes }}</strong> minuti,
+                    max <strong>{{ query.reminder_max_count }}</strong> per errore
+                </div>
+                {% else %}
+                <span class="text-muted">Disabilitato</span>
+                {% endif %}
+            </div>
+        </div>
+        
+        <!-- Routing -->
+        <div class="card mb-lg">
+            <div class="card-header">
+                <i class="bi bi-signpost-split"></i>
+                Routing
+            </div>
+            <div class="card-body">
+                {% if query.routing_enabled %}
+                <div class="flex items-center gap-sm mb-md">
+                    <span class="badge badge-success">Attivo</span>
+                    <span class="text-muted">{{ query.routing_rules|length }} regole</span>
+                </div>
+                
+                {% if query.routing_rules %}
+                <div class="mb-md">
+                    {% for rule in query.routing_rules[:3] %}
+                    <div class="routing-rule" style="padding: var(--space-sm); margin-bottom: var(--space-xs);">
+                        <div class="routing-rule-name" style="font-size: 0.875rem;">
+                            {{ rule.name or 'Regola ' ~ loop.index }}
+                        </div>
+                        <div class="routing-rule-recipients" style="font-size: 0.75rem;">
+                            {{ rule.conditions|length }} condizioni
+                        </div>
+                    </div>
+                    {% endfor %}
+                    {% if query.routing_rules|length > 3 %}
+                    <div class="text-muted" style="font-size: 0.75rem;">
+                        +{{ query.routing_rules|length - 3 }} altre regole
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+                
+                <a href="{{ url_for('main.query_edit', query_id=query.id) }}#routing" class="btn btn-ghost btn-sm w-full">
+                    Gestisci Regole
+                </a>
+                {% else %}
+                <span class="text-muted">Disabilitato</span>
+                {% endif %}
+            </div>
+        </div>
+        
+        <!-- Statistiche -->
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-bar-chart"></i>
+                Statistiche
+            </div>
+            <div class="card-body" id="queryStatsContainer">
+                <div class="flex items-center justify-center p-md">
+                    <div class="spinner"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+    var queryId = {{ query.id }};
+    
+    function loadQueryStats() {
+        var container = document.getElementById('queryStatsContainer');
+        if (!container) return;
+        
+        api.get('/api/stats/by-query?query_id=' + queryId + '&days=30').then(function(data) {
+            var html = '';
+            
+            // Errori totali (30gg)
+            html += '<div class="mb-md">' +
+                '<div class="text-muted mb-xs" style="font-size: 0.75rem;">Errori (ultimi 30gg)</div>' +
+                '<div class="flex items-center gap-sm">' +
+                    '<span style="font-size: 1.5rem; font-weight: 700; color: var(--color-text);">' + data.total_errors + '</span>';
+            if (data.total_errors > 0) {
+                html += '<span class="badge badge-danger">totali</span>';
+            }
+            html += '</div></div>';
+            
+            // Errori attivi
+            html += '<div class="mb-md">' +
+                '<div class="text-muted mb-xs" style="font-size: 0.75rem;">Errori Attivi</div>' +
+                '<div class="flex items-center gap-sm">';
+            if (data.active_errors > 0) {
+                html += '<span style="font-size: 1.5rem; font-weight: 700; color: var(--color-danger);">' + data.active_errors + '</span>' +
+                    '<span class="badge badge-danger">da risolvere</span>';
+            } else {
+                html += '<span style="font-size: 1.5rem; font-weight: 700; color: var(--color-success);">0</span>' +
+                    '<span class="badge badge-success">tutto ok</span>';
+            }
+            html += '</div></div>';
+
+            // Link a statistiche complete
+            html += '<a href="/stats" class="btn btn-ghost btn-sm w-full mt-md">' +
+                'Statistiche complete <i class="bi bi-arrow-right"></i></a>';
+            
+            container.innerHTML = html;
+            
+        }).catch(function(error) {
+            console.error('Error loading query stats:', error);
+            container.innerHTML = '<span class="text-muted" style="font-size: 0.875rem;">Errore caricamento</span>';
+        });
+    }
+    
+    loadQueryStats();
+})();
+</script>
+{% endblock %}

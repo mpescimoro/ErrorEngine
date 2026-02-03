@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+
+{% block title %}Consultazioni - ErrorEngine{% endblock %}
+
+{% block content %}
+<!-- Page Header -->
+<div class="page-header">
+    <h1 class="page-title">
+        <i class="bi bi-database"></i>
+        Consultazioni
+        <span class="badge badge-secondary">{{ queries|length }}</span>
+    </h1>
+    <a href="{{ url_for('main.query_create') }}" class="btn btn-primary">
+        <i class="bi bi-plus-lg"></i>
+        Nuova Consultazione
+    </a>
+</div>
+
+{% if all_tags %}
+<div class="card mb-lg">
+    <div class="card-body p-sm">
+        <div class="flex items-center gap-sm flex-wrap">
+            <span class="text-muted mr-sm"><i class="bi bi-tags"></i> Filtra:</span>
+            <a href="{{ url_for('main.queries_list') }}" 
+               class="badge {{ 'badge-primary' if not current_tag else 'badge-secondary' }}"
+               style="cursor: pointer;">
+                Tutti
+            </a>
+            {% for tag in all_tags %}
+            <a href="{{ url_for('main.queries_list', tag=tag) }}" 
+               class="badge {{ 'badge-primary' if current_tag == tag else 'badge-secondary' }}"
+               style="cursor: pointer;">
+                {{ tag }}
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if queries %}
+<div class="grid gap-md">
+    {% for query in queries %}
+    <div class="card">
+        <div class="card-body">
+            <div class="flex justify-between items-start gap-lg">
+                <div class="flex-1">
+                    <div class="flex items-center gap-md mb-sm">
+                        <a href="{{ url_for('main.query_detail', query_id=query.id) }}" class="query-name" style="font-size: 1.125rem;">
+                            {{ query.name }}
+                        </a>
+                        
+						{% if query.db_connection_id and query.db_connection %}
+						<span class="badge badge-primary">
+							<i class="bi bi-database"></i> {{ query.db_connection.db_type|upper }}
+						</span>
+						{% elif query.source_type == 'http' %}
+						<span class="badge badge-info">
+							<i class="bi bi-cloud"></i> HTTP
+						</span>
+						{% else %}
+						<span class="badge badge-secondary">
+							<i class="bi bi-question-circle"></i> N/D
+						</span>
+						{% endif %}
+                        
+                        {% if query.is_active %}
+                            {% if query.is_in_schedule() %}
+                            <span class="status-indicator status-active">
+                                <span class="status-dot"></span>
+                                Attivo
+                            </span>
+                            {% else %}
+                            <span class="status-indicator status-warning">
+                                <span class="status-dot"></span>
+                                Fuori orario
+                            </span>
+                            {% endif %}
+                        {% else %}
+                        <span class="status-indicator status-inactive">
+                            <span class="status-dot"></span>
+                            Disattivo
+                        </span>
+                        {% endif %}
+                    </div>
+                    
+                    {% if query.description %}
+                    <p class="text-muted mb-md">{{ query.description }}</p>
+                    {% endif %}
+                    
+                    <div class="flex items-center gap-lg text-muted" style="font-size: 0.875rem;">
+                        <span>
+                            <i class="bi bi-clock"></i>
+							Ogni {% if query.check_interval_minutes >= 60 and query.check_interval_minutes % 60 == 0 %}{{ query.check_interval_minutes // 60 }} ore{% else %}{{ query.check_interval_minutes }} min{% endif %}
+                        </span>
+                        
+                        {% if query.last_check_at %}
+                        <span>
+                            <i class="bi bi-arrow-repeat"></i>
+                            Ultimo: {{ query.last_check_at|localtime('%d/%m/%y %H:%M') }}
+                        </span>
+                        {% endif %}
+                        
+                        {% if query.routing_enabled %}
+                        <span>
+                            <i class="bi bi-signpost-split"></i>
+                            {{ query.routing_rules|length }} regole routing
+                        </span>
+                        {% endif %}
+                        
+                        {% if query.reminder_enabled %}
+                        <span>
+                            <i class="bi bi-bell"></i>
+                            Reminder attivi
+                        </span>
+                        {% endif %}
+                    </div>
+                </div>
+                
+                <div class="flex items-center gap-md">
+                    {% set error_count = query.errors.filter_by(resolved_at=None).count() %}
+                    {% if error_count > 0 %}
+                    <div class="text-center">
+                        <div class="stat-value text-danger" style="font-size: 1.5rem;">{{ error_count }}</div>
+                        <div class="text-muted" style="font-size: 0.75rem;">errori attivi</div>
+                    </div>
+                    {% endif %}
+                    
+                    <div class="actions">
+                        <button type="button" 
+                                class="btn btn-ghost btn-icon" 
+                                onclick="queryManager.run({{ query.id }})"
+                                title="Esegui ora"
+                                aria-label="Esegui consultazione {{ query.name }}">
+                            <i class="bi bi-play-fill"></i>
+                        </button>
+                        <a href="{{ url_for('main.query_edit', query_id=query.id) }}" 
+                           class="btn btn-ghost btn-icon"
+                           title="Modifica"
+                           aria-label="Modifica consultazione {{ query.name }}">
+                            <i class="bi bi-pencil"></i>
+                        </a>
+                        <form method="POST" action="{{ url_for('main.query_delete', query_id=query.id) }}" 
+                              style="display: inline;"
+                              onsubmit="return confirm('Eliminare la consultazione {{ query.name }}? Questa azione è irreversibile.')">
+                            <button type="submit" 
+                                    class="btn btn-ghost btn-icon text-danger"
+                                    title="Elimina"
+                                    aria-label="Elimina consultazione {{ query.name }}">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="card">
+    <div class="empty-state">
+        <div class="empty-state-icon">
+            <i class="bi bi-database-add"></i>
+        </div>
+        <h3 class="empty-state-title">Nessuna consultazione configurata</h3>
+        <p class="empty-state-description">
+            Crea la tua prima consultazione per iniziare a monitorare gli errori.
+        </p>
+        <a href="{{ url_for('main.query_create') }}" class="btn btn-primary">
+            <i class="bi bi-plus-lg"></i>
+            Crea Consultazione
+        </a>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
