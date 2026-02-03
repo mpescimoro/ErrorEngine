@@ -1,4 +1,4 @@
-<img src="static/img/logo.svg" align="right" width="4rem">
+<img src="static/img/logo.svg" align="right" width="60">
 
 # ErrorEngine
 
