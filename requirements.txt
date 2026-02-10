@@ -16,19 +16,23 @@ SQLAlchemy==2.0.23
 # Remove the '#' from the lines for the databases you want to install.
 
 # Oracle
-# oracledb>=2.0.0
+oracledb>=2.0.0
 
 # PostgreSQL
-# psycopg2-binary>=2.9.0
+psycopg2-binary>=2.9.0
 
 # MySQL
-# pymysql>=1.1.0
+pymysql>=1.1.0
 
 # SQL Server
-# pymssql>=2.2.0
+pymssql>=2.2.0
 
-# AS/400
-# ibm_db>=3.1.0 
+# AS/400 (DB2 via DRDA) - richiede DRDA configurato sul server
+ibm_db>=3.1.0 
+
+# IBM i (AS/400 via JDBC) - richiede Java + jt400.jar
+# Vedi docs/ibmi-driver.md per setup
+JPype1==1.5.1
 
 # HTTP/API
 requests==2.31.0

@@ -46,3 +46,6 @@ coverage.xml
 
 # Type checking
 .mypy_cache/
+
+# JAR files (manual download)
+lib/*.jar

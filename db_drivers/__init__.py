@@ -55,6 +55,14 @@ try:
 except ImportError:
     logger.debug("Driver AS/400 non disponibile (pip install ibm_db)")
 
+# IBM i (AS/400 via JT400 JDBC) - richiede Java + jt400.jar
+try:
+    from .ibmi import IBMiDriver
+    DRIVERS['ibmi'] = IBMiDriver
+    DRIVER_LABELS['ibmi'] = 'IBM i (AS/400)'
+except ImportError as e:
+    logger.debug(f"Driver IBM i non disponibile: {e}")
+
 
 def get_driver(db_type: str):
     """Restituisce un'istanza del driver richiesto."""
