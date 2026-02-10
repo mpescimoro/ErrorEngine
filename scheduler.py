@@ -4,7 +4,6 @@ Usa APScheduler integrato con Flask.
 La logica di fascia oraria è gestita dal MonitorService.
 """
 import logging
-from datetime import datetime, timedelta
 from flask_apscheduler import APScheduler
 from models import MonitoredQuery
 
@@ -32,12 +31,11 @@ def init_scheduler(app):
         with app.app_context():
             from monitor_service import monitor_service
             
-            now = datetime.utcnow()
             queries = MonitoredQuery.query.filter_by(is_active=True).all()
             
             for query in queries:
                 try:
-                    should_run, reason = query.should_run_now(now)
+                    should_run, reason = query.should_run_now()
                     
                     if should_run:
                         logger.debug(f"Scheduler: avvio controllo {query.name} ({reason})")

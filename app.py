@@ -32,23 +32,9 @@ def create_app(config_name=None):
     def localtime_filter(dt, fmt='%d/%m/%Y %H:%M'):
         if dt is None:
             return None
-        try:
-            from zoneinfo import ZoneInfo
-        except ImportError:
-            from backports.zoneinfo import ZoneInfo
-        
-        tz_name = app.config.get('TIMEZONE', 'UTC')
-        try:
-            local_tz = ZoneInfo(tz_name)
-        except Exception:
-            local_tz = ZoneInfo('UTC')
-        
-        if dt.tzinfo is None:
-            from datetime import timezone
-            dt = dt.replace(tzinfo=timezone.utc)
-        
-        local_dt = dt.astimezone(local_tz)
-        return local_dt.strftime(fmt)
+        from utils import utc_to_local
+        local_dt = utc_to_local(dt)
+        return local_dt.strftime(fmt) if local_dt else ''
 
     from email_service import email_service
     email_service.init_app(app)

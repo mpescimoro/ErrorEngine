@@ -135,21 +135,8 @@ class MonitoredQuery(db.Model):
     
     def _get_local_now(self):
         """Restituisce ora locale usando timezone configurata."""
-        try:
-            from zoneinfo import ZoneInfo
-        except ImportError:
-            from backports.zoneinfo import ZoneInfo
-        
-        from flask import current_app
-        tz_name = current_app.config.get('TIMEZONE', 'UTC')
-        
-        try:
-            local_tz = ZoneInfo(tz_name)
-        except Exception:
-            local_tz = ZoneInfo('UTC')
-        
-        from datetime import timezone
-        return datetime.now(timezone.utc).astimezone(local_tz).replace(tzinfo=None)
+        from utils import get_local_now
+        return get_local_now()
 
     def is_in_schedule(self, now=None):
         """Verifica se la query può essere eseguita in questo momento (ora locale)."""
@@ -249,26 +236,8 @@ class MonitoredQuery(db.Model):
 
     def _utc_to_local(self, utc_dt):
         """Converte datetime UTC in locale."""
-        if utc_dt is None:
-            return None
-        
-        try:
-            from zoneinfo import ZoneInfo
-        except ImportError:
-            from backports.zoneinfo import ZoneInfo
-        
-        from flask import current_app
-        from datetime import timezone
-        
-        tz_name = current_app.config.get('TIMEZONE', 'UTC')
-        try:
-            local_tz = ZoneInfo(tz_name)
-        except Exception:
-            local_tz = ZoneInfo('UTC')
-        
-        # Assume utc_dt è naive UTC
-        utc_aware = utc_dt.replace(tzinfo=timezone.utc)
-        return utc_aware.astimezone(local_tz).replace(tzinfo=None)
+        from utils import utc_to_local
+        return utc_to_local(utc_dt)
 
     def should_run_now(self, now=None):
         """Verifica se la query deve essere eseguita adesso."""
