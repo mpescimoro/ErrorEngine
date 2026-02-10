@@ -30,6 +30,13 @@
         {% if query.description %}
         <p class="text-muted mb-0">{{ query.description }}</p>
         {% endif %}
+        {% for tag in query.tags.split(',') %}
+        <a href="{{ url_for('main.queries_list', tag=tag) }}" 
+            class="badge {{ 'badge-primary' if current_tag == tag else 'badge-secondary' }}"
+            style="cursor: pointer;">
+            {{ tag }}
+        </a>
+        {% endfor %}
     </div>
     
     <div class="flex items-center gap-sm">
@@ -98,7 +105,7 @@
             <div class="flex justify-between items-start">
                 <div>
                     <div class="stat-label">Intervallo</div>
-                    <div class="stat-value" style="font-size: 1.25rem;">{{ query.check_interval_minutes }} min</div>
+                    <div class="stat-value" style="font-size: 1.25rem;">{% if query.check_interval_minutes >= 60 and query.check_interval_minutes % 60 == 0 %}{{ query.check_interval_minutes // 60 }} ore{% else %}{{ query.check_interval_minutes }} min{% endif %}</div>
                 </div>
                 <div class="stat-icon">
                     <i class="bi bi-arrow-repeat"></i>
