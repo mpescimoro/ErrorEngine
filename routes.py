@@ -146,9 +146,13 @@ def query_create():
                 query.check_interval_minutes = interval_value * 60
             else:  # minutes
                 query.check_interval_minutes = interval_value
+            # Limita a max 24h
+            if query.check_interval_minutes > 1440:
+                query.check_interval_minutes = 1440
             query.schedule_start_time = parse_time(request.form.get('schedule_start_time'))
             query.schedule_end_time = parse_time(request.form.get('schedule_end_time'))
             query.schedule_days = request.form.get('schedule_days', '')
+            query.schedule_reference_time = parse_time(request.form.get('schedule_reference_time'))
             
             # Reminder
             query.reminder_enabled = request.form.get('reminder_enabled') == 'on'
@@ -247,10 +251,14 @@ def query_edit(query_id):
                 query.check_interval_minutes = interval_value * 60
             else:  # minutes
                 query.check_interval_minutes = interval_value
+            # Limita a max 24h
+            if query.check_interval_minutes > 1440:
+                query.check_interval_minutes = 1440
             query.schedule_start_time = parse_time(request.form.get('schedule_start_time'))
             query.schedule_end_time = parse_time(request.form.get('schedule_end_time'))
             query.schedule_days = request.form.get('schedule_days', '')
-            
+            query.schedule_reference_time = parse_time(request.form.get('schedule_reference_time'))
+
             # Reminder
             query.reminder_enabled = request.form.get('reminder_enabled') == 'on'
             query.reminder_interval_minutes = int(request.form.get('reminder_interval_minutes', 60))
@@ -1198,7 +1206,6 @@ def api_health():
 def api_scheduler_next():
     """API: Restituisce il tempo al prossimo check schedulato."""
     try:
-        now = datetime.utcnow()
         queries = MonitoredQuery.query.filter_by(is_active=True).all()
         
         if not queries:
@@ -1207,47 +1214,42 @@ def api_scheduler_next():
                 'message': 'Nessuna consultazione attiva'
             })
         
-        next_check = None
+        next_run = None
         next_query = None
         
         for query in queries:
-            # Verifica se in fascia oraria
-            if not query.is_in_schedule():
+            try:
+                query_next = query.get_next_run_time()
+                if query_next is None:
+                    continue
+                
+                if next_run is None or query_next < next_run:
+                    next_run = query_next
+                    next_query = query
+            except Exception as e:
+                logger.debug(f"Errore calcolo next run per {query.name}: {e}")
                 continue
-            
-            # Calcola prossimo check
-            if query.last_check_at is None:
-                # Mai eseguita, sarà al prossimo ciclo scheduler
-                query_next = now
-            else:
-                query_next = query.last_check_at + timedelta(minutes=query.check_interval_minutes)
-            
-            # Se è già passato, sarà al prossimo ciclo
-            if query_next < now:
-                query_next = now
-            
-            if next_check is None or query_next < next_check:
-                next_check = query_next
-                next_query = query
         
         if next_query is None:
             return jsonify({
                 'has_scheduled': False,
-                'message': 'Nessuna consultazione in fascia oraria'
+                'message': 'Nessuna consultazione pianificata'
             })
         
-        # Calcola secondi rimanenti
-        seconds_remaining = max(0, int((next_check - now).total_seconds()))
+        # Calcola secondi rimanenti (usa ora locale)
+        now_local = next_query._get_local_now()
+        seconds_remaining = max(0, int((next_run - now_local).total_seconds()))
         
         return jsonify({
             'has_scheduled': True,
             'query_id': next_query.id,
             'query_name': next_query.name,
             'seconds_remaining': seconds_remaining,
-            'next_check_at': next_check.isoformat()
+            'next_check_at': next_run.isoformat()
         })
         
     except Exception as e:
+        logger.error(f"Errore in api_scheduler_next: {e}")
         return jsonify({
             'has_scheduled': False,
             'error': str(e)

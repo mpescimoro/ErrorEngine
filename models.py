@@ -1,7 +1,7 @@
 """
 Modelli del database SQLite per il monitoraggio di ErrorEngine 
 """
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from flask_sqlalchemy import SQLAlchemy
 import hashlib
 import json
@@ -50,6 +50,7 @@ class MonitoredQuery(db.Model):
     schedule_start_time = db.Column(db.Time)  # es. 08:00
     schedule_end_time = db.Column(db.Time)    # es. 20:00
     schedule_days = db.Column(db.String(20))  # es. "1,2,3,4,5" (lun-ven, ISO weekday)
+    schedule_reference_time = db.Column(db.Time)  # Ora di riferimento per le esecuzioni (es. 00:00)
     
     # === REMINDER ===
     reminder_enabled = db.Column(db.Boolean, default=False)
@@ -132,27 +133,169 @@ class MonitoredQuery(db.Model):
         """Imposta la configurazione sorgente da dict"""
         self.source_config = json.dumps(config, ensure_ascii=False)
     
-    def is_in_schedule(self, now=None):
-        """Verifica se il momento attuale è nella fascia oraria configurata"""
-        if now is None:
-            now = datetime.now()
+    def _get_local_now(self):
+        """Restituisce ora locale usando timezone configurata."""
+        try:
+            from zoneinfo import ZoneInfo
+        except ImportError:
+            from backports.zoneinfo import ZoneInfo
         
-        # Check giorno della settimana
+        from flask import current_app
+        tz_name = current_app.config.get('TIMEZONE', 'UTC')
+        
+        try:
+            local_tz = ZoneInfo(tz_name)
+        except Exception:
+            local_tz = ZoneInfo('UTC')
+        
+        from datetime import timezone
+        return datetime.now(timezone.utc).astimezone(local_tz).replace(tzinfo=None)
+
+    def is_in_schedule(self, now=None):
+        """Verifica se la query può essere eseguita in questo momento (ora locale)."""
+        if now is None:
+            now = self._get_local_now()
+        
+        current_time = now.time()
+        current_weekday = now.isoweekday()
+        
+        # Verifica giorno
         allowed_days = self.get_schedule_days_list()
-        if now.isoweekday() not in allowed_days:
+        if current_weekday not in allowed_days:
             return False
         
-        # Check orario
-        current_time = now.time()
+        # Verifica fascia oraria (>= per includere estremi)
         if self.schedule_start_time and current_time < self.schedule_start_time:
             return False
         if self.schedule_end_time and current_time > self.schedule_end_time:
             return False
         
         return True
-    
-    def __repr__(self):
-        return f'<MonitoredQuery {self.name}>'
+
+    def get_next_scheduled_time(self, now=None):
+        """Calcola la prossima esecuzione basandosi su reference_time + intervallo (ora locale)."""
+        if now is None:
+            now = self._get_local_now()
+        
+        # Se non c'è reference_time, usa mezzanotte
+        ref_time = self.schedule_reference_time or time(0, 0)
+        interval = timedelta(minutes=self.check_interval_minutes)
+        
+        # Costruisci il primo slot di oggi
+        today_ref = datetime.combine(now.date(), ref_time)
+        
+        # Trova lo slot corrente o precedente
+        if now >= today_ref:
+            elapsed = now - today_ref
+            intervals_passed = int(elapsed.total_seconds() // interval.total_seconds())
+            current_slot = today_ref + (interval * intervals_passed)
+            next_slot = current_slot + interval
+        else:
+            yesterday_ref = today_ref - timedelta(days=1)
+            elapsed = now - yesterday_ref
+            intervals_passed = int(elapsed.total_seconds() // interval.total_seconds())
+            current_slot = yesterday_ref + (interval * intervals_passed)
+            next_slot = current_slot + interval
+        
+        return current_slot, next_slot
+
+    def get_next_run_time(self, now=None):
+        """Calcola quando la query verrà eseguita la prossima volta (considera fascia oraria)."""
+        if now is None:
+            now = self._get_local_now()
+        
+        current_slot, next_slot = self.get_next_scheduled_time(now)
+        
+        # Determina quale slot è il prossimo da eseguire
+        if self.last_check_at is not None:
+            # Converti last_check_at in ora locale per confronto
+            last_check_local = self._utc_to_local(self.last_check_at)
+            if last_check_local >= current_slot:
+                target_slot = next_slot
+            else:
+                target_slot = current_slot
+        else:
+            target_slot = current_slot if current_slot >= now else next_slot
+        
+        # Verifica se target_slot è in fascia oraria
+        for _ in range(1000):  # max 1000 iterazioni per sicurezza
+            slot_time = target_slot.time()
+            slot_weekday = target_slot.isoweekday()
+            
+            # Verifica giorno
+            allowed_days = self.get_schedule_days_list()
+            if slot_weekday not in allowed_days:
+                target_slot = self._next_day_start(target_slot)
+                continue
+            
+            # Verifica fascia oraria
+            if self.schedule_start_time and slot_time < self.schedule_start_time:
+                target_slot = datetime.combine(target_slot.date(), self.schedule_start_time)
+                continue
+            if self.schedule_end_time and slot_time > self.schedule_end_time:
+                target_slot = self._next_day_start(target_slot)
+                continue
+            
+            # Slot valido
+            return target_slot
+        
+        return None  # Non dovrebbe mai arrivare qui
+
+    def _next_day_start(self, dt):
+        """Restituisce l'inizio del prossimo giorno con reference_time."""
+        ref_time = self.schedule_reference_time or time(0, 0)
+        next_day = dt.date() + timedelta(days=1)
+        return datetime.combine(next_day, ref_time)
+
+    def _utc_to_local(self, utc_dt):
+        """Converte datetime UTC in locale."""
+        if utc_dt is None:
+            return None
+        
+        try:
+            from zoneinfo import ZoneInfo
+        except ImportError:
+            from backports.zoneinfo import ZoneInfo
+        
+        from flask import current_app
+        from datetime import timezone
+        
+        tz_name = current_app.config.get('TIMEZONE', 'UTC')
+        try:
+            local_tz = ZoneInfo(tz_name)
+        except Exception:
+            local_tz = ZoneInfo('UTC')
+        
+        # Assume utc_dt è naive UTC
+        utc_aware = utc_dt.replace(tzinfo=timezone.utc)
+        return utc_aware.astimezone(local_tz).replace(tzinfo=None)
+
+    def should_run_now(self, now=None):
+        """Verifica se la query deve essere eseguita adesso."""
+        if now is None:
+            now = self._get_local_now()
+        
+        # Verifica fascia oraria e giorno
+        if not self.is_in_schedule(now):
+            return False, "Fuori fascia oraria"
+        
+        current_slot, next_slot = self.get_next_scheduled_time(now)
+        
+        # Se non è mai stata eseguita, esegui se siamo nello slot corrente
+        if self.last_check_at is None:
+            return True, "Prima esecuzione"
+        
+        # Converti last_check_at in locale
+        last_check_local = self._utc_to_local(self.last_check_at)
+        
+        # Se l'ultima esecuzione è prima dello slot corrente, dobbiamo eseguire
+        if last_check_local < current_slot:
+            return True, "Slot corrente non ancora eseguito"
+        
+        return False, f"Prossima esecuzione: {next_slot.strftime('%H:%M')}"
+        
+        def __repr__(self):
+            return f'<MonitoredQuery {self.name}>'
 
 
 class DatabaseConnection(db.Model):

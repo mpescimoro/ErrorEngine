@@ -37,18 +37,10 @@ def init_scheduler(app):
             
             for query in queries:
                 try:
-                    # Calcola se è ora di eseguire questa query
-                    if query.last_check_at is None:
-                        # Mai eseguita, esegui subito
-                        should_run = True
-                    else:
-                        # Calcola i secondi trascorsi dall'ultimo controllo
-                        next_check_at = query.last_check_at + timedelta(minutes=query.check_interval_minutes)
-                        should_run = now >= next_check_at
+                    should_run, reason = query.should_run_now(now)
                     
                     if should_run:
-                        logger.debug(f"Scheduler: avvio controllo {query.name}")
-                        # check_query gestisce internamente la fascia oraria
+                        logger.debug(f"Scheduler: avvio controllo {query.name} ({reason})")
                         result = monitor_service.check_query(query)
                         
                         if result['status'] == 'skipped':
@@ -59,10 +51,12 @@ def init_scheduler(app):
                             logger.error(
                                 f"Scheduler: errore in {query.name} - {result.get('error_message', '')}"
                             )
+                    else:
+                        logger.debug(f"Scheduler: {query.name} non dovuta - {reason}")
                             
                 except Exception as e:
                     logger.error(f"Scheduler: eccezione in {query.name}: {e}")
-    
+
     @scheduler.task('cron', id='cleanup_old_records', hour=3, minute=0, misfire_grace_time=3600)
     def cleanup_old_records():
         """

@@ -84,19 +84,27 @@
                             {% endif %}
                         </div>
                         
-                        <div class="form-group">
-                            <label for="check_interval_minutes" class="form-label">Intervallo Controllo</label>
-                            <div class="input-group">
-                                <input type="number" 
-                                       class="form-control" 
-                                       id="check_interval_minutes" 
-                                       name="check_interval_minutes"
-                                       value="{{ query.check_interval_minutes if query else 15 }}"
-                                       min="1" 
-                                       max="1440">
-                                <span class="input-group-text">minuti</span>
-                            </div>
-                        </div>
+						<div class="form-group">
+							<label for="check_interval_value" class="form-label">Intervallo Controllo</label>
+							<div class="input-group">
+								<input type="number" 
+									   class="form-control" 
+									   id="check_interval_value" 
+									   name="check_interval_value"
+									   min="1" 
+									   max="1440"
+									   value="{{ (query.check_interval_minutes // 60) if query and query.check_interval_minutes >= 60 and query.check_interval_minutes % 60 == 0 else (query.check_interval_minutes if query else 15) }}"
+									   style="border-right: none;"
+									   required>
+								<select class="form-control form-select" id="check_interval_unit" name="check_interval_unit" 
+										style="max-width: 100px; border-radius: 0 4px 4px 0;"
+										onchange="limitIntervalValue()">
+									<option value="minutes" {{ 'selected' if not query or query.check_interval_minutes < 60 or query.check_interval_minutes % 60 != 0 else '' }}>minuti</option>
+									<option value="hours" {{ 'selected' if query and query.check_interval_minutes >= 60 and query.check_interval_minutes % 60 == 0 else '' }}>ore</option>
+								</select>
+							</div>
+							<div class="form-text">Massimo 24 ore</div>
+						</div>
                     </div>
                     
                     <div class="form-group mb-0">
@@ -107,7 +115,21 @@
                                   rows="2"
                                   placeholder="Descrizione opzionale della consultazione">{{ query.description if query else '' }}</textarea>
                     </div>
-                </div>
+				
+					<div class="form-group">
+						<label for="tags" class="form-label">Tag</label>
+						<input type="text" 
+							   class="form-control" 
+							   id="tags" 
+							   name="tags"
+							   value="{{ query.tags if query else '' }}"
+							   placeholder="production, warehouse, system">
+						<div class="form-text">
+							Tag separati da virgola per organizzare le consultazioni.
+						</div>
+						<div id="tagSuggestions" class="mt-sm"></div>
+					</div>
+				</div>
             </div>
             
             <!-- SQL Query (shown when source_type = database) -->
@@ -442,6 +464,18 @@
                         <div class="form-text">Lascia vuoto per eseguire sempre</div>
                     </div>
                     
+					<div class="form-group">
+						<label for="schedule_reference_time" class="form-label">Ora Prima Esecuzione</label>
+						<input type="time" 
+							   class="form-control" 
+							   id="schedule_reference_time"
+							   name="schedule_reference_time"
+							   value="{{ query.schedule_reference_time.strftime('%H:%M') if query and query.schedule_reference_time else '00:00' }}">
+						<div class="form-text">
+							Le esecuzioni partono da quest'ora. Es: 00:05 con intervallo 15min → 00:05, 00:20, 00:35...
+						</div>
+					</div>
+					
                     <div class="form-group mb-0">
                         <label class="form-label">Giorni Attivi</label>
                         {% set active_days = query.get_schedule_days_list() if query else [1,2,3,4,5,6,7] %}
@@ -833,5 +867,19 @@
             });
         }
     })();
+	
+	// Limita intervallo a max 24h
+	function limitIntervalValue() {
+		var input = document.getElementById('check_interval_value');
+		var unit = document.getElementById('check_interval_unit');
+		if (unit.value === 'hours') {
+			input.max = 24;
+			if (parseInt(input.value) > 24) input.value = 24;
+		} else {
+			input.max = 1440;
+			if (parseInt(input.value) > 1440) input.value = 1440;
+		}
+	}
+	limitIntervalValue();
 </script>
 {% endblock %}
