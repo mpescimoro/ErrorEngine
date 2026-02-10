@@ -2,6 +2,7 @@
 Modelli del database SQLite per il monitoraggio di ErrorEngine 
 """
 from datetime import datetime, time, timedelta
+from utils import get_utc_now
 from flask_sqlalchemy import SQLAlchemy
 import hashlib
 import json
@@ -68,8 +69,8 @@ class MonitoredQuery(db.Model):
     # 'skip' = non inviare
     
     # === TIMESTAMPS ===
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=get_utc_now)
+    updated_at = db.Column(db.DateTime, default=get_utc_now, onupdate=get_utc_now)
     last_check_at = db.Column(db.DateTime)
     locked_at = db.Column(db.DateTime, nullable=True)
     last_error_at = db.Column(db.DateTime)
@@ -262,9 +263,9 @@ class MonitoredQuery(db.Model):
             return True, "Slot corrente non ancora eseguito"
         
         return False, f"Prossima esecuzione: {next_slot.strftime('%H:%M')}"
-        
-        def __repr__(self):
-            return f'<MonitoredQuery {self.name}>'
+
+    def __repr__(self):
+        return f'<MonitoredQuery {self.name}>'
 
 
 class DatabaseConnection(db.Model):
@@ -280,7 +281,7 @@ class DatabaseConnection(db.Model):
     username = db.Column(db.String(100))
     password = db.Column(db.String(255))  # TODO: criptare
     is_active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=get_utc_now)
     
     # Relationship
     queries = db.relationship('MonitoredQuery', backref='db_connection', lazy='dynamic')
@@ -308,6 +309,9 @@ class DatabaseConnection(db.Model):
         finally:
             conn.close()
 
+    def __repr__(self):
+            return f'<DatabaseConnection {self.name} ({self.db_type})>'
+
 
 # Tabella associativa per query-canali notifica (many-to-many)
 query_notification_channels = db.Table('query_notification_channels',
@@ -330,7 +334,7 @@ class NotificationChannel(db.Model):
     config = db.Column(db.Text, nullable=False, default='{}')
     
     is_active = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=get_utc_now)
     
     # Statistiche
     total_sent = db.Column(db.Integer, default=0)
@@ -442,8 +446,8 @@ class ErrorRecord(db.Model):
     reminder_count = db.Column(db.Integer, default=0)
     
     # Timestamps
-    first_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
-    last_seen_at = db.Column(db.DateTime, default=datetime.utcnow)
+    first_seen_at = db.Column(db.DateTime, default=get_utc_now)
+    last_seen_at = db.Column(db.DateTime, default=get_utc_now)
     resolved_at = db.Column(db.DateTime)
     
     # Contatore: quante volte è stato visto
@@ -478,7 +482,7 @@ class ErrorRecord(db.Model):
         if not last_notification:
             return False
         
-        elapsed_minutes = (datetime.utcnow() - last_notification).total_seconds() / 60
+        elapsed_minutes = (get_utc_now() - last_notification).total_seconds() / 60
         return elapsed_minutes >= query.reminder_interval_minutes
     
     @staticmethod
@@ -508,7 +512,7 @@ class QueryLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     query_id = db.Column(db.Integer, db.ForeignKey('monitored_queries.id'), nullable=False)
     
-    executed_at = db.Column(db.DateTime, default=datetime.utcnow)
+    executed_at = db.Column(db.DateTime, default=get_utc_now)
     
     # Risultato esecuzione
     status = db.Column(db.String(20))  # 'success', 'error', 'skipped'
@@ -535,7 +539,7 @@ class EmailLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     query_id = db.Column(db.Integer, db.ForeignKey('monitored_queries.id'))
     
-    sent_at = db.Column(db.DateTime, default=datetime.utcnow)
+    sent_at = db.Column(db.DateTime, default=get_utc_now)
     recipients = db.Column(db.Text)
     subject = db.Column(db.String(200))
     

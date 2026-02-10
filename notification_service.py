@@ -4,7 +4,7 @@ Notification Service - Invio notifiche a Webhook, Telegram, Teams.
 import logging
 import requests
 from datetime import datetime
-from utils import format_local_now
+from utils import format_local_now, get_utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ class NotificationService:
             # Aggiorna statistiche
             if result['success']:
                 channel.total_sent += 1
-                channel.last_sent_at = datetime.utcnow()
+                channel.last_sent_at = get_utc_now()
                 channel.last_error = None
             else:
                 channel.last_error = result.get('message', 'Errore')
@@ -85,7 +85,7 @@ class NotificationService:
         
         payload = {
             'event': 'errors_detected',
-            'timestamp': datetime.utcnow().isoformat(),
+            'timestamp': get_utc_now().isoformat(),
             'query': {
                 'id': query.id,
                 'name': query.name,

@@ -66,11 +66,9 @@ Open **http://localhost:5000**
 
 ---
 
-## Changelog
+## Changelog & Roadmap
 
-**v2.1** — Multi-database, HTTP sources, notification channels, tags, statistics page  
-**v2.0** — Conditional routing, reminders, time windows, cleanup automation  
-**v1.0** — Initial release
+See [ROADMAP.md](ROADMAP.md) for version history and planned features.
 
 ---
 

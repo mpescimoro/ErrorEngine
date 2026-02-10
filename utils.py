@@ -77,7 +77,7 @@ def get_utc_now():
     Returns:
         datetime: UTC time without tzinfo (naive UTC)
     """
-    return datetime.utcnow()
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def utc_to_local(utc_dt):

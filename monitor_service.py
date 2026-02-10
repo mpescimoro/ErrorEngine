@@ -4,6 +4,7 @@ Gestisce l'esecuzione periodica delle query, routing condizionale e reminder.
 """
 import logging
 from datetime import datetime, timedelta
+from utils import get_utc_now
 import time
 from collections import defaultdict
 from models import db, MonitoredQuery, ErrorRecord, QueryLog
@@ -71,7 +72,7 @@ class MonitorService:
             # LOCK ATOMICO: evita esecuzioni concorrenti della stessa query
             # L'UPDATE è atomico in SQLite - solo un processo può acquisire il lock
             LOCK_TTL = timedelta(minutes=5)
-            now = datetime.utcnow()
+            now = get_utc_now()
             lock_expired_before = now - LOCK_TTL
             
             updated = (
@@ -141,13 +142,13 @@ class MonitorService:
             # 8. Marca errori risolti
             for hash_val in resolved_hashes:
                 error = existing_errors[hash_val]
-                error.resolved_at = datetime.utcnow()
+                error.resolved_at = get_utc_now()
                 result['resolved_errors'] += 1
             
             # 9. Aggiorna errori esistenti ancora presenti
             for hash_val in continuing_hashes:
                 error = existing_errors[hash_val]
-                error.last_seen_at = datetime.utcnow()
+                error.last_seen_at = get_utc_now()
                 error.occurrence_count += 1
             
             # Commit parziale per avere gli ID
@@ -169,7 +170,7 @@ class MonitorService:
                         ).first()
                         if new_error:
                             new_error.email_sent = True
-                            new_error.email_sent_at = datetime.utcnow()
+                            new_error.email_sent_at = get_utc_now()
             
             # 11. Gestisci reminder per errori non risolti
             if query.reminder_enabled:
@@ -178,12 +179,12 @@ class MonitorService:
                 result['emails_sent'] += reminders_sent
 
             # 12. Aggiorna statistiche query
-            query.last_check_at = datetime.utcnow()
+            query.last_check_at = get_utc_now()
             query.locked_at = None  # Rilascia il lock
             query.total_errors_found += result['new_errors']
             query.total_emails_sent += result['emails_sent']
             if result['new_errors'] > 0:
-                query.last_error_at = datetime.utcnow()
+                query.last_error_at = get_utc_now()
             
             db.session.commit()
 
@@ -310,7 +311,7 @@ class MonitorService:
         # Aggiorna contatori reminder
         if emails_sent > 0:
             for error in error_records:
-                error.last_reminder_at = datetime.utcnow()
+                error.last_reminder_at = get_utc_now()
                 error.reminder_count += 1
             db.session.commit()
         

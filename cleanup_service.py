@@ -4,6 +4,7 @@ Gestisce la retention configurata in config.py.
 """
 import logging
 from datetime import datetime, timedelta
+from utils import get_utc_now
 from flask import current_app
 from models import db, QueryLog, EmailLog, ErrorRecord
 
@@ -32,7 +33,7 @@ class CleanupService:
             int: Numero di record eliminati
         """
         retention_days = current_app.config.get('LOG_RETENTION_DAYS', 30)
-        cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
+        cutoff_date = get_utc_now() - timedelta(days=retention_days)
         
         try:
             count = QueryLog.query.filter(
@@ -58,7 +59,7 @@ class CleanupService:
             int: Numero di record eliminati
         """
         retention_days = current_app.config.get('EMAIL_LOG_RETENTION_DAYS', 90)
-        cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
+        cutoff_date = get_utc_now() - timedelta(days=retention_days)
         
         try:
             count = EmailLog.query.filter(
@@ -84,7 +85,7 @@ class CleanupService:
             int: Numero di record eliminati
         """
         retention_days = current_app.config.get('RESOLVED_ERRORS_RETENTION_DAYS', 60)
-        cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
+        cutoff_date = get_utc_now() - timedelta(days=retention_days)
         
         try:
             count = ErrorRecord.query.filter(
@@ -116,7 +117,7 @@ class CleanupService:
             'query_logs_deleted': self.cleanup_query_logs(),
             'email_logs_deleted': self.cleanup_email_logs(),
             'resolved_errors_deleted': self.cleanup_resolved_errors(),
-            'executed_at': datetime.utcnow().isoformat()
+            'executed_at': get_utc_now().isoformat()
         }
         
         total = sum([
@@ -147,7 +148,7 @@ class CleanupService:
             'query_logs_deleted': 0,
             'email_logs_deleted': 0,
             'resolved_errors_deleted': 0,
-            'executed_at': datetime.utcnow().isoformat()
+            'executed_at': get_utc_now().isoformat()
         }
         
         try:
