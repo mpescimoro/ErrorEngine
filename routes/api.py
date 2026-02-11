@@ -73,6 +73,7 @@ def api_toggle_query(query_id):
 @api_bp.route('/queries/<int:query_id>/status', methods=['GET'])
 def api_query_status(query_id):
     """API: Stato attuale di una consultazione."""
+    MonitoredQuery.query.get_or_404(query_id)
     status = monitor_service.get_query_status(query_id)
     return jsonify(status)
 

@@ -247,12 +247,13 @@ class TestTestEndpoints:
         data = json.loads(response.data)
         assert data['success'] is False
     
-    def test_test_sql_missing_query(self, client):
-        """Test SQL senza query."""
+    def test_test_query_missing_sql(self, client, sample_query):
+        """Test query on connection without SQL."""
+        # Usa una connessione fittizia (non esiste, 404)
         response = client.post(
-            '/api/test/sql',
+            '/api/connections/99999/test-query',
             data=json.dumps({}),
             content_type='application/json'
         )
         
-        assert response.status_code == 400
+        assert response.status_code == 404

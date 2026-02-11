@@ -85,7 +85,7 @@ OPERATORS = {
     },
     'is_not_empty': {
         'label': 'Non è vuoto',
-        'fn': lambda f, v, cs: f and str(f).strip() != '',
+        'fn': lambda f, v, cs: bool(f and str(f).strip() != ''),
         'needs_value': False,
     },
     'regex': {

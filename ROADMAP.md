@@ -6,6 +6,12 @@
 
 ## Released
 
+**v2.1.2** — Test suite & bug fixes
+
+- Fix validate_key_fields missing return value, is_not_empty operator, api_query_status 404
+- Test suite expanded from 85 to 153 tests (models, monitor_service, cleanup, routing)
+- Remove old  `routes.py`
+
 **v2.1.1** — Bug fixes & code quality
 - Fix `MonitoredQuery.__repr__` indentation (was unreachable)
 - Add missing `__repr__` to `DatabaseConnection`
@@ -70,3 +76,8 @@
 
 Contributions welcome — open an issue on
 [GitHub](https://github.com/mpescimoro/errorengine) to discuss before submitting a PR.
+
+
+ErrorEngine — Roadmap
+
+Last updated: February 2025

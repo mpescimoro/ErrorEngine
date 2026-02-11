@@ -106,7 +106,7 @@ def validate_key_fields(key_fields: str) -> Tuple[bool, str, List[str]]:
     
     for field in fields:
         if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', field):
-            return False, f"Campo chiave non valido: {field}"
+            return False, f"Campo chiave non valido: {field}", []
     
     return True, "", fields
 
