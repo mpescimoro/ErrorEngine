@@ -1,7 +1,8 @@
 """
 Web routes — HTML pages and form handling.
 """
-from flask import Blueprint, render_template, request, redirect, url_for, flash
+from flask import Blueprint, render_template, request, redirect, url_for, flash, session
+from flask_babel import gettext as _
 from datetime import datetime, time
 from db_drivers import get_available_drivers, DRIVER_LABELS
 from models import (db, MonitoredQuery, ErrorRecord, QueryLog, EmailLog,
@@ -46,6 +47,18 @@ def format_time(t):
     if not t:
         return ''
     return t.strftime('%H:%M')
+
+
+# ============================================================================
+# LANGUAGE SELECTOR
+# ============================================================================
+
+@main_bp.route('/set-language/<lang>')
+def set_language(lang):
+    """Set the user's preferred language."""
+    if lang in ['en', 'it']:
+        session['lang'] = lang
+    return redirect(request.referrer or url_for('main.dashboard'))
 
 
 # ============================================================================
@@ -160,11 +173,11 @@ def query_create():
                 query.notification_channels = channels
             
             db.session.commit()
-            flash(f'Consultazione "{query.name}" creata con successo!', 'success')
+            flash(_('query_created_success', name=query.name), 'success')
             return redirect(url_for('main.query_detail', query_id=query.id))
         except Exception as e:
             db.session.rollback()
-            flash(f'Errore nella creazione: {str(e)}', 'danger')
+            flash(_('query_creation_error', error=str(e)), 'danger')
     
     return render_template('query_form.html', 
                         query=None, 
@@ -266,11 +279,11 @@ def query_edit(query_id):
             query.tags = request.form.get('tags', '')
             
             db.session.commit()
-            flash('Consultazione aggiornata con successo!', 'success')
+            flash(_('query_updated_success'), 'success')
             return redirect(url_for('main.query_detail', query_id=query.id))
         except Exception as e:
             db.session.rollback()
-            flash(f'Errore nell\'aggiornamento: {str(e)}', 'danger')
+            flash(_('query_update_error', error=str(e)), 'danger')
     
     return render_template('query_form.html', query=query, action='edit',
                           operators=get_operators_list(),
@@ -287,10 +300,10 @@ def query_delete(query_id):
     try:
         db.session.delete(query)
         db.session.commit()
-        flash(f'Consultazione "{name}" eliminata.', 'success')
+        flash(_('query_deleted_success', name=name), 'success')
     except Exception as e:
         db.session.rollback()
-        flash(f'Errore nell\'eliminazione: {str(e)}', 'danger')
+        flash(_('query_deletion_error', error=str(e)), 'danger')
     
     return redirect(url_for('main.queries_list'))
 
@@ -368,7 +381,7 @@ def connection_create():
         )
         db.session.add(conn)
         db.session.commit()
-        flash('Connessione creata con successo!', 'success')
+        flash(_('connection_created_success'), 'success')
         return redirect(url_for('main.connections_list'))
     
     return render_template('connection_form.html', 
@@ -395,7 +408,7 @@ def connection_edit(conn_id):
         conn.is_active = request.form.get('is_active') == 'on'
         
         db.session.commit()
-        flash('Connessione aggiornata!', 'success')
+        flash(_('connection_updated_success'), 'success')
         return redirect(url_for('main.connections_list'))
     
     return render_template('connection_form.html', 
@@ -410,12 +423,12 @@ def connection_delete(conn_id):
     
     # Verifica se è usata da qualche query
     if conn.queries.count() > 0:
-        flash(f'Impossibile eliminare: connessione usata da {conn.queries.count()} consultazioni.', 'danger')
+        flash(_('connection_in_use_error', count=conn.queries.count()), 'danger')
         return redirect(url_for('main.connections_list'))
-    
+
     db.session.delete(conn)
     db.session.commit()
-    flash('Connessione eliminata.', 'success')
+    flash(_('connection_deleted_success'), 'success')
     return redirect(url_for('main.connections_list'))
 
 
@@ -454,19 +467,19 @@ def channel_create():
         elif channel_type == 'teams':
             config = {'webhook_url': request.form.get('teams_webhook_url', '')}
         else:
-            flash('Tipo canale non valido', 'danger')
+            flash(_('channel_type_invalid'), 'danger')
             return redirect(url_for('main.channels_list'))
-        
+
         channel = NotificationChannel(
             name=request.form.get('name'),
             channel_type=channel_type,
             is_active=request.form.get('is_active') == 'on'
         )
         channel.set_config(config)
-        
+
         db.session.add(channel)
         db.session.commit()
-        flash('Canale creato!', 'success')
+        flash(_('channel_created_success'), 'success')
         return redirect(url_for('main.channels_list'))
     
     return render_template('channel_form.html', channel=None, channel_types=CHANNEL_TYPES)
@@ -497,7 +510,7 @@ def channel_edit(channel_id):
         
         channel.set_config(config)
         db.session.commit()
-        flash('Canale aggiornato!', 'success')
+        flash(_('channel_updated_success'), 'success')
         return redirect(url_for('main.channels_list'))
     
     return render_template('channel_form.html', channel=channel, channel_types=CHANNEL_TYPES)
@@ -507,10 +520,10 @@ def channel_edit(channel_id):
 def channel_delete(channel_id):
     channel = NotificationChannel.query.get_or_404(channel_id)
     if channel.queries:
-        flash(f'Impossibile: usato da {len(channel.queries)} consultazioni.', 'danger')
+        flash(_('channel_in_use_error', count=len(channel.queries)), 'danger')
         return redirect(url_for('main.channels_list'))
-    
+
     db.session.delete(channel)
     db.session.commit()
-    flash('Canale eliminato.', 'success')
+    flash(_('channel_deleted_success'), 'success')
     return redirect(url_for('main.channels_list'))

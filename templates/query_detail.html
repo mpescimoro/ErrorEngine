@@ -372,6 +372,15 @@
                 </div>
                 {% endif %}
                 
+                {% if query.schedule_reference_time %}
+                <div class="mb-md">
+                    <div class="text-muted mb-xs" style="font-size: 0.75rem;">Ora Prima Esecuzione</div>
+                    <div>
+                        {{ query.schedule_reference_time.strftime('%H:%M') }}
+                    </div>
+                </div>
+                {% endif %}
+                
                 <div>
                     <div class="text-muted mb-xs" style="font-size: 0.75rem;">Giorni Attivi</div>
                     <div class="day-picker">

@@ -45,6 +45,11 @@ class Config:
     # Timezone per visualizzazione date (default: UTC)
     TIMEZONE = os.environ.get('TIMEZONE', 'UTC')
 
+    # Babel i18n
+    BABEL_DEFAULT_LOCALE = 'en'
+    BABEL_SUPPORTED_LOCALES = ['en', 'it']
+    BABEL_TRANSLATION_DIRECTORIES = 'translations'
+
 class DevelopmentConfig(Config):
     """Configurazione per sviluppo."""
     DEBUG = True

@@ -3,6 +3,7 @@ REST API routes — JSON endpoints.
 """
 import logging
 from flask import Blueprint, request, jsonify
+from flask_babel import gettext as _
 from datetime import datetime, timedelta
 from db_drivers import get_driver
 from models import (db, MonitoredQuery, ErrorRecord, QueryLog, EmailLog,
@@ -162,7 +163,7 @@ def api_create_routing_rule(query_id):
         return jsonify({
             'success': True,
             'rule_id': rule.id,
-            'message': 'Regola creata con successo'
+            'message': _('rule_created_success')
         })
     except Exception as e:
         db.session.rollback()
@@ -205,7 +206,7 @@ def api_update_routing_rule(query_id, rule_id):
         
         return jsonify({
             'success': True,
-            'message': 'Regola aggiornata con successo'
+            'message': _('rule_updated_success')
         })
     except Exception as e:
         db.session.rollback()
@@ -216,11 +217,11 @@ def api_update_routing_rule(query_id, rule_id):
 def api_delete_routing_rule(query_id, rule_id):
     """API: Elimina una regola di routing."""
     rule = RoutingRule.query.filter_by(id=rule_id, query_id=query_id).first_or_404()
-    
+
     try:
         db.session.delete(rule)
         db.session.commit()
-        return jsonify({'success': True, 'message': 'Regola eliminata'})
+        return jsonify({'success': True, 'message': _('rule_deleted_success')})
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 400
@@ -241,7 +242,7 @@ def api_test_routing(query_id):
     if not test_errors:
         return jsonify({
             'success': True,
-            'message': 'Nessun errore da testare',
+            'message': _('no_errors_to_test'),
             'routing_result': {}
         })
     
@@ -326,7 +327,7 @@ def api_connection_test_new():
     
     db_type = data.get('db_type')
     if not db_type:
-        return jsonify({'status': 'error', 'message': 'Tipo database richiesto'}), 400
+        return jsonify({'status': 'error', 'message': _('database_type_required')}), 400
     
     try:
         driver = get_driver(db_type)
@@ -350,7 +351,7 @@ def api_connection_test_query(conn_id):
     sql = data.get('sql')
     
     if not sql:
-        return jsonify({'valid': False, 'error': 'Query SQL richiesta'}), 400
+        return jsonify({'valid': False, 'error': _('sql_query_required')}), 400
     
     try:
         driver = conn.get_driver()
@@ -525,7 +526,7 @@ def api_stats_by_query():
     days = request.args.get('days', 30, type=int)
     
     if not query_id:
-        return jsonify({'error': 'query_id richiesto'}), 400
+        return jsonify({'error': _('query_id_required')}), 400
     
     query = MonitoredQuery.query.get_or_404(query_id)
     start_date = get_utc_now() - timedelta(days=days)
@@ -613,7 +614,7 @@ def api_test_email():
     recipient = data.get('recipient')
     
     if not recipient:
-        return jsonify({'success': False, 'message': 'Destinatario richiesto'}), 400
+        return jsonify({'success': False, 'message': _('recipient_required')}), 400
     
     result = email_service.test_email(recipient)
     return jsonify(result)
@@ -643,7 +644,7 @@ def api_run_cleanup():
         result = cleanup_service.run_manual_cleanup()
         return jsonify({
             'success': True,
-            'message': 'Pulizia completata',
+            'message': _('cleanup_completed'),
             'result': result
         })
     except Exception as e:
@@ -706,29 +707,29 @@ def api_scheduler_next():
         if not queries:
             return jsonify({
                 'has_scheduled': False,
-                'message': 'Nessuna consultazione attiva'
+                'message': _('no_active_queries')
             })
-        
+
         next_run = None
         next_query = None
-        
+
         for query in queries:
             try:
                 query_next = query.get_next_run_time()
                 if query_next is None:
                     continue
-                
+
                 if next_run is None or query_next < next_run:
                     next_run = query_next
                     next_query = query
             except Exception as e:
                 logger.debug(f"Errore calcolo next run per {query.name}: {e}")
                 continue
-        
+
         if next_query is None:
             return jsonify({
                 'has_scheduled': False,
-                'message': 'Nessuna consultazione pianificata'
+                'message': _('no_scheduled_queries')
             })
         
         # Calcola secondi rimanenti (usa ora locale)

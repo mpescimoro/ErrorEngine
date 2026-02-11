@@ -5,6 +5,7 @@ Permette di indirizzare errori a destinatari diversi in base ai valori dei campi
 import re
 import logging
 from collections import defaultdict
+from flask_babel import lazy_gettext as _l
 from models import MonitoredQuery, RoutingRule, RoutingCondition
 
 logger = logging.getLogger(__name__)
@@ -13,86 +14,86 @@ logger = logging.getLogger(__name__)
 # Operatori disponibili per le condizioni
 OPERATORS = {
     'equals': {
-        'label': 'Uguale a',
+        'label': _l('operator_equals'),
         'fn': lambda f, v, cs: f == v,
         'needs_value': True,
     },
     'not_equals': {
-        'label': 'Diverso da',
+        'label': _l('operator_not_equals'),
         'fn': lambda f, v, cs: f != v,
         'needs_value': True,
     },
     'contains': {
-        'label': 'Contiene',
+        'label': _l('operator_contains'),
         'fn': lambda f, v, cs: v in f,
         'needs_value': True,
     },
     'not_contains': {
-        'label': 'Non contiene',
+        'label': _l('operator_not_contains'),
         'fn': lambda f, v, cs: v not in f,
         'needs_value': True,
     },
     'startswith': {
-        'label': 'Inizia con',
+        'label': _l('operator_startswith'),
         'fn': lambda f, v, cs: f.startswith(v),
         'needs_value': True,
     },
     'endswith': {
-        'label': 'Termina con',
+        'label': _l('operator_endswith'),
         'fn': lambda f, v, cs: f.endswith(v),
         'needs_value': True,
     },
     'in': {
-        'label': 'In lista',
+        'label': _l('operator_in'),
         'fn': lambda f, v, cs: (f if cs else f.lower()) in [x.strip() if cs else x.strip().lower() for x in v.split(',')],
         'needs_value': True,
-        'value_hint': 'Valori separati da virgola',
+        'value_hint': _l('operator_in_hint'),
     },
     'not_in': {
-        'label': 'Non in lista',
+        'label': _l('operator_not_in'),
         'fn': lambda f, v, cs: (f if cs else f.lower()) not in [x.strip() if cs else x.strip().lower() for x in v.split(',')],
         'needs_value': True,
-        'value_hint': 'Valori separati da virgola',
+        'value_hint': _l('operator_not_in_hint'),
     },
     'gt': {
-        'label': 'Maggiore di',
+        'label': _l('operator_gt'),
         'fn': lambda f, v, cs: _numeric_compare(f, v, lambda a, b: a > b),
         'needs_value': True,
-        'value_hint': 'Valore numerico',
+        'value_hint': _l('operator_numeric_hint'),
     },
     'gte': {
-        'label': 'Maggiore o uguale a',
+        'label': _l('operator_gte'),
         'fn': lambda f, v, cs: _numeric_compare(f, v, lambda a, b: a >= b),
         'needs_value': True,
-        'value_hint': 'Valore numerico',
+        'value_hint': _l('operator_numeric_hint'),
     },
     'lt': {
-        'label': 'Minore di',
+        'label': _l('operator_lt'),
         'fn': lambda f, v, cs: _numeric_compare(f, v, lambda a, b: a < b),
         'needs_value': True,
-        'value_hint': 'Valore numerico',
+        'value_hint': _l('operator_numeric_hint'),
     },
     'lte': {
-        'label': 'Minore o uguale a',
+        'label': _l('operator_lte'),
         'fn': lambda f, v, cs: _numeric_compare(f, v, lambda a, b: a <= b),
         'needs_value': True,
-        'value_hint': 'Valore numerico',
+        'value_hint': _l('operator_numeric_hint'),
     },
     'is_empty': {
-        'label': 'È vuoto',
+        'label': _l('operator_is_empty'),
         'fn': lambda f, v, cs: not f or str(f).strip() == '',
         'needs_value': False,
     },
     'is_not_empty': {
-        'label': 'Non è vuoto',
+        'label': _l('operator_is_not_empty'),
         'fn': lambda f, v, cs: bool(f and str(f).strip() != ''),
         'needs_value': False,
     },
     'regex': {
-        'label': 'Corrisponde a regex',
+        'label': _l('operator_regex'),
         'fn': lambda f, v, cs: _regex_match(f, v, cs),
         'needs_value': True,
-        'value_hint': 'Espressione regolare',
+        'value_hint': _l('operator_regex_hint'),
     },
 }
 

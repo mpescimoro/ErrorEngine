@@ -118,6 +118,16 @@
             </div>
             
             <div class="sidebar-footer">
+                <!-- Language Selector -->
+                <div class="language-selector" style="margin-bottom: 1rem; padding: 0 1rem;">
+                    <select id="langSelect"
+                            onchange="window.location.href='{{ url_for('main.set_language', lang='') }}' + this.value"
+                            style="width: 100%; padding: 0.5rem; border-radius: 6px; border: 1px solid #e2e8f0; background: white; font-size: 0.875rem;">
+                        <option value="en" {{ 'selected' if get_locale() == 'en' else '' }}>🇬🇧 English</option>
+                        <option value="it" {{ 'selected' if get_locale() == 'it' else '' }}>🇮🇹 Italiano</option>
+                    </select>
+                </div>
+
                 <i class="bi bi-clock"></i>
                 <span id="currentTime"></span>
             </div>
