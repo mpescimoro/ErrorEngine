@@ -1,0 +1,48 @@
+# ============================================
+# ErrorEngine - Requirements (Python 3.11 - 3.13)
+# ============================================
+# Development and tests: pip install -r requirements-dev.txt
+
+# Flask and extensions
+Flask==3.1.3
+Flask-SQLAlchemy==3.1.1
+Flask-APScheduler==1.13.1
+Werkzeug==3.1.9
+
+# Database
+SQLAlchemy==2.0.55
+
+# Database drivers
+# ----------------
+# All drivers are installed by default: put a '#' in front of the ones you don't use.
+
+# Oracle
+oracledb==26.1.0
+
+# PostgreSQL
+psycopg2-binary==2.9.13
+
+# MySQL
+PyMySQL==1.2.3
+
+# SQL Server
+pymssql==2.4.6
+
+# AS/400 (DB2 via DRDA) - needs DRDA configured on the server
+ibm_db==3.3.0
+
+# IBM i (AS/400 via JDBC) - needs Java and lib/jt400.jar, see docs/ibmi-driver.md.
+# Kept at 1.5.1 on purpose (newer versions had compatibility issues); it has no
+# Python 3.14 build, so on 3.14 this driver is skipped.
+JPype1==1.5.1; python_version < "3.14"
+
+# HTTP/API
+requests==2.34.2
+urllib3==2.8.0
+
+# Production server (serve.py, on Windows and Linux): a single process, so a single
+# scheduler. Not gunicorn: each of its workers would start its own scheduler.
+waitress==3.0.2
+
+# Utilities
+python-dotenv==1.2.4

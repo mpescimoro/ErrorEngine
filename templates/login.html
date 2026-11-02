@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo.svg') }}">
+    <meta name="theme-color" content="#0d9488">
+    <title>Sign in - ErrorEngine</title>
+
+    <!-- Fonts and icons, served by the app (no Internet access needed) -->
+    <link href="{{ url_for('static', filename='vendor/fonts/fonts.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css') }}" rel="stylesheet">
+
+    <!-- App CSS -->
+    <link href="{{ url_for('static', filename='css/app.css') }}" rel="stylesheet">
+</head>
+<body class="login-page">
+    <main class="login-box" role="main">
+        <div class="login-brand">
+            <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="" class="login-logo">
+            <div>
+                <div class="login-title">ErrorEngine</div>
+                <div class="login-subtitle">Monitoring System</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-body">
+                {% if problem %}
+                <div class="alert alert-warning" role="alert">
+                    <i class="alert-icon bi bi-exclamation-triangle-fill"></i>
+                    <div class="alert-content">
+                        <div class="alert-title">Sign-in is not configured yet</div>
+                        {{ problem }} Restart ErrorEngine after the change.
+                    </div>
+                </div>
+                {% endif %}
+
+                {% if error %}
+                <div class="alert alert-danger" role="alert">
+                    <i class="alert-icon bi bi-x-circle-fill"></i>
+                    <div class="alert-content">{{ error }}</div>
+                </div>
+                {% endif %}
+
+                <form method="POST" action="{{ url_for('auth.login') }}">
+                    <input type="hidden" name="next" value="{{ next_url }}">
+                    <div class="form-group">
+                        <label class="form-label" for="username">Username</label>
+                        <input class="form-control" type="text" id="username" name="username"
+                               value="{{ username }}" autocomplete="username" required
+                               {{ 'disabled' if problem }} {{ 'autofocus' if not username }}>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="password">Password</label>
+                        <input class="form-control" type="password" id="password" name="password"
+                               autocomplete="current-password" required
+                               {{ 'disabled' if problem }} {{ 'autofocus' if username }}>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-full" {{ 'disabled' if problem }}>
+                        <i class="bi bi-box-arrow-in-right"></i>
+                        Sign in
+                    </button>
+                </form>
+            </div>
+        </div>
+    </main>
+</body>
+</html>

@@ -1,0 +1,548 @@
+{% extends "base.html" %}
+
+{% block title %}{{ query.name }} - ErrorEngine{% endblock %}
+
+{% block content %}
+<!-- Breadcrumb -->
+<nav aria-label="Breadcrumb" class="mb-lg">
+    <ol class="flex items-center gap-sm text-muted" style="list-style: none; padding: 0; margin: 0;">
+        <li><a href="{{ url_for('main.queries_list') }}" class="text-muted">Queries</a></li>
+        <li><i class="bi bi-chevron-right"></i></li>
+        <li aria-current="page">{{ query.name }}</li>
+    </ol>
+</nav>
+
+<!-- Page Header -->
+<div class="page-header">
+    <div>
+        <h1 class="page-title mb-sm">
+            {{ query.name }}
+            {% if query.is_active %}
+                {% if query.consecutive_failures %}
+                <span class="badge badge-danger">Failing</span>
+                {% elif query.is_in_schedule() %}
+                <span class="badge badge-success">Active</span>
+                {% else %}
+                <span class="badge badge-warning">Outside schedule</span>
+                {% endif %}
+            {% else %}
+            <span class="badge badge-secondary">Inactive</span>
+            {% endif %}
+        </h1>
+        {% if query.description %}
+        <p class="text-muted mb-0">{{ query.description }}</p>
+        {% endif %}
+        {% set tags = query.get_tags_list() %}
+        {% if tags %}
+        <div class="flex items-center gap-xs flex-wrap mt-sm">
+            {% for tag in tags %}
+            <a href="{{ url_for('main.queries_list', tag=tag) }}" class="badge badge-secondary">{{ tag }}</a>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    
+    <div class="flex items-center gap-sm">
+        <button type="button" 
+                class="btn btn-primary"
+                onclick="queryManager.run({{ query.id }})">
+            <i class="bi bi-play-fill"></i>
+            Run now
+        </button>
+        <a href="{{ url_for('main.query_edit', query_id=query.id) }}" class="btn btn-secondary">
+            <i class="bi bi-pencil"></i>
+            Edit
+        </a>
+        <button type="button" 
+                class="btn btn-secondary"
+                onclick="queryManager.toggle({{ query.id }})">
+            <i class="bi bi-{{ 'pause-circle' if query.is_active else 'play-circle' }}"></i>
+            {{ 'Deactivate' if query.is_active else 'Activate' }}
+        </button>
+    </div>
+</div>
+
+{% if query.consecutive_failures %}
+<!-- Source failing -->
+<div class="alert alert-danger" role="alert">
+    <i class="alert-icon bi bi-x-circle-fill"></i>
+    <div class="alert-content">
+        <div class="alert-title">
+            This query could not read its data in the last {{ query.consecutive_failures }} {{ 'run' if query.consecutive_failures == 1 else 'runs' }}{% if query.failing_since %} (failing since {{ query.failing_since|localtime }}){% endif %}
+        </div>
+        {{ query.last_failure_message or '' }}
+        {% if query.failure_alerted_at %}
+        <div class="text-muted" style="font-size: 0.8125rem;">Alert sent on {{ query.failure_alerted_at|localtime }}</div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Stats Row -->
+<div class="grid grid-cols-4 gap-md mb-xl">
+    <div class="card stat-card">
+        <div class="card-body">
+            <div class="flex justify-between items-start">
+                <div>
+                    <div class="stat-label">Active errors</div>
+                    <div class="stat-value">{{ active_error_count }}</div>
+                </div>
+                <div class="stat-icon">
+                    <i class="bi bi-exclamation-triangle"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="card stat-card stat-success">
+        <div class="card-body">
+            <div class="flex justify-between items-start">
+                <div>
+                    <div class="stat-label">Last check</div>
+                    <div class="stat-value" style="font-size: 1.25rem;">
+                        {% if query.last_check_at %}
+                        {{ query.last_check_at|localtime('%H:%M') }}
+                        {% else %}
+                        Never
+                        {% endif %}
+                    </div>
+                    {% if query.last_check_at %}
+                    <div class="text-muted" style="font-size: 0.75rem;">
+                        {{ query.last_check_at|localtime('%d/%m/%y') }}
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="stat-icon">
+                    <i class="bi bi-clock-history"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="card stat-card stat-info">
+        <div class="card-body">
+            <div class="flex justify-between items-start">
+                <div>
+                    <div class="stat-label">Interval</div>
+                    <div class="stat-value" style="font-size: 1.25rem;">{% if query.check_interval_minutes >= 60 and query.check_interval_minutes % 60 == 0 %}{{ query.check_interval_minutes // 60 }} h{% else %}{{ query.check_interval_minutes }} min{% endif %}</div>
+                </div>
+                <div class="stat-icon">
+                    <i class="bi bi-arrow-repeat"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="card stat-card">
+        <div class="card-body">
+            <div class="flex justify-between items-start">
+                <div>
+                    <div class="stat-label">Routing rules</div>
+                    <div class="stat-value">
+                        {% if query.routing_enabled %}
+                        {{ query.routing_rules|length }}
+                        {% else %}
+                        <span class="text-muted">Off</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="stat-icon">
+                    <i class="bi bi-signpost-split"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="grid" style="grid-template-columns: 2fr 1fr; gap: var(--space-xl); align-items: start;">
+    <!-- Main Column -->
+    <div>
+        <!-- Active Errors -->
+        <div class="card mb-lg">
+            <div class="card-header">
+                <div class="flex items-center gap-sm">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    Active errors
+                    {% if active_error_count %}
+                    <span class="badge badge-danger">{{ active_error_count }}</span>
+                    {% endif %}
+                </div>
+            </div>
+            
+            {% if active_errors %}
+            <div class="table-container">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Data</th>
+                            <th>First seen</th>
+                            <th>Occurrences</th>
+                            <th class="text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for error in active_errors %}
+                        {% set data = error.get_error_data() %}
+                        {% set items_list = data.items()|list %}
+                        {% set max_show = 3 %}
+                        <tr>
+                            <td>
+                                <div style="max-width: 350px;">
+                                    {% for key, value in items_list[:max_show] %}
+                                    <div class="truncate" title="{{ key }}: {{ value }}">
+                                        <span class="text-muted">{{ key }}:</span> 
+                                        <strong>{{ value }}</strong>
+                                    </div>
+                                    {% endfor %}
+                                    
+                                    {% if items_list|length > max_show %}
+                                    <button type="button" 
+                                            class="expandable-trigger"
+                                            onclick="errorExpander.toggle(this, {{ error.id }})"
+                                            aria-expanded="false"
+                                            aria-controls="error-details-{{ error.id }}">
+                                        <i class="bi bi-chevron-down"></i>
+                                        +{{ items_list|length - max_show }} more {{ 'field' if items_list|length - max_show == 1 else 'fields' }}
+                                    </button>
+                                    
+                                    <div id="error-details-{{ error.id }}" class="expandable-content">
+                                        {% for key, value in items_list %}
+                                        <div class="error-field">
+                                            <span class="error-field-key">{{ key }}:</span>
+                                            <span class="error-field-value">{{ value }}</span>
+                                        </div>
+                                        {% endfor %}
+                                    </div>
+                                    {% endif %}
+                                </div>
+                            </td>
+                            <td>
+                                <span title="{{ error.first_seen_at|localtime('%d/%m/%Y %H:%M') }}">
+                                    {{ error.first_seen_at|localtime('%d/%m/%y %H:%M') }}                                
+                                </span>
+                            </td>
+                            <td>
+                                <span class="badge badge-secondary">{{ error.occurrence_count }}x</span>
+                            </td>
+                            <td class="text-right">
+                                <button type="button" 
+                                        class="btn btn-sm btn-ghost"
+                                        onclick="errorManager.resolve({{ error.id }})">
+                                    <i class="bi bi-check-lg"></i>
+                                    Resolve
+                                </button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if active_error_count > active_errors|length %}
+            <div class="card-footer">
+                <a href="{{ url_for('main.errors_list', query_id=query.id) }}" class="btn btn-ghost btn-sm">
+                    View all {{ active_error_count }} errors
+                    <i class="bi bi-arrow-right"></i>
+                </a>
+            </div>
+            {% endif %}
+            {% else %}
+            <div class="card-body">
+                <div class="empty-state" style="padding: var(--space-lg);">
+                    <div class="empty-state-icon" style="font-size: 2rem;">
+                        <i class="bi bi-check-circle"></i>
+                    </div>
+                    <p class="text-muted mb-0">No active errors right now</p>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        
+        <!-- Recent Logs -->
+        <div class="card">
+            <div class="card-header">
+                <div class="flex items-center gap-sm">
+                    <i class="bi bi-journal-text"></i>
+                    Recent runs
+                </div>
+                <a href="{{ url_for('main.logs_list', query_id=query.id) }}" class="btn btn-ghost btn-sm">
+                    All logs
+                    <i class="bi bi-arrow-right"></i>
+                </a>
+            </div>
+            
+            {% if recent_logs %}
+            <div class="table-container">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Date/time</th>
+                            <th>Status</th>
+                            <th>Rows</th>
+                            <th>New</th>
+                            <th>Resolved</th>
+                            <th>Time</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for log in recent_logs %}
+                        <tr>
+                            <td>
+                                <span class="font-mono" style="font-size: 0.8125rem;">
+                                    {{ log.executed_at|localtime('%d/%m/%y %H:%M') }}
+                                </span>
+                            </td>
+                            <td>
+                                {% if log.status == 'success' %}
+                                <span class="badge badge-success">OK</span>
+                                {% elif log.status == 'skipped' %}
+                                <span class="badge badge-warning">Skip</span>
+                                {% else %}
+                                <span class="badge badge-danger">Error</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ log.rows_returned }}</td>
+                            <td>
+                                {% if log.new_errors > 0 %}
+                                <span class="text-danger">+{{ log.new_errors }}</span>
+                                {% else %}
+                                <span class="text-muted">0</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if log.resolved_errors > 0 %}
+                                <span class="text-success">-{{ log.resolved_errors }}</span>
+                                {% else %}
+                                <span class="text-muted">0</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <span class="text-muted">{{ log.execution_time_ms }}ms</span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="card-body">
+                <div class="empty-state" style="padding: var(--space-lg);">
+                    <div class="empty-state-icon" style="font-size: 2rem;">
+                        <i class="bi bi-journal"></i>
+                    </div>
+                    <p class="text-muted mb-0">No runs recorded</p>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    
+    <!-- Sidebar -->
+    <div>
+        <!-- Configuration -->
+        <div class="card mb-lg">
+            <div class="card-header">
+                <i class="bi bi-gear"></i>
+                Configuration
+            </div>
+            <div class="card-body">
+                <div class="mb-md">
+                    <div class="text-muted mb-xs" style="font-size: 0.75rem;">Source type</div>
+                    <div>
+                        {% if query.source_type == 'http' %}
+                        <span class="badge badge-info">
+                            <i class="bi bi-cloud"></i> HTTP
+                        </span>
+                        {% else %}
+                        <span class="badge badge-primary">
+                            <i class="bi bi-database"></i>
+                            {{ driver_labels.get(query.db_connection.db_type, query.db_connection.db_type|upper) if query.db_connection else 'Database' }}
+                        </span>
+                        {% if query.db_connection %}<span class="text-muted" style="font-size: 0.8125rem;">{{ query.db_connection.name }}</span>{% endif %}
+                        {% endif %}
+                    </div>
+                </div>
+                
+                <div class="mb-md">
+                    <div class="text-muted mb-xs" style="font-size: 0.75rem;">Key fields</div>
+                    <div>
+                        {% for field in query.key_fields.split(',') %}
+                        <code style="margin-right: 0.25rem;">{{ field.strip() }}</code>
+                        {% endfor %}
+                    </div>
+                </div>
+                
+                <div class="mb-md">
+                    <div class="text-muted mb-xs" style="font-size: 0.75rem;">Email recipients</div>
+                    <div style="font-size: 0.875rem;">
+                        {{ query.email_recipients or '—' }}
+                    </div>
+                </div>
+                
+                {% if query.schedule_start_time or query.schedule_end_time %}
+                <div class="mb-md">
+                    <div class="text-muted mb-xs" style="font-size: 0.75rem;">Time window</div>
+                    <div>
+                        {{ query.schedule_start_time.strftime('%H:%M') if query.schedule_start_time else '00:00' }}
+                        —
+                        {{ query.schedule_end_time.strftime('%H:%M') if query.schedule_end_time else '23:59' }}
+                    </div>
+                </div>
+                {% endif %}
+                
+                {% if query.schedule_reference_time %}
+                <div class="mb-md">
+                    <div class="text-muted mb-xs" style="font-size: 0.75rem;">First run at</div>
+                    <div>
+                        {{ query.schedule_reference_time.strftime('%H:%M') }}
+                    </div>
+                </div>
+                {% endif %}
+                
+                <div>
+                    <div class="text-muted mb-xs" style="font-size: 0.75rem;">Active days</div>
+                    <div class="day-picker">
+                        {% set active_days = query.get_schedule_days_list() %}
+                        {% for day, label in [(1,'Mo'), (2,'Tu'), (3,'We'), (4,'Th'), (5,'Fr'), (6,'Sa'), (7,'Su')] %}
+                        <button type="button" 
+                                class="day-picker-btn {{ 'active' if day in active_days }}" 
+                                style="pointer-events: none; width: 32px; height: 32px; font-size: 0.75rem;"
+                                tabindex="-1">
+                            {{ label }}
+                        </button>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Reminder -->
+        <div class="card mb-lg">
+            <div class="card-header">
+                <i class="bi bi-bell"></i>
+                Reminders
+            </div>
+            <div class="card-body">
+                {% if query.reminder_enabled %}
+                <div class="flex items-center gap-sm mb-md">
+                    <span class="badge badge-success">Active</span>
+                </div>
+                <div class="text-muted" style="font-size: 0.875rem;">
+                    Every <strong>{{ query.reminder_interval_minutes }}</strong> minutes,
+                    max <strong>{{ query.reminder_max_count }}</strong> per error
+                </div>
+                {% else %}
+                <span class="text-muted">Disabled</span>
+                {% endif %}
+            </div>
+        </div>
+        
+        <!-- Routing -->
+        <div class="card mb-lg">
+            <div class="card-header">
+                <i class="bi bi-signpost-split"></i>
+                Routing
+            </div>
+            <div class="card-body">
+                {% if query.routing_enabled %}
+                <div class="flex items-center gap-sm mb-md">
+                    <span class="badge badge-success">Active</span>
+                    <span class="text-muted">{{ query.routing_rules|length }} {{ 'rule' if query.routing_rules|length == 1 else 'rules' }}</span>
+                </div>
+                
+                {% if query.routing_rules %}
+                <div class="mb-md">
+                    {% for rule in query.routing_rules[:3] %}
+                    <div class="routing-rule" style="padding: var(--space-sm); margin-bottom: var(--space-xs);">
+                        <div class="routing-rule-name" style="font-size: 0.875rem;">
+                            {{ rule.name or 'Rule ' ~ loop.index }}
+                            {% if not rule.is_active %}<span class="badge badge-secondary">Paused</span>{% endif %}
+                        </div>
+                        <div class="routing-rule-recipients" style="font-size: 0.75rem;">
+                            {{ rule.conditions|length }} {{ 'condition' if rule.conditions|length == 1 else 'conditions' }}
+                        </div>
+                    </div>
+                    {% endfor %}
+                    {% if query.routing_rules|length > 3 %}
+                    <div class="text-muted" style="font-size: 0.75rem;">
+                        +{{ query.routing_rules|length - 3 }} more rules
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+                
+                <a href="{{ url_for('main.query_edit', query_id=query.id) }}#routing" class="btn btn-ghost btn-sm w-full">
+                    Manage rules
+                </a>
+                {% else %}
+                <span class="text-muted">Disabled</span>
+                {% endif %}
+            </div>
+        </div>
+        
+        <!-- Statistics -->
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-bar-chart"></i>
+                Statistics
+            </div>
+            <div class="card-body" id="queryStatsContainer">
+                <div class="flex items-center justify-center p-md">
+                    <div class="spinner"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(function() {
+    var queryId = {{ query.id }};
+    
+    function loadQueryStats() {
+        var container = document.getElementById('queryStatsContainer');
+        if (!container) return;
+        
+        api.get('/api/stats/by-query?query_id=' + queryId + '&days=30').then(function(data) {
+            var html = '';
+            
+            // Total errors (30 days)
+            html += '<div class="mb-md">' +
+                '<div class="text-muted mb-xs" style="font-size: 0.75rem;">Errors (last 30 days)</div>' +
+                '<div class="flex items-center gap-sm">' +
+                    '<span style="font-size: 1.5rem; font-weight: 700; color: var(--color-text);">' + data.total_errors + '</span>';
+            if (data.total_errors > 0) {
+                html += '<span class="badge badge-danger">total</span>';
+            }
+            html += '</div></div>';
+            
+            // Active errors
+            html += '<div class="mb-md">' +
+                '<div class="text-muted mb-xs" style="font-size: 0.75rem;">Active errors</div>' +
+                '<div class="flex items-center gap-sm">';
+            if (data.active_errors > 0) {
+                html += '<span style="font-size: 1.5rem; font-weight: 700; color: var(--color-danger);">' + data.active_errors + '</span>' +
+                    '<span class="badge badge-danger">to resolve</span>';
+            } else {
+                html += '<span style="font-size: 1.5rem; font-weight: 700; color: var(--color-success);">0</span>' +
+                    '<span class="badge badge-success">all clear</span>';
+            }
+            html += '</div></div>';
+
+            // Link to the full statistics
+            html += '<a href="/stats" class="btn btn-ghost btn-sm w-full mt-md">' +
+                'Full statistics <i class="bi bi-arrow-right"></i></a>';
+            
+            container.innerHTML = html;
+            
+        }).catch(function(error) {
+            console.error('Error loading query stats:', error);
+            container.innerHTML = '<span class="text-muted" style="font-size: 0.875rem;">Loading failed</span>';
+        });
+    }
+    
+    loadQueryStats();
+})();
+</script>
+{% endblock %}

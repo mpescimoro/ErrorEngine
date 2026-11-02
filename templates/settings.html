@@ -1,0 +1,295 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - ErrorEngine{% endblock %}
+
+{% block content %}
+<!-- Page Header -->
+<div class="page-header">
+    <h1 class="page-title">
+        <i class="bi bi-gear"></i>
+        Settings
+    </h1>
+</div>
+
+<!-- Hero / About Section -->
+<div class="card mb-xl" style="overflow: hidden;">
+    <div style="background: linear-gradient(135deg, var(--color-bg-sidebar) 0%, #1e3a5f 100%); padding: var(--space-2xl) var(--space-xl); color: white; display: flex; align-items: center; gap: var(--space-xl);">
+        <!-- Logo Area -->
+        <div style="flex-shrink: 0;">
+            <div style="width: 88px; height: 88px;">
+                <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="ErrorEngine" style="height: inherit;">
+            </div>
+        </div>
+        <!-- Info -->
+        <div style="flex: 1;">
+            <h2 style="margin: 0 0 0.25rem 0; font-size: 1.75rem; font-weight: 700; color: white;">ErrorEngine</h2>
+            <p style="margin: 0 0 0.75rem 0; opacity: 0.7; font-size: 0.9375rem;">
+                A self-hosted error monitoring system.
+            </p>
+            <div style="display: flex; gap: var(--space-sm); flex-wrap: wrap;">
+                <span style="background: rgba(255,255,255,0.15); padding: 0.25rem 0.75rem; border-radius: var(--radius-full); font-size: 0.8125rem; font-weight: 500;">
+                    v{{ version }}
+                </span>
+                <a href="https://github.com/mpescimoro/ErrorEngine" target="_blank" 
+                   style="background: rgba(255,255,255,0.15); padding: 0.25rem 0.75rem; border-radius: var(--radius-full); font-size: 0.8125rem; color: white; text-decoration: none; display: inline-flex; align-items: center; gap: 0.375rem; transition: background 0.2s;">
+                    <i class="bi bi-github"></i> GitHub
+                </a>
+                <span style="background: rgba(255,255,255,0.15); padding: 0.25rem 0.75rem; border-radius: var(--radius-full); font-size: 0.8125rem;">
+                    MIT License
+                </span>
+            </div>
+        </div>
+        <!-- Author -->
+        <div style="flex-shrink: 0; text-align: right;">
+            <div style="font-size: 0.75rem; opacity: 0.5; margin-bottom: 0.25rem;">Developed by</div>
+            <div style="font-weight: 600;">Mattia Pescimoro</div>
+            <div style="font-size: 0.8125rem; opacity: 0.6; margin-top: 0.125rem;">&lt;°))&gt;&lt;</div>
+        </div>
+    </div>
+</div>
+
+<div class="grid grid-cols-2 gap-lg">
+    <!-- Email Configuration -->
+    <div class="card">
+        <div class="card-header">
+            <i class="bi bi-envelope"></i>
+            Email configuration
+        </div>
+        <div class="card-body">
+            <p class="text-muted mb-lg">
+                Check the SMTP configuration by sending a test email.
+            </p>
+            
+            <div class="form-group">
+                <label for="testEmailRecipient" class="form-label">Recipient email</label>
+                <input type="email" 
+                       class="form-control" 
+                       id="testEmailRecipient"
+                       placeholder="you@example.com">
+            </div>
+            
+            <button type="button" 
+                    class="btn btn-primary" 
+                    id="testEmailBtn"
+                    onclick="testConnections.email(document.getElementById('testEmailRecipient').value)">
+                <i class="bi bi-send"></i>
+                Send test email
+            </button>
+        </div>
+    </div>
+    
+    <!-- DB connections status -->
+    <div class="card">
+        <div class="card-header">
+            <div class="flex items-center gap-sm">
+                <i class="bi bi-database-gear"></i>
+                Database connections
+            </div>
+            <a href="{{ url_for('main.connections_list') }}" class="btn btn-ghost btn-sm">
+                Manage
+                <i class="bi bi-arrow-right"></i>
+            </a>
+        </div>
+        <div class="card-body">
+            <div id="connectionsStatus">
+                <div class="flex items-center justify-center p-md">
+                    <div class="spinner"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- System Info -->
+    <div class="card">
+        <div class="card-header">
+            <i class="bi bi-cpu"></i>
+            System information
+        </div>
+        <div class="card-body">
+            <div class="table-container">
+                <table class="table">
+                    <tbody>
+                        <tr>
+                            <td class="text-muted" style="width: 45%;">Scheduler</td>
+                            <td>
+                                {% if scheduler_status.running %}
+                                <span class="badge badge-success">
+                                    <i class="bi bi-activity"></i>
+                                    Running
+                                </span>
+                                {% elif scheduler_status.enabled %}
+                                <span class="badge badge-danger">
+                                    <i class="bi bi-exclamation-triangle"></i>
+                                    Stopped
+                                </span>
+                                {% else %}
+                                <span class="badge badge-secondary">Not started in this process</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Last run</td>
+                            <td>{{ scheduler_status.last_tick_at|localtime('%d/%m/%Y %H:%M:%S') if scheduler_status.last_tick_at else '—' }}</td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Check frequency</td>
+                            <td>Every minute{% if scheduler_status.max_workers %}, up to {{ scheduler_status.max_workers }} queries in parallel{% endif %}</td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Failing queries</td>
+                            <td>
+                                {% if failing_queries %}
+                                {% for q in failing_queries %}
+                                <a href="{{ url_for('main.query_detail', query_id=q.id) }}" class="badge badge-danger"
+                                   title="{{ q.last_failure_message or '' }}">{{ q.name }} ({{ q.consecutive_failures }})</a>
+                                {% endfor %}
+                                {% else %}
+                                <span class="text-muted">None</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Automatic cleanup</td>
+                            <td>Every day at 03:00</td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Internal database</td>
+                            <td>
+                                {{ database.engine }}
+                                {% if database.location %}
+                                <div class="text-muted font-mono" style="font-size: 0.75rem; word-break: break-all;">{{ database.location }}</div>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Timezone</td>
+                            <td>{{ config.TIMEZONE }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Maintenance with auto-loaded stats -->
+    <div class="card">
+        <div class="card-header">
+            <i class="bi bi-wrench"></i>
+            Maintenance and statistics
+        </div>
+        <div class="card-body">
+            <!-- Stats auto-loaded -->
+            <div id="cleanupStats" class="mb-lg">
+                <div class="flex items-center justify-center p-md">
+                    <div class="spinner"></div>
+                </div>
+            </div>
+
+            <!-- Server log file: rotated by serve.py, the cleanup does not touch it -->
+            <div class="mb-lg" id="serverLog" style="padding-top: var(--space-md); border-top: 1px solid var(--color-border);">
+                <div class="text-muted mb-xs">Server log</div>
+                {% if server_log %}
+                <div class="stat-value" style="font-size: 1.5rem;">{{ server_log.size }}</div>
+                <div class="text-muted" style="font-size: 0.75rem;">
+                    {{ server_log.files }} {{ 'file' if server_log.files == 1 else 'files' }} · {{ server_log.rotation }}
+                </div>
+                <div class="text-muted font-mono" style="font-size: 0.75rem; word-break: break-all;">{{ server_log.path }}</div>
+                {% else %}
+                <div class="text-muted" style="font-size: 0.8125rem;">
+                    Console only: the log file is written when ErrorEngine runs with serve.py (start.bat, start.sh)
+                </div>
+                {% endif %}
+            </div>
+
+            <button type="button" 
+                    class="btn btn-warning w-full"
+                    onclick="settingsPage.runCleanup()">
+                <i class="bi bi-trash"></i>
+                Run cleanup now
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- API Documentation -->
+<div class="card mt-lg">
+    <div class="card-header">
+        <i class="bi bi-code-slash"></i>
+        API Endpoints
+    </div>
+    <div class="card-body">
+        <p class="text-muted mb-lg">
+            REST endpoints for integrating external systems.
+        </p>
+        
+        <div class="table-container">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Method</th>
+                        <th>Endpoint</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="badge badge-success">GET</span></td>
+                        <td><code>/api/health</code></td>
+                        <td>Health check</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-success">GET</span></td>
+                        <td><code>/api/queries</code></td>
+                        <td>List queries</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-info">POST</span></td>
+                        <td><code>/api/queries/{id}/run</code></td>
+                        <td>Run a query</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-success">GET</span></td>
+                        <td><code>/api/queries/{id}/status</code></td>
+                        <td>Query status</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-success">GET</span></td>
+                        <td><code>/api/errors</code></td>
+                        <td>List active errors</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-info">POST</span></td>
+                        <td><code>/api/errors/{id}/resolve</code></td>
+                        <td>Resolve an error manually</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-success">GET</span></td>
+                        <td><code>/api/stats/overview</code></td>
+                        <td>General statistics (param: <code>days</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-success">GET</span></td>
+                        <td><code>/api/stats/timeline</code></td>
+                        <td>Errors per day (param: <code>days</code>)</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-success">GET</span></td>
+                        <td><code>/api/scheduler/next</code></td>
+                        <td>Next scheduled check</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-success">GET</span></td>
+                        <td><code>/api/connections</code></td>
+                        <td>List DB connections</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge badge-success">GET</span></td>
+                        <td><code>/api/channels</code></td>
+                        <td>List notification channels</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

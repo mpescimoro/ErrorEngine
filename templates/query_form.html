@@ -1,0 +1,902 @@
+{% extends "base.html" %}
+
+{% block title %}{{ 'Edit' if query else 'New' }} query - ErrorEngine{% endblock %}
+
+{% block content %}
+<!-- Breadcrumb -->
+<nav aria-label="Breadcrumb" class="mb-lg">
+    <ol class="flex items-center gap-sm text-muted" style="list-style: none; padding: 0; margin: 0;">
+        <li><a href="{{ url_for('main.queries_list') }}" class="text-muted">Queries</a></li>
+        <li><i class="bi bi-chevron-right"></i></li>
+        <li aria-current="page">{{ 'Edit' if query else 'New' }}</li>
+    </ol>
+</nav>
+
+<!-- Page Header -->
+<div class="page-header">
+    <h1 class="page-title">
+        <i class="bi bi-{{ 'pencil' if query else 'plus-lg' }}"></i>
+        {{ 'Edit query' if query else 'New query' }}
+    </h1>
+</div>
+
+<form method="POST" id="queryForm" data-validate>
+    <div class="grid" style="grid-template-columns: 2fr 1fr; gap: var(--space-xl); align-items: start;">
+        
+        <!-- Main Column -->
+        <div>
+            <!-- Basic Info -->
+            <div class="card mb-lg">
+                <div class="card-header">
+                    <i class="bi bi-info-circle"></i>
+                    Basic information
+                </div>
+                <div class="card-body">
+                    <div class="grid grid-cols-2 gap-md">
+                        <div class="form-group" style="grid-column: span 2;">
+                            <label for="name" class="form-label">
+                                Query name <span class="required">*</span>
+                            </label>
+                            <input type="text" 
+                                   class="form-control" 
+                                   id="name" 
+                                   name="name" 
+                                   value="{{ (query.name or '') if query else '' }}"
+                                   placeholder="e.g. Sales order errors"
+                                   data-required
+                                   data-min-length="3"
+                                   data-max-length="100"
+                                   aria-describedby="nameHelp">
+                            <div class="form-text" id="nameHelp">A unique name for the query</div>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="source_type" class="form-label">Source type</label>
+                            <select class="form-control form-select" id="source_type" name="source_type" onchange="toggleSourceType()">
+                                <option value="database" {{ 'selected' if not query or query.db_connection_id }}>
+                                    Database
+                                </option>
+                                <option value="http" {{ 'selected' if query and query.source_type == 'http' and not query.db_connection_id }}>
+                                    HTTP/REST
+                                </option>
+                            </select>
+                        </div>
+
+                        <!-- Database Connection (shown when source_type = database) -->
+                        <div class="form-group" id="dbConnectionGroup">
+                            <label for="db_connection_id" class="form-label">
+                                Database connection <span class="required">*</span>
+                            </label>
+                            <select class="form-control form-select" id="db_connection_id" name="db_connection_id">
+                                <option value="">-- Select a connection --</option>
+                                {% for conn in connections %}
+                                <option value="{{ conn.id }}" {{ 'selected' if query and query.db_connection_id == conn.id }}>
+                                    {{ conn.name }} ({{ driver_labels.get(conn.db_type, conn.db_type|upper) }})
+                                </option>
+                                {% endfor %}
+                            </select>
+                            {% if not connections %}
+                            <div class="form-text text-warning">
+                                <i class="bi bi-exclamation-triangle"></i>
+                                No connections configured.
+                                <a href="{{ url_for('main.connection_create') }}">Create one</a> first.
+                            </div>
+                            {% endif %}
+                        </div>
+                        
+						<div class="form-group">
+							<label for="check_interval_value" class="form-label">Check interval</label>
+							<div class="input-group">
+								<input type="number" 
+									   class="form-control" 
+									   id="check_interval_value" 
+									   name="check_interval_value"
+									   min="1" 
+									   max="1440"
+									   value="{{ (query.check_interval_minutes // 60) if query and query.check_interval_minutes >= 60 and query.check_interval_minutes % 60 == 0 else (query.check_interval_minutes if query else 15) }}"
+									   style="border-right: none;"
+									   required>
+								<select class="form-control form-select" id="check_interval_unit" name="check_interval_unit" 
+										style="max-width: 130px; border-radius: 0 4px 4px 0;"
+										onchange="limitIntervalValue()">
+									<option value="minutes" {{ 'selected' if not query or query.check_interval_minutes < 60 or query.check_interval_minutes % 60 != 0 else '' }}>minutes</option>
+									<option value="hours" {{ 'selected' if query and query.check_interval_minutes >= 60 and query.check_interval_minutes % 60 == 0 else '' }}>hours</option>
+								</select>
+							</div>
+							<div class="form-text">Maximum 24 hours</div>
+						</div>
+                    </div>
+                    
+                    <div class="form-group mb-0">
+                        <label for="description" class="form-label">Description</label>
+                        <textarea class="form-control" 
+                                  id="description" 
+                                  name="description" 
+                                  rows="2"
+                                  placeholder="Optional description of the query">{{ (query.description or '') if query else '' }}</textarea>
+                    </div>
+				
+					<div class="form-group">
+						<label for="tags" class="form-label">Tags</label>
+						<input type="text" 
+							   class="form-control" 
+							   id="tags" 
+							   name="tags"
+							   value="{{ (query.tags or '') if query else '' }}"
+							   placeholder="production, warehouse, system">
+						<div class="form-text">
+							Comma-separated tags to organize your queries.
+						</div>
+						<div id="tagSuggestions" class="mt-sm"></div>
+					</div>
+				</div>
+            </div>
+            
+            <!-- SQL Query (shown when source_type = database) -->
+            <div class="card mb-lg" id="source-database">
+                <div class="card-header">
+                    <div class="flex items-center gap-sm">
+                        <i class="bi bi-database"></i>
+                        SQL query
+                    </div>
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="testSqlQuery()">
+                        <i class="bi bi-play"></i>
+                        Test query
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label for="sql_query" class="form-label">
+                            SQL query <span class="required">*</span>
+                        </label>
+                        <textarea class="form-control sql-editor font-mono" 
+                                id="sql_query" 
+                                name="sql_query" 
+                                rows="10"
+                                placeholder="SELECT * FROM TABLE WHERE CONDITION">{{ (query.sql_query or '') if query else '' }}</textarea>
+                        <div class="form-text">
+                            SELECT query to run. The SQL dialect depends on the selected database.
+                        </div>
+                    </div>
+                    
+                    <div id="testResults" class="hidden"></div>
+                </div>
+            </div>
+            
+            <!-- HTTP Source (hidden by default) -->
+            <div class="card mb-lg hidden" id="source-http">
+                <div class="card-header">
+                    <i class="bi bi-cloud"></i>
+                    HTTP/API configuration
+                </div>
+                <div class="card-body">
+                    {% set source_config = query.get_source_config() if query else {} %}
+                    
+                    <div class="grid grid-cols-2 gap-md">
+                        <div class="form-group" style="grid-column: span 2;">
+                            <label for="source_url" class="form-label">URL</label>
+                            <input type="url" 
+                                   class="form-control" 
+                                   id="source_url" 
+                                   name="source_url"
+                                   value="{{ source_config.get('url', '') }}"
+                                   placeholder="https://api.example.com/errors">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="source_method" class="form-label">Method</label>
+                            <select class="form-control form-select" id="source_method" name="source_method">
+                                <option value="GET" {{ 'selected' if source_config.get('method') == 'GET' }}>GET</option>
+                                <option value="POST" {{ 'selected' if source_config.get('method') == 'POST' }}>POST</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="source_auth_type" class="form-label">Authentication</label>
+                            <select class="form-control form-select" id="source_auth_type" name="source_auth_type">
+                                <option value="">None</option>
+                                <option value="bearer" {{ 'selected' if source_config.get('auth_type') == 'bearer' }}>Bearer Token</option>
+                                <option value="api_key" {{ 'selected' if source_config.get('auth_type') == 'api_key' }}>API Key</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group" style="grid-column: span 2;">
+                            <label for="source_auth_token" class="form-label">Token/Key</label>
+                            <input type="password" 
+                                   class="form-control" 
+                                   id="source_auth_token" 
+                                   name="source_auth_token"
+                                   value="{{ source_config.get('auth_token', '') }}"
+                                   autocomplete="off">
+                            <div class="form-text">Bearer Token: sent as <code>Authorization: Bearer …</code>. API Key: sent in the <code>X-API-Key</code> header.</div>
+                        </div>
+                        
+                        <div class="form-group" style="grid-column: span 2;">
+                            <label for="source_response_path" class="form-label">JSON response path</label>
+                            <input type="text" 
+                                   class="form-control" 
+                                   id="source_response_path" 
+                                   name="source_response_path"
+                                   value="{{ source_config.get('response_path', '') }}"
+                                   placeholder="data.items">
+                            <div class="form-text">
+                                Path in the JSON response (e.g. data.items). Leave empty if the response is already an array.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Key Fields -->
+            <div class="card mb-lg">
+                <div class="card-header">
+                    <i class="bi bi-key"></i>
+                    Error identification
+                </div>
+                <div class="card-body">
+                    <div class="form-group mb-0">
+                        <label for="key_fields" class="form-label">
+                            Key fields <span class="required">*</span>
+                        </label>
+                        <input type="text" 
+                               class="form-control" 
+                               id="key_fields" 
+                               name="key_fields"
+                               value="{{ (query.key_fields or '') if query else '' }}"
+                               placeholder="ORDER_NO, ITEM_CODE"
+                               data-required
+                               aria-describedby="keyFieldsHelp">
+                        <div class="form-text" id="keyFieldsHelp">
+                            Fields that uniquely identify an error (comma-separated).
+                            Rows with the same values in these fields count as the same error.
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Email Configuration -->
+            <div class="card mb-lg">
+                <div class="card-header">
+                    <i class="bi bi-envelope"></i>
+                    Email configuration
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label for="email_recipients" class="form-label">Recipients</label>
+                        <input type="text" 
+                               class="form-control" 
+                               id="email_recipients" 
+                               name="email_recipients"
+                               value="{{ (query.email_recipients or '') if query else '' }}"
+                               placeholder="email1@company.com, email2@company.com"
+                               data-email-list
+                               aria-describedby="recipientsHelp">
+                        <div class="form-text" id="recipientsHelp">
+                            Comma-separated email addresses. Leave empty if you only use conditional routing.
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="email_subject" class="form-label">Email subject</label>
+                        <input type="text" 
+                               class="form-control" 
+                               id="email_subject" 
+                               name="email_subject"
+                               value="{{ (query.email_subject or '') if query else '[ErrorEngine] New errors: {query_name}' }}"
+                               placeholder="[ErrorEngine] New errors: {query_name}">
+                        <div class="form-text">
+                            Available variables: <code>{query_name}</code>, <code>{error_count}</code>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group mb-0">
+						<label for="email_template" class="form-label">Email template</label>
+						<textarea class="form-control font-mono" 
+								  id="email_template" 
+								  name="email_template" 
+								  rows="3"
+								  placeholder="{default}">{{ (query.email_template or '') if query else '' }}</textarea>
+						<div class="form-text">
+							Empty or <code>{default}</code> = default template<br>
+							<code>{name}</code> = use templates/email/name.html<br>
+							HTML code = inline custom template
+						</div>
+					</div>
+                </div>
+            </div>
+            
+            <!-- Notification Channels -->
+            <div class="card mb-lg">
+                <div class="card-header">
+                    <i class="bi bi-broadcast"></i>
+                    Notification channels
+                </div>
+                <div class="card-body">
+                    {% if channels %}
+                    <p class="text-muted mb-md">
+                        Choose the channels that receive notifications in addition to email.
+                    </p>
+                    <div class="grid grid-cols-2 gap-md">
+                        {% for channel in channels %}
+                        <label class="flex items-center gap-sm p-sm border rounded cursor-pointer hover:bg-gray-50">
+                            <input type="checkbox" 
+                                   class="form-check-input"
+                                   name="notification_channels" 
+                                   value="{{ channel.id }}"
+                                   {{ 'checked' if query and channel in query.notification_channels }}>
+                            {% if channel.channel_type == 'webhook' %}
+                            <i class="bi bi-globe text-info"></i>
+                            {% elif channel.channel_type == 'telegram' %}
+                            <i class="bi bi-telegram" style="color: #0088cc;"></i>
+                            {% elif channel.channel_type == 'teams' %}
+                            <i class="bi bi-microsoft-teams" style="color: #6264a7;"></i>
+                            {% endif %}
+                            <span>{{ channel.name }}</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <div class="text-muted">
+                        <i class="bi bi-info-circle"></i>
+                        No active channels.
+                        <a href="{{ url_for('main.channels_list') }}">Set up channels</a> for Webhook, Telegram or Teams.
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <!-- Routing Section -->
+            {% if query %}
+            <!-- Routing (only for edit mode) -->
+            <div class="card mb-lg" id="routing">
+                <div class="card-header">
+                    <div class="flex items-center gap-sm">
+                        <i class="bi bi-signpost-split"></i>
+                        Conditional routing
+                    </div>
+                    <div class="flex items-center gap-sm">
+                        <label class="form-check form-switch mb-0">
+                            <input type="checkbox" 
+                                   class="form-check-input" 
+                                   id="routing_enabled" 
+                                   name="routing_enabled"
+                                   {{ 'checked' if query.routing_enabled }}>
+                            <span class="form-check-label">Enabled</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="grid grid-cols-2 gap-md mb-lg">
+                        <div class="form-group mb-0">
+                            <label for="routing_default_recipients" class="form-label">Default recipients</label>
+                            <input type="text" 
+                                   class="form-control" 
+                                   id="routing_default_recipients" 
+                                   name="routing_default_recipients"
+                                   value="{{ (query.routing_default_recipients or '') if query else '' }}"
+                                   placeholder="fallback@company.com"
+                                   data-email-list>
+                            <div class="form-text">Used when no rule matches</div>
+                        </div>
+                        
+                        <div class="form-group mb-0">
+                            <label for="routing_no_match_action" class="form-label">When no rule matches</label>
+                            <select class="form-control form-select" id="routing_no_match_action" name="routing_no_match_action">
+                                <option value="send_default" {{ 'selected' if query.routing_no_match_action == 'send_default' }}>
+                                    Send to the default recipients
+                                </option>
+                                <option value="skip" {{ 'selected' if query.routing_no_match_action == 'skip' }}>
+                                    Don't send
+                                </option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="flex justify-between items-center mb-md">
+                        <h4 class="mb-0">Rules</h4>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="routingManager.openModal()">
+                            <i class="bi bi-plus"></i>
+                            Add rule
+                        </button>
+                    </div>
+                    
+                    <div id="routingRulesContainer"></div>
+                    
+                    <div id="noRulesMessage" class="empty-state" style="padding: var(--space-lg);">
+                        <div class="empty-state-icon" style="font-size: 2rem;">
+                            <i class="bi bi-signpost"></i>
+                        </div>
+                        <p class="text-muted mb-0">No rules configured. Emails go to the standard recipients.</p>
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <!-- Routing note (only for create mode) -->
+            <div class="card mb-lg">
+                <div class="card-header">
+                    <div class="flex items-center gap-sm">
+                        <i class="bi bi-signpost-split"></i>
+                        Conditional routing
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="alert alert-info mb-0">
+                        <i class="alert-icon bi bi-info-circle-fill"></i>
+                        <div class="alert-content">
+                            <div class="alert-title">Available after creation</div>
+                            Conditional routing sends emails to different recipients depending on the error data.
+                            You can set it up after saving the query, under <strong>Edit</strong>.
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        
+        <!-- Sidebar Column -->
+        <div>
+            <!-- Schedule -->
+            <div class="card mb-lg">
+                <div class="card-header">
+                    <i class="bi bi-calendar-event"></i>
+                    Schedule
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="form-label">Time window</label>
+                        <div class="grid grid-cols-2 gap-sm">
+                            <div>
+                                <label for="schedule_start_time" class="form-label text-muted" style="font-size: 0.75rem;">From</label>
+                                <input type="time" 
+                                       class="form-control" 
+                                       id="schedule_start_time"
+                                       name="schedule_start_time"
+                                       value="{{ query.schedule_start_time.strftime('%H:%M') if query and query.schedule_start_time else '' }}">
+                            </div>
+                            <div>
+                                <label for="schedule_end_time" class="form-label text-muted" style="font-size: 0.75rem;">To</label>
+                                <input type="time" 
+                                       class="form-control" 
+                                       id="schedule_end_time"
+                                       name="schedule_end_time"
+                                       value="{{ query.schedule_end_time.strftime('%H:%M') if query and query.schedule_end_time else '' }}">
+                            </div>
+                        </div>
+                        <div class="form-text">Leave empty to always run</div>
+                    </div>
+                    
+					<div class="form-group">
+						<label for="schedule_reference_time" class="form-label">First run at</label>
+						<input type="time" 
+							   class="form-control" 
+							   id="schedule_reference_time"
+							   name="schedule_reference_time"
+							   value="{{ query.schedule_reference_time.strftime('%H:%M') if query and query.schedule_reference_time else '00:00' }}">
+						<div class="form-text">
+							Runs start from this time. E.g. 00:05 with a 15 min interval → 00:05, 00:20, 00:35...
+						</div>
+					</div>
+					
+                    <div class="form-group mb-0">
+                        <label class="form-label">Active days</label>
+                        {% set active_days = query.get_schedule_days_list() if query else [1,2,3,4,5,6,7] %}
+                        <div class="day-picker" role="group" aria-label="Select active days">
+                            {% for day, label in [(1,'Mo'), (2,'Tu'), (3,'We'), (4,'Th'), (5,'Fr'), (6,'Sa'), (7,'Su')] %}
+                            <button type="button" 
+                                    class="day-picker-btn {{ 'active' if day in active_days }}"
+                                    data-day="{{ day }}"
+                                    aria-pressed="{{ 'true' if day in active_days else 'false' }}"
+                                    title="{{ ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][day] }}">
+                                {{ label }}
+                            </button>
+                            {% endfor %}
+                        </div>
+                        <input type="hidden" name="schedule_days" id="schedule_days" 
+                               value="{{ active_days|join(',') }}">
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Reminder -->
+            <div class="card mb-lg">
+                <div class="card-header">
+                    <i class="bi bi-bell"></i>
+                    Reminders
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="form-check form-switch">
+                            <input type="checkbox" 
+                                   class="form-check-input" 
+                                   id="reminder_enabled" 
+                                   name="reminder_enabled"
+                                   {{ 'checked' if query and query.reminder_enabled }}>
+                            <span class="form-check-label">Enable reminders</span>
+                        </label>
+                        <div class="form-text">Send reminders for unresolved errors</div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="reminder_interval_minutes" class="form-label">Interval</label>
+                        <div class="input-group">
+                            <input type="number" 
+                                   class="form-control" 
+                                   id="reminder_interval_minutes"
+                                   name="reminder_interval_minutes" 
+                                   min="15" 
+                                   max="10080"
+                                   value="{{ (query.reminder_interval_minutes or 60) if query else 60 }}">
+                            <span class="input-group-text">minutes</span>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group mb-0">
+                        <label for="reminder_max_count" class="form-label">Max reminders</label>
+                        <input type="number" 
+                               class="form-control" 
+                               id="reminder_max_count"
+                               name="reminder_max_count" 
+                               min="1" 
+                               max="100"
+                               value="{{ (query.reminder_max_count or 5) if query else 5 }}">
+                        <div class="form-text">Per error</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Status -->
+            <div class="card mb-lg">
+                <div class="card-header">
+                    <i class="bi bi-toggle-on"></i>
+                    Status
+                </div>
+                <div class="card-body">
+                    <label class="form-check form-switch">
+                        <input type="checkbox" 
+                               class="form-check-input" 
+                               id="is_active" 
+                               name="is_active"
+                               {{ 'checked' if not query or query.is_active }}>
+                        <span class="form-check-label">Query active</span>
+                    </label>
+                    <div class="form-text">When inactive, the scheduler does not run it</div>
+                </div>
+            </div>
+            
+            <!-- Actions -->
+            <div class="card">
+                <div class="card-body">
+                    <button type="submit" class="btn btn-primary w-full mb-sm">
+                        <i class="bi bi-check-lg"></i>
+                        {{ 'Save changes' if query else 'Create query' }}
+                    </button>
+                    <a href="{{ url_for('main.queries_list') }}" class="btn btn-secondary w-full">
+                        Cancel
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</form>
+
+<!-- SQL Safety Warning Modal -->
+<div class="modal" id="sqlWarningModal" role="dialog" aria-labelledby="sqlWarningTitle" aria-modal="true">
+    <div class="modal-dialog">
+        <div class="modal-header" style="border-bottom-color: var(--color-warning);">
+            <h3 class="modal-title" id="sqlWarningTitle">
+                <i class="bi bi-exclamation-triangle-fill" style="color: var(--color-warning);"></i>
+                Potentially dangerous query
+            </h3>
+            <button type="button" class="btn btn-ghost btn-icon" onclick="modal.close()" aria-label="Close">
+                <i class="bi bi-x-lg"></i>
+            </button>
+        </div>
+        <div class="modal-body">
+            <p>The query contains a <strong id="sqlWarningKeyword" style="color: var(--color-danger);"></strong>
+               statement that could <strong>change or delete data</strong> in the database.</p>
+            <p class="text-muted" style="font-size: 0.875rem;">
+                ErrorEngine is designed to run read-only queries (SELECT).
+                Write statements are at your own risk.
+            </p>
+            <div class="alert alert-warning mb-0" style="margin-top: var(--space-md);">
+                <i class="alert-icon bi bi-shield-exclamation"></i>
+                <div class="alert-content">
+                    Make sure you have a backup and know exactly what you are doing.
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="modal.close()">
+                <i class="bi bi-x-lg"></i>
+                Cancel
+            </button>
+            <button type="button" class="btn btn-warning" id="sqlWarningConfirmBtn">
+                <i class="bi bi-shield-check"></i>
+                I know what I'm doing
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- No day selected -->
+<div class="modal" id="noDaysModal" role="dialog" aria-labelledby="noDaysTitle" aria-modal="true">
+    <div class="modal-dialog" style="max-width: 440px;">
+        <div class="modal-header" style="border-bottom-color: var(--color-warning);">
+            <h3 class="modal-title" id="noDaysTitle">
+                <i class="bi bi-calendar-x" style="color: var(--color-warning);"></i>
+                No days selected
+            </h3>
+            <button type="button" class="btn btn-ghost btn-icon" onclick="modal.close()" aria-label="Close">
+                <i class="bi bi-x-lg"></i>
+            </button>
+        </div>
+        <div class="modal-body">
+            <p class="mb-0">With no day selected, the query runs <strong>every day</strong>.</p>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="modal.close()">
+                Choose days
+            </button>
+            <button type="button" class="btn btn-primary" id="noDaysConfirmBtn">
+                Save, every day
+            </button>
+        </div>
+    </div>
+</div>
+
+{% if query %}
+<!-- Routing Rule Modal (only for edit mode) -->
+<div class="modal" id="ruleModal" role="dialog" aria-labelledby="ruleModalTitle" aria-modal="true">
+    <div class="modal-dialog modal-dialog-lg">
+        <div class="modal-header">
+            <h3 class="modal-title" id="ruleModalTitle">New rule</h3>
+            <button type="button" class="btn btn-ghost btn-icon" onclick="modal.close()" aria-label="Close">
+                <i class="bi bi-x-lg"></i>
+            </button>
+        </div>
+        <div class="modal-body">
+            <input type="hidden" id="ruleId">
+            
+            <div class="form-group">
+                <label for="ruleName" class="form-label">Rule name</label>
+                <input type="text" 
+                       class="form-control" 
+                       id="ruleName" 
+                       placeholder="e.g. Sales office errors">
+            </div>
+            
+            <div class="form-group">
+                <label for="ruleRecipients" class="form-label">
+                    Recipients <span class="required">*</span>
+                </label>
+                <input type="text" 
+                       class="form-control" 
+                       id="ruleRecipients" 
+                       placeholder="email1@company.com, email2@company.com"
+                       data-email-list>
+            </div>
+            
+            <div class="grid grid-cols-3 gap-md">
+                <div class="form-group">
+                    <label for="ruleConditionLogic" class="form-label">Logic</label>
+                    <select class="form-control form-select" id="ruleConditionLogic">
+                        <option value="AND">All (AND)</option>
+                        <option value="OR">At least one (OR)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="rulePriority" class="form-label">Priority</label>
+                    <input type="number"
+                           class="form-control"
+                           id="rulePriority"
+                           value="0"
+                           min="0"
+                           max="1000"
+                           aria-describedby="rulePriorityHelp">
+                    <div class="form-text" id="rulePriorityHelp">Lower numbers are checked first</div>
+                </div>
+                <div class="form-group">
+                    <label class="form-check">
+                        <input type="checkbox" class="form-check-input" id="ruleIsActive" checked>
+                        <span class="form-check-label">Rule active</span>
+                    </label>
+                    <label class="form-check">
+                        <input type="checkbox" class="form-check-input" id="ruleStopOnMatch">
+                        <span class="form-check-label">Stop on match</span>
+                    </label>
+                </div>
+            </div>
+            
+            <hr style="margin: var(--space-lg) 0; border-color: var(--color-border-light);">
+            
+            <div class="flex justify-between items-center mb-md">
+                <h4 class="mb-0">Conditions</h4>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="routingManager.addConditionRow()">
+                    <i class="bi bi-plus"></i>
+                    Add
+                </button>
+            </div>
+            
+            <div id="conditionsContainer"></div>
+            
+            <div id="noConditionsHint" class="alert alert-info">
+                <i class="alert-icon bi bi-info-circle-fill"></i>
+                <div class="alert-content">
+                    Without conditions, the rule always matches (catch-all)
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="modal.close()">Cancel</button>
+            <button type="button" class="btn btn-primary" onclick="routingManager.save()">
+                <i class="bi bi-check-lg"></i>
+                Save rule
+            </button>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Available operators for routing conditions
+    const operators = {{ operators | tojson | safe }};
+    
+    // Initialize source type toggle
+    sourceToggle.init();
+    
+    {% if query %}
+    // Initialize routing manager
+    routingManager.operators = operators;
+    routingManager.init({{ query.id }}, operators);
+    {% endif %}
+    
+    // ==========================================
+    // Confirmations before saving or testing
+    // ==========================================
+
+    /**
+     * Opens a confirmation modal. Resolves true when its confirm button is clicked,
+     * false when it is closed in any other way (Cancel, X, Escape, click outside).
+     */
+    function askConfirmation(modalId, confirmButtonId) {
+        return new Promise(function(resolve) {
+            var button = document.getElementById(confirmButtonId);
+            var fresh = button.cloneNode(true);   // drops the listener of the previous time
+            button.parentNode.replaceChild(fresh, button);
+
+            var originalClose = modal.close.bind(modal);
+            modal.close = function() {
+                modal.close = originalClose;
+                originalClose();
+                resolve(false);
+            };
+            fresh.addEventListener('click', function() {
+                resolve(true);   // first: closing the modal answers "cancelled" (a promise keeps the first answer)
+                modal.close();
+            });
+            modal.open(modalId);
+        });
+    }
+
+    const sqlSafety = {
+        // Keywords that indicate non-SELECT operations
+        dangerousKeywords: [
+            'INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'TRUNCATE',
+            'CREATE', 'EXEC', 'EXECUTE', 'MERGE', 'GRANT', 'REVOKE',
+            'REPLACE', 'RENAME', 'CALL'
+        ],
+        
+        // The user confirmed the warning for the current text of the query
+        confirmed: false,
+        
+        /**
+         * Check if SQL starts with a dangerous keyword.
+         * Returns the keyword if dangerous, null if safe.
+         */
+        check(sql) {
+            if (!sql) return null;
+            
+            // Normalize: trim, remove leading comments and whitespace
+            var clean = sql.replace(/\/\*[\s\S]*?\*\//g, '')  // block comments
+                          .replace(/--.*$/gm, '')               // line comments
+                          .replace(/^\s+/, '')                   // leading whitespace
+                          .toUpperCase();
+            
+            // Get first word
+            var match = clean.match(/^([A-Z]+)/);
+            if (!match) return null;
+            
+            var firstWord = match[1];
+            
+            // SELECT and WITH (CTE) are safe
+            if (firstWord === 'SELECT' || firstWord === 'WITH') return null;
+            
+            // Check against dangerous keywords
+            for (var i = 0; i < this.dangerousKeywords.length; i++) {
+                if (firstWord === this.dangerousKeywords[i]) {
+                    return firstWord;
+                }
+            }
+            
+            // Unknown keyword — still flag it
+            return firstWord;
+        },
+
+        /** Keyword of the statement in the form, when the source is a database */
+        formKeyword() {
+            var sourceType = document.getElementById('source_type');
+            var sqlField = document.getElementById('sql_query');
+            if (!sqlField || (sourceType && sourceType.value !== 'database')) return null;
+            return this.check(sqlField.value);
+        },
+        
+        /** Shows the warning for a write statement; true if the user confirms it */
+        async confirm(keyword) {
+            if (!keyword || this.confirmed) return true;
+            document.getElementById('sqlWarningKeyword').textContent = keyword;
+            this.confirmed = await askConfirmation('sqlWarningModal', 'sqlWarningConfirmBtn');
+            return this.confirmed;
+        }
+    };
+
+    // No day selected means every day: say so before saving
+    const scheduleCheck = {
+        noDays() {
+            var input = document.getElementById('schedule_days');
+            return !!input && !input.value.split(',').some(function(day) { return day.trim(); });
+        },
+        confirm() {
+            return askConfirmation('noDaysModal', 'noDaysConfirmBtn');
+        }
+    };
+    
+    // Before saving: the warnings, then the real submit
+    (function() {
+        var form = document.getElementById('queryForm');
+        if (!form) return;
+        
+        form.addEventListener('submit', function(e) {
+            // Invalid fields: the form validator shows them and stops the submit
+            if (typeof validator !== 'undefined' && !validator.validateForm(form)) return;
+
+            var keyword = sqlSafety.formKeyword();
+            var askDays = scheduleCheck.noDays();
+            var askSql = keyword && !sqlSafety.confirmed;
+            if (!askDays && !askSql) return;
+
+            e.preventDefault();
+            (async function() {
+                if (askDays && !(await scheduleCheck.confirm())) return;
+                if (askSql && !(await sqlSafety.confirm(keyword))) return;
+                form.submit();
+            })();
+        });
+    })();
+    
+    // Reset confirmed flag when SQL changes
+    (function() {
+        var sqlField = document.getElementById('sql_query');
+        if (sqlField) {
+            sqlField.addEventListener('input', function() {
+                sqlSafety.confirmed = false;
+            });
+        }
+    })();
+	
+	// Limit the interval to 24 h at most
+	function limitIntervalValue() {
+		var input = document.getElementById('check_interval_value');
+		var unit = document.getElementById('check_interval_unit');
+		if (unit.value === 'hours') {
+			input.max = 24;
+			if (parseInt(input.value) > 24) input.value = 24;
+		} else {
+			input.max = 1440;
+			if (parseInt(input.value) > 1440) input.value = 1440;
+		}
+	}
+	limitIntervalValue();
+</script>
+{% endblock %}

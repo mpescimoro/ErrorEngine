@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo.svg') }}">
+    <meta name="description" content="ErrorEngine - Error monitoring system">
+    <meta name="theme-color" content="#0d9488">
+    
+    <title>{% block title %}ErrorEngine{% endblock %}</title>
+    
+    <!-- Fonts and icons -->
+    <link href="{{ url_for('static', filename='vendor/fonts/fonts.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css') }}" rel="stylesheet">
+    
+    <!-- App CSS -->
+    <link href="{{ url_for('static', filename='css/app.css') }}" rel="stylesheet">
+    
+    {% block extra_css %}{% endblock %}
+</head>
+<body data-errors-signature="{{ errors_signature|default('') }}"{% if live_reload|default(false) %} data-live-reload="true"{% endif %}>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <nav class="sidebar" role="navigation" aria-label="Main menu">
+            <div class="sidebar-header">
+                <a href="{{ url_for('main.dashboard') }}" class="sidebar-logo">
+                    <div class="sidebar-logo-icon">
+                        <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="ErrorEngine" style="height: inherit;">
+                    </div>
+                    <div class="sidebar-logo-text">
+                        ErrorEngine
+                        <small>Monitoring System</small>
+                    </div>
+                </a>
+            </div>
+            
+            <div class="sidebar-nav">
+                <div class="nav-section">
+                    <div class="nav-section-title">Monitoring</div>
+                    <div class="nav-item">
+                        <a class="nav-link {{ 'active' if request.endpoint == 'main.dashboard' }}" 
+                           href="{{ url_for('main.dashboard') }}"
+                           aria-current="{{ 'page' if request.endpoint == 'main.dashboard' else 'false' }}">
+                            <i class="bi bi-speedometer2"></i>
+                            <span>Dashboard</span>
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a class="nav-link {{ 'active' if 'queries' in request.endpoint|default('') }}" 
+                           href="{{ url_for('main.queries_list') }}"
+                           aria-current="{{ 'page' if 'queries' in request.endpoint|default('') else 'false' }}">
+                            <i class="bi bi-search"></i>
+                            <span>Queries</span>
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a class="nav-link {{ 'active' if request.endpoint == 'main.stats_page' }}" 
+                           href="{{ url_for('main.stats_page') }}"
+                           aria-current="{{ 'page' if request.endpoint == 'main.stats_page' else 'false' }}">
+                            <i class="bi bi-graph-up"></i>
+                            <span>Statistics</span>
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a class="nav-link {{ 'active' if request.endpoint == 'main.errors_list' }}" 
+                           href="{{ url_for('main.errors_list') }}"
+                           aria-current="{{ 'page' if request.endpoint == 'main.errors_list' else 'false' }}">
+                            <i class="bi bi-exclamation-triangle"></i>
+                            <span>Errors</span>
+                            {% set error_count = error_count|default(0) %}
+                            <span class="badge badge-danger" id="navErrorCount"{% if error_count == 0 %} style="display: none;"{% endif %}>{{ error_count }}</span>
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a class="nav-link {{ 'active' if request.endpoint == 'main.logs_list' }}" 
+                           href="{{ url_for('main.logs_list') }}"
+                           aria-current="{{ 'page' if request.endpoint == 'main.logs_list' else 'false' }}">
+                            <i class="bi bi-journal-text"></i>
+                            <span>Logs</span>
+                        </a>
+                    </div>
+                </div>
+                
+                <div class="nav-section">
+                    <div class="nav-section-title">Configuration</div>
+                    <div class="nav-item">
+                        <a class="nav-link {{ 'active' if 'connection' in request.endpoint|default('') }}" 
+                        href="{{ url_for('main.connections_list') }}"
+                        aria-current="{{ 'page' if 'connection' in request.endpoint|default('') else 'false' }}">
+                            <i class="bi bi-database-gear"></i>
+                            <span>DB connections</span>
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a class="nav-link {{ 'active' if 'channel' in request.endpoint|default('') }}" 
+                        href="{{ url_for('main.channels_list') }}"
+                        aria-current="{{ 'page' if 'channel' in request.endpoint|default('') else 'false' }}">
+                            <i class="bi bi-broadcast"></i>
+                            <span>Notification channels</span>
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a class="nav-link {{ 'active' if request.endpoint == 'main.settings' }}" 
+                           href="{{ url_for('main.settings') }}"
+                           aria-current="{{ 'page' if request.endpoint == 'main.settings' else 'false' }}">
+                            <i class="bi bi-gear"></i>
+                            <span>Settings</span>
+                        </a>
+                    </div>
+                </div>
+                
+            </div>
+            
+            <div class="sidebar-footer">
+                {% if current_user %}
+                <form method="POST" action="{{ url_for('auth.logout') }}" class="sidebar-user">
+                    <i class="bi bi-person-circle"></i>
+                    <span class="sidebar-user-name" title="{{ current_user }}">{{ current_user }}</span>
+                    <button type="submit" class="sidebar-logout" title="Sign out" aria-label="Sign out">
+                        <i class="bi bi-box-arrow-right"></i>
+                    </button>
+                </form>
+                {% endif %}
+                <i class="bi bi-clock"></i>
+                <span id="currentTime"></span>
+            </div>
+        </nav>
+        
+        <!-- Sidebar backdrop (mobile) -->
+        <div class="sidebar-backdrop" aria-hidden="true"></div>
+        
+        <!-- Main Content -->
+        <main class="main-content" role="main">
+            <!-- Flash Messages -->
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                    <div class="alert alert-{{ category }} alert-dismissible" role="alert">
+                        <i class="alert-icon bi bi-{{ 'check-circle-fill' if category == 'success' else 'exclamation-triangle-fill' if category == 'warning' else 'x-circle-fill' if category == 'danger' else 'info-circle-fill' }}"></i>
+                        <div class="alert-content">{{ message }}</div>
+                        <button type="button" class="alert-close" aria-label="Close">&times;</button>
+                    </div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+            
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+    
+    <!-- Mobile sidebar toggle -->
+    <button class="sidebar-toggle" aria-label="Open menu" aria-expanded="false">
+        <i class="bi bi-list"></i>
+    </button>
+    
+    <!-- Toast Container -->
+    <div class="toast-container" role="alert" aria-live="polite" aria-atomic="true"></div>
+    
+    <!-- App JS -->
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

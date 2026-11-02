@@ -1,0 +1,255 @@
+{% extends "base.html" %}
+{% set live_reload = true %}  {# reload the page when errors change #}
+
+{% block title %}Dashboard - ErrorEngine{% endblock %}
+
+{% block content %}
+<!-- Page Header -->
+<div class="page-header">
+    <h1 class="page-title">
+        <i class="bi bi-speedometer2"></i>
+        Dashboard
+    </h1>
+    <a href="{{ url_for('main.query_create') }}" class="btn btn-primary">
+        <i class="bi bi-plus-lg"></i>
+        <span>New query</span>
+    </a>
+</div>
+
+<!-- Stats Grid -->
+<div class="grid grid-cols-4 gap-lg mb-xl">
+    <!-- Total Queries -->
+    <div class="card stat-card">
+        <div class="card-body">
+            <div class="flex justify-between items-start">
+                <div>
+                    <div class="stat-label">Queries</div>
+                    <div class="stat-value">{{ stats.total_queries }}</div>
+                    <div class="mt-xs">
+                        <span class="text-muted">{{ stats.active_queries }} active</span>
+                    </div>
+                </div>
+                <div class="stat-icon">
+                    <i class="bi bi-database"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Active Errors -->
+    <div class="card stat-card stat-danger">
+        <div class="card-body">
+            <div class="flex justify-between items-start">
+                <div>
+                    <div class="stat-label">Active errors</div>
+                    <div class="stat-value">{{ stats.total_active_errors }}</div>
+                    <div class="mt-xs">
+                        <span class="text-muted">Unresolved</span>
+                    </div>
+                </div>
+                <div class="stat-icon">
+                    <i class="bi bi-exclamation-triangle"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Emails Today -->
+    <div class="card stat-card stat-success">
+        <div class="card-body">
+            <div class="flex justify-between items-start">
+                <div>
+                    <div class="stat-label">Emails sent today</div>
+                    <div class="stat-value">{{ stats.emails_sent_today }}</div>
+                    <div class="mt-xs">
+                        {% if stats.emails_failed_today %}
+                        <span class="text-danger">{{ stats.emails_failed_today }} failed</span>
+                        {% else %}
+                        <span class="text-muted">Since midnight</span>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="stat-icon">
+                    <i class="bi bi-envelope-check"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Next Check - Real time -->
+    <div class="card stat-card stat-info">
+        <div class="card-body">
+            <div class="flex justify-between items-start">
+                <div>
+                    <div class="stat-label">Next check</div>
+                    <div class="stat-value" id="nextCheckTime" style="font-size: 1.5rem;">—</div>
+                    <div class="mt-xs">
+                        <span class="text-muted truncate" id="nextCheckQuery" style="max-width: 150px; display: block;">
+                            Loading...
+                        </span>
+                    </div>
+                </div>
+                <div class="stat-icon">
+                    <i class="bi bi-clock-history"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Queries Table -->
+<div class="card">
+    <div class="card-header">
+        <div class="flex items-center gap-sm">
+            <i class="bi bi-list-ul"></i>
+            <span>Configured queries</span>
+            <span class="badge badge-secondary">{{ queries|length }}</span>
+        </div>
+        <a href="{{ url_for('main.queries_list') }}" class="btn btn-ghost btn-sm">
+            View all
+            <i class="bi bi-arrow-right"></i>
+        </a>
+    </div>
+    
+    {% if queries %}
+    <div class="table-container">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Source</th>
+                    <th>Status</th>
+                    <th>Errors</th>
+                    <th>Last check</th>
+                    <th>Routing</th>
+                    <th class="text-right">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for query in queries %}
+                <tr>
+                    <td>
+                        <a href="{{ url_for('main.query_detail', query_id=query.id) }}" class="query-name">
+                            {{ query.name }}
+                        </a>
+                        {% if query.description %}
+                        <div class="query-description">{{ query.description[:60] }}{{ '...' if query.description|length > 60 }}</div>
+                        {% endif %}
+                    </td>
+                    <td>
+						{% if query.db_connection_id and query.db_connection %}
+						<span class="badge badge-primary">
+							<i class="bi bi-database"></i> {{ driver_labels.get(query.db_connection.db_type, query.db_connection.db_type|upper) }}
+						</span>
+						{% elif query.source_type == 'http' %}
+						<span class="badge badge-info">
+							<i class="bi bi-cloud"></i> HTTP
+						</span>
+						{% else %}
+						<span class="badge badge-secondary">
+							<i class="bi bi-question-circle"></i> N/D
+						</span>
+						{% endif %}
+					</td>
+                    <td>
+                        {% if query.is_active %}
+                            {% if query.consecutive_failures %}
+                            <span class="status-indicator status-danger" title="{{ query.last_failure_message or '' }}">
+                                <span class="status-dot"></span>
+                                Failing
+                            </span>
+                            {% elif query.is_in_schedule() %}
+                            <span class="status-indicator status-active">
+                                <span class="status-dot"></span>
+                                Active
+                            </span>
+                            {% else %}
+                            <span class="status-indicator status-warning">
+                                <span class="status-dot"></span>
+                                Outside schedule
+                            </span>
+                            {% endif %}
+                        {% else %}
+                        <span class="status-indicator status-inactive">
+                            <span class="status-dot"></span>
+                            Inactive
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% set error_count = error_counts.get(query.id, 0) %}
+                        {% if error_count > 0 %}
+                        <span class="badge badge-danger">{{ error_count }}</span>
+                        {% else %}
+                        <span class="text-muted">0</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if query.is_active and query.consecutive_failures and query.failing_since %}
+                        <span class="text-danger" title="{{ query.last_failure_message or '' }}">
+                            Failing since {{ query.failing_since|localtime('%d/%m/%y %H:%M') }}
+                        </span>
+                        {% elif query.last_check_at %}
+                        <span title="{{ query.last_check_at|localtime('%d/%m/%Y %H:%M:%S') }}">
+                            {{ query.last_check_at|localtime('%d/%m/%y %H:%M') }}
+                        </span>
+                        {% else %}
+                        <span class="text-muted">Never</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if query.routing_enabled %}
+                        <span class="badge badge-info" title="{{ query.routing_rules|length }} rules configured">
+                            <i class="bi bi-signpost-split"></i>
+                            {{ query.routing_rules|length }}
+                        </span>
+                        {% else %}
+                        <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div class="actions" style="justify-content: flex-end;">
+                            <button type="button" 
+                                    class="btn btn-ghost btn-sm btn-icon" 
+                                    onclick="queryManager.run({{ query.id }})"
+                                    title="Run now"
+                                    aria-label="Run query {{ query.name }}">
+                                <i class="bi bi-play-fill"></i>
+                            </button>
+                            <button type="button" 
+                                    class="btn btn-ghost btn-sm btn-icon btn-toggle {{ 'is-on' if query.is_active }}" 
+                                    onclick="queryManager.toggle({{ query.id }})"
+                                    title="{{ 'Active: click to deactivate' if query.is_active else 'Inactive: click to activate' }}"
+                                    aria-label="{{ 'Deactivate' if query.is_active else 'Activate' }} query {{ query.name }}">
+                                <i class="bi bi-{{ 'toggle-on' if query.is_active else 'toggle-off' }}"></i>
+                            </button>
+                            <a href="{{ url_for('main.query_edit', query_id=query.id) }}" 
+                               class="btn btn-ghost btn-sm btn-icon"
+                               title="Edit"
+                               aria-label="Edit query {{ query.name }}">
+                                <i class="bi bi-pencil"></i>
+                            </a>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <div class="empty-state-icon">
+            <i class="bi bi-inbox"></i>
+        </div>
+        <h3 class="empty-state-title">No queries configured</h3>
+        <p class="empty-state-description">
+            Create your first query to start monitoring errors.
+        </p>
+        <a href="{{ url_for('main.query_create') }}" class="btn btn-primary">
+            <i class="bi bi-plus-lg"></i>
+            Create query
+        </a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

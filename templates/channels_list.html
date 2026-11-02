@@ -1,0 +1,253 @@
+{% extends "base.html" %}
+
+{% block title %}Notification channels - ErrorEngine{% endblock %}
+
+{% block content %}
+<!-- Page Header -->
+<div class="page-header">
+    <h1 class="page-title">
+        <i class="bi bi-broadcast"></i>
+        Notification channels
+        <span class="badge badge-secondary">{{ channels|length }}</span>
+    </h1>
+    <a href="{{ url_for('main.channel_create') }}" class="btn btn-primary">
+        <i class="bi bi-plus-lg"></i>
+        New channel
+    </a>
+</div>
+
+{% if channels %}
+<div class="card">
+    <div class="table-container">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th>Sent</th>
+                    <th>Last sent</th>
+                    <th>Queries</th>
+                    <th class="text-right">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for channel in channels %}
+                <tr>
+                    <td>
+                        <strong>{{ channel.name }}</strong>
+                        {% if channel.last_error %}
+                        <br><small class="text-danger">{{ channel.last_error[:50] }}...</small>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if channel.channel_type == 'webhook' %}
+                        <span class="badge badge-info">
+                            <i class="bi bi-globe"></i> Webhook
+                        </span>
+                        {% elif channel.channel_type == 'telegram' %}
+                        <span class="badge" style="background: #0088cc; color: white;">
+                            <i class="bi bi-telegram"></i> Telegram
+                        </span>
+                        {% elif channel.channel_type == 'teams' %}
+                        <span class="badge" style="background: #6264a7; color: white;">
+                            <i class="bi bi-microsoft-teams"></i> Teams
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if channel.is_active %}
+                        <span class="status-indicator status-active">
+                            <span class="status-dot"></span>
+                            Active
+                        </span>
+                        {% else %}
+                        <span class="status-indicator status-inactive">
+                            <span class="status-dot"></span>
+                            Inactive
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <span class="badge badge-secondary">{{ channel.total_sent }}</span>
+                    </td>
+                    <td>
+                        {% if channel.last_sent_at %}
+                        <span title="{{ channel.last_sent_at|localtime('%d/%m/%Y %H:%M:%S') }}">
+                            {{ channel.last_sent_at|localtime('%d/%m/%y %H:%M') }}
+                        </span>
+                        {% else %}
+                        <span class="text-muted">Never</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if channel.queries|length > 0 %}
+                        <span class="badge badge-secondary">{{ channel.queries|length }}</span>
+                        {% else %}
+                        <span class="text-muted">0</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-right">
+                        <div class="actions" style="justify-content: flex-end;">
+                            <button type="button" 
+                                    class="btn btn-ghost btn-sm btn-icon"
+                                    onclick="testChannel({{ channel.id }})"
+                                    title="Test channel">
+                                <i class="bi bi-send"></i>
+                            </button>
+                            <a href="{{ url_for('main.channel_edit', channel_id=channel.id) }}" 
+                               class="btn btn-ghost btn-sm btn-icon"
+                               title="Edit">
+                                <i class="bi bi-pencil"></i>
+                            </a>
+                            <form method="POST" action="{{ url_for('main.channel_delete', channel_id=channel.id) }}" 
+                                  style="display: inline;"
+                                  data-confirm="Delete channel {{ channel.name }}?">
+                                <button type="submit" 
+                                        class="btn btn-ghost btn-sm btn-icon text-danger"
+                                        title="Delete"
+                                        {% if channel.queries|length > 0 %}disabled{% endif %}>
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="card">
+    <div class="empty-state">
+        <div class="empty-state-icon">
+            <i class="bi bi-broadcast-pin"></i>
+        </div>
+        <h3 class="empty-state-title">No channels configured</h3>
+        <p class="empty-state-description">
+            Set up channels to receive notifications via Webhook, Telegram or Microsoft Teams.
+        </p>
+        <a href="{{ url_for('main.channel_create') }}" class="btn btn-primary">
+            <i class="bi bi-plus-lg"></i>
+            New channel
+        </a>
+    </div>
+</div>
+{% endif %}
+
+<!-- Guide Cards -->
+<div class="card mt-lg">
+    <div class="card-header">
+        <div class="flex items-center gap-sm">
+            <i class="bi bi-book"></i>
+            Setup guide
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="grid grid-cols-3 gap-lg">
+            <!-- Webhook -->
+            <div style="padding: var(--space-lg); background: var(--color-bg); border-radius: var(--radius-lg); border: 1px solid var(--color-border-light);">
+                <div style="display: flex; align-items: center; gap: var(--space-sm); margin-bottom: var(--space-md);">
+                    <div style="width: 40px; height: 40px; border-radius: var(--radius-md); background: var(--color-info-bg); display: flex; align-items: center; justify-content: center;">
+                        <i class="bi bi-globe" style="font-size: 1.25rem; color: var(--color-info);"></i>
+                    </div>
+                    <div>
+                        <div style="font-weight: 600;">Webhook</div>
+                        <div class="text-muted" style="font-size: 0.75rem;">Generic</div>
+                    </div>
+                </div>
+                <p class="text-muted" style="font-size: 0.8125rem; margin-bottom: var(--space-md); line-height: 1.5;">
+                    Sends JSON to any URL. Ideal for n8n, Make, Zapier or custom systems.
+                </p>
+                <div style="font-size: 0.75rem; color: var(--color-text-light);">
+                    <div style="margin-bottom: 0.375rem;"><i class="bi bi-check2" style="color: var(--color-success);"></i> Standard JSON payload: query and errors</div>
+                    <div style="margin-bottom: 0.375rem;"><i class="bi bi-check2" style="color: var(--color-success);"></i> Custom headers</div>
+                    <div><i class="bi bi-check2" style="color: var(--color-success);"></i> POST or PUT</div>
+                </div>
+            </div>
+            
+            <!-- Telegram -->
+            <div style="padding: var(--space-lg); background: var(--color-bg); border-radius: var(--radius-lg); border: 1px solid var(--color-border-light);">
+                <div style="display: flex; align-items: center; gap: var(--space-sm); margin-bottom: var(--space-md);">
+                    <div style="width: 40px; height: 40px; border-radius: var(--radius-md); background: #e3f2fd; display: flex; align-items: center; justify-content: center;">
+                        <i class="bi bi-telegram" style="font-size: 1.25rem; color: #0088cc;"></i>
+                    </div>
+                    <div>
+                        <div style="font-weight: 600;">Telegram</div>
+                        <div class="text-muted" style="font-size: 0.75rem;">Bot API</div>
+                    </div>
+                </div>
+                <p class="text-muted" style="font-size: 0.8125rem; margin-bottom: var(--space-md); line-height: 1.5;">
+                    Instant notifications through a Telegram bot. You need a bot token and a chat ID.
+                </p>
+                <div style="font-size: 0.75rem; color: var(--color-text-light); line-height: 1.7;">
+                    <div style="margin-bottom: 0.375rem;">
+                        <strong>1.</strong> Create a bot with
+                        <a href="https://t.me/BotFather" target="_blank" style="color: #0088cc;">@BotFather</a>
+                    </div>
+                    <div style="margin-bottom: 0.375rem;">
+                        <strong>2.</strong> Get the chat ID with
+                        <a href="https://t.me/userinfobot" target="_blank" style="color: #0088cc;">@userinfobot</a>
+                    </div>
+                    <div>
+                        <strong>3.</strong> Enter the token and chat ID here
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Teams -->
+            <div style="padding: var(--space-lg); background: var(--color-bg); border-radius: var(--radius-lg); border: 1px solid var(--color-border-light);">
+                <div style="display: flex; align-items: center; gap: var(--space-sm); margin-bottom: var(--space-md);">
+                    <div style="width: 40px; height: 40px; border-radius: var(--radius-md); background: #ede7f6; display: flex; align-items: center; justify-content: center;">
+                        <i class="bi bi-microsoft-teams" style="font-size: 1.25rem; color: #6264a7;"></i>
+                    </div>
+                    <div>
+                        <div style="font-weight: 600;">Microsoft Teams</div>
+                        <div class="text-muted" style="font-size: 0.75rem;">Workflows</div>
+                    </div>
+                </div>
+                <p class="text-muted" style="font-size: 0.8125rem; margin-bottom: var(--space-md); line-height: 1.5;">
+                    Messages in a Teams channel through a Workflows webhook. Office 365 connectors stopped working in May 2026.
+                </p>
+                <div style="font-size: 0.75rem; color: var(--color-text-light); line-height: 1.7;">
+                    <div style="margin-bottom: 0.375rem;">
+                        <strong>1.</strong> In Teams, open Workflows
+                    </div>
+                    <div style="margin-bottom: 0.375rem;">
+                        <strong>2.</strong> Template "Send webhook alerts to a channel", choose team and channel
+                    </div>
+                    <div style="margin-bottom: 0.375rem;">
+                        <strong>3.</strong> Save and copy the webhook URL
+                    </div>
+                    <div>
+                        <a href="https://support.microsoft.com/en-us/teams/apps-service/create-incoming-webhooks-with-workflows-for-microsoft-teams" 
+                           target="_blank" 
+                           style="color: #6264a7; text-decoration: none; display: inline-flex; align-items: center; gap: 0.25rem;">
+                            <i class="bi bi-box-arrow-up-right"></i> Microsoft guide
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+async function testChannel(channelId) {
+    toast.info('Sending test message...');
+    try {
+        const result = await api.post('/api/channels/' + channelId + '/test');
+        if (result.success) {
+            toast.success('Test message sent!');
+        } else {
+            toast.error('Error: ' + result.message);
+        }
+    } catch (error) {
+        toast.error('Error: ' + error.message);
+    }
+}
+</script>
+{% endblock %}

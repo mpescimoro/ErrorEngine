@@ -1,0 +1,8 @@
+/* DM Sans and JetBrains Mono (SIL Open Font License 1.1, see the LICENSE files), latin subset.
+   Served by the app, so the interface works without Internet access. */
+@font-face { font-family: 'DM Sans'; font-style: normal; font-weight: 400; font-display: swap; src: url('dm-sans-latin-400-normal.woff2') format('woff2'); }
+@font-face { font-family: 'DM Sans'; font-style: normal; font-weight: 500; font-display: swap; src: url('dm-sans-latin-500-normal.woff2') format('woff2'); }
+@font-face { font-family: 'DM Sans'; font-style: normal; font-weight: 600; font-display: swap; src: url('dm-sans-latin-600-normal.woff2') format('woff2'); }
+@font-face { font-family: 'DM Sans'; font-style: normal; font-weight: 700; font-display: swap; src: url('dm-sans-latin-700-normal.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400; font-display: swap; src: url('jetbrains-mono-latin-400-normal.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 500; font-display: swap; src: url('jetbrains-mono-latin-500-normal.woff2') format('woff2'); }

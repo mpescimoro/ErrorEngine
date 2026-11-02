@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% set live_reload = true %}  {# reload the page when errors change #}
+
+{% block title %}Active errors - ErrorEngine{% endblock %}
+
+{% block content %}
+<!-- Page Header -->
+<div class="page-header">
+    <h1 class="page-title">
+        <i class="bi bi-exclamation-triangle"></i>
+        Active errors
+        {% if errors %}
+        <span class="badge badge-danger">{{ errors|length }}</span>
+        {% endif %}
+    </h1>
+    
+    <!-- Filter: only queries with active errors (hidden when there are none) -->
+    {% if queries %}
+    <form method="GET" class="flex items-center gap-sm">
+        <select name="query_id" class="form-control form-select" onchange="this.form.submit()" style="width: auto;"
+                aria-label="Filter by query">
+            <option value="">All queries ({{ total_errors }})</option>
+            {% for q in queries %}
+            <option value="{{ q.id }}" {{ 'selected' if selected_query_id == q.id }}>{{ q.name }} ({{ error_counts.get(q.id, 0) }})</option>
+            {% endfor %}
+        </select>
+    </form>
+    {% endif %}
+</div>
+
+{% if errors %}
+<div class="card">
+    <div class="table-container">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Query</th>
+                    <th>Error data</th>
+                    <th>Recipients</th>
+                    <th>First seen</th>
+                    <th>Occurrences</th>
+                    <th>Reminder</th>
+                    <th class="text-right">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for error in errors %}
+                {% set data = error.get_error_data() %}
+                {% set items_list = data.items()|list %}
+                {% set max_show = 3 %}
+                <tr>
+                    <td>
+                        <a href="{{ url_for('main.query_detail', query_id=error.query_id) }}" class="query-name">
+                            {{ error.monitored_query.name }}
+                        </a>
+                    </td>
+                    <td>
+                        <div style="max-width: 400px;">
+                            <!-- Preview of the first fields -->
+                            {% for key, value in items_list[:max_show] %}
+                            <div class="truncate" title="{{ key }}: {{ value }}">
+                                <span class="text-muted">{{ key }}:</span> 
+                                <strong>{{ value }}</strong>
+                            </div>
+                            {% endfor %}
+                            
+                            <!-- Link to expand when there are more fields -->
+                            {% if items_list|length > max_show %}
+                            <button type="button" 
+                                    class="expandable-trigger"
+                                    onclick="errorExpander.toggle(this, {{ error.id }})"
+                                    aria-expanded="false"
+                                    aria-controls="error-details-{{ error.id }}">
+                                <i class="bi bi-chevron-down"></i>
+                                +{{ items_list|length - max_show }} more {{ 'field' if items_list|length - max_show == 1 else 'fields' }}
+                            </button>
+                            
+                            <!-- Expandable content -->
+                            <div id="error-details-{{ error.id }}" class="expandable-content">
+                                {% for key, value in items_list %}
+                                <div class="error-field">
+                                    <span class="error-field-key">{{ key }}:</span>
+                                    <span class="error-field-value">{{ value }}</span>
+                                </div>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+                    </td>
+                    <td>
+                        <!-- Who received the notification by email: first addresses, the others expandable -->
+                        {% set recipients = error.get_notified_to() %}
+                        {% if recipients %}
+                        <div style="max-width: 240px;">
+                            {% for address in recipients[:max_show] %}
+                            <div class="truncate" title="{{ address }}">{{ address }}</div>
+                            {% endfor %}
+
+                            {% if recipients|length > max_show %}
+                            {% set hidden = recipients|length - max_show %}
+                            <button type="button"
+                                    class="expandable-trigger"
+                                    onclick="errorExpander.toggle(this, 'r{{ error.id }}')"
+                                    aria-expanded="false"
+                                    aria-controls="error-details-r{{ error.id }}">
+                                <i class="bi bi-chevron-down"></i>
+                                +{{ hidden }} more
+                            </button>
+
+                            <div id="error-details-r{{ error.id }}" class="expandable-content">
+                                {% for address in recipients[max_show:] %}
+                                <div class="truncate" title="{{ address }}">{{ address }}</div>
+                                {% endfor %}
+                            </div>
+                            {% endif %}
+                        </div>
+                        {% elif not error.notify_pending and not error.undeliverable %}
+                        <span class="text-muted" title="No email address recorded for this error">—</span>
+                        {% endif %}
+                        {% if error.notify_pending %}
+                        <span class="badge badge-warning" title="{{ error.last_notify_error or 'Will be retried' }}">
+                            Delivery pending{% if error.notify_attempts %} · {{ error.notify_attempts }} {{ 'attempt' if error.notify_attempts == 1 else 'attempts' }}{% endif %}
+                        </span>
+                        {% endif %}
+                        {% if error.undeliverable %}
+                        <span class="badge badge-danger" title="{{ error.last_notify_error or 'Delivery given up' }}">
+                            Not delivered
+                        </span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <span title="{{ error.first_seen_at|localtime('%d/%m/%Y %H:%M:%S') }}">
+                            {{ error.first_seen_at|localtime('%d/%m/%y %H:%M') }}                        
+                        </span>
+                    </td>
+                    <td>
+                        <span class="badge badge-secondary">{{ error.occurrence_count }}x</span>
+                    </td>
+                    <td>
+                        {% if error.reminder_count > 0 %}
+                        <span class="badge badge-warning">{{ error.reminder_count }} sent</span>
+                        {% else %}
+                        <span class="text-muted">—</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-right">
+                        <button type="button" 
+                                class="btn btn-sm btn-secondary"
+                                onclick="errorManager.resolve({{ error.id }})"
+                                title="Mark as resolved"
+                                aria-label="Resolve error">
+                            <i class="bi bi-check-lg"></i>
+                            Resolve
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% else %}
+<div class="card">
+    <div class="empty-state">
+        <div class="empty-state-icon text-success">
+            <i class="bi bi-emoji-smile"></i>
+        </div>
+        <h3 class="empty-state-title">No active errors</h3>
+        <p class="empty-state-description">
+            {% if selected_query_id %}
+            There are no active errors for this query.
+            {% else %}
+            Great! There are no errors to resolve right now.
+            {% endif %}
+        </p>
+        {% if selected_query_id and total_errors %}
+        <a href="{{ url_for('main.errors_list') }}" class="btn btn-secondary btn-sm">
+            View all errors ({{ total_errors }})
+        </a>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+{% endblock %}
