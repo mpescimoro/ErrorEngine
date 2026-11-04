@@ -27,6 +27,23 @@ def app():
         db.drop_all()
 
 
+@pytest.fixture
+def file_app(tmp_path, monkeypatch):
+    """
+    App on a SQLite file, as in production: each thread gets its own connection.
+    For tests where other threads use the database: the in-memory one is a single
+    connection shared by all threads, and sqlite3 fails when two use it at once.
+    """
+    import config
+    monkeypatch.setattr(config.TestingConfig, 'SQLALCHEMY_DATABASE_URI',
+                        f"sqlite:///{(tmp_path / 'errorengine.db').as_posix()}")
+    app = create_app('testing')
+    with app.app_context():
+        yield app
+        db.session.remove()
+        db.drop_all()
+
+
 @pytest.fixture(scope='function')
 def client(app):
     """Test client for HTTP requests."""

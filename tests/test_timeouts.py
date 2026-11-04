@@ -139,7 +139,7 @@ class TestIsolatedScheduler:
         yield scheduler
         scheduler.shutdown(wait=True)
 
-    def test_a_stuck_query_does_not_stop_the_others(self, app, pool):
+    def test_a_stuck_query_does_not_stop_the_others(self, file_app, pool):
         slow = make_query(name='Slow')
         fast = make_query(name='Fast')
         release = threading.Event()
@@ -153,7 +153,7 @@ class TestIsolatedScheduler:
 
         with patch.object(MonitoredQuery, 'should_run_now', return_value=(True, 'test')), \
              patch('monitor_service.monitor_service.check_query', side_effect=check):
-            started = pool.dispatch_due_queries(app)
+            started = pool.dispatch_due_queries(file_app)
             assert sorted(started) == sorted([slow.id, fast.id])
             for _ in range(50):
                 if 'Fast' in finished:
@@ -162,7 +162,7 @@ class TestIsolatedScheduler:
             assert finished == ['Fast']
 
             # Next round: the slow one is still running and is not started twice
-            assert pool.dispatch_due_queries(app) == [fast.id]
+            assert pool.dispatch_due_queries(file_app) == [fast.id]
             assert pool.get_scheduler_status()['in_flight'] >= 1
             release.set()
             pool.shutdown(wait=True)

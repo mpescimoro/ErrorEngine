@@ -155,33 +155,21 @@ class TestRetriedNotifications:
         _, send = run(query)
         assert send.call_count == 0
 
-    def test_results_saved_before_sending(self, tmp_path):
+    def test_results_saved_before_sending(self, file_app):
         """While sending, the errors found are already in the DB: another connection sees them."""
-        import config
-        from app import create_app
-        db_file = tmp_path / 'ee.db'
-        original = config.TestingConfig.SQLALCHEMY_DATABASE_URI
-        config.TestingConfig.SQLALCHEMY_DATABASE_URI = f'sqlite:///{db_file}'
-        try:
-            app = create_app('testing')
-        finally:
-            config.TestingConfig.SQLALCHEMY_DATABASE_URI = original
-        with app.app_context():
-            query = make_query(email_recipients='ops@x.it')
-            seen = {}
+        query = make_query(email_recipients='ops@x.it')
+        seen = {}
 
-            def count_from_outside(**kwargs):
-                with sqlite3.connect(db_file, timeout=1) as other:
-                    seen['rows'] = other.execute('SELECT COUNT(*) FROM error_records').fetchone()[0]
-                    # and the DB accepts writes from others while sending
-                    other.execute('UPDATE monitored_queries SET description = ? WHERE id = ?', ('x', query.id))
-                return OK
-            run(query, email=count_from_outside)
-            assert seen['rows'] == 2
-            with db.engine.connect() as c:
-                assert c.exec_driver_sql('PRAGMA journal_mode').scalar() == 'wal'
-            db.session.remove()
-            db.drop_all()
+        def count_from_outside(**kwargs):
+            with sqlite3.connect(db.engine.url.database, timeout=1) as other:
+                seen['rows'] = other.execute('SELECT COUNT(*) FROM error_records').fetchone()[0]
+                # and the DB accepts writes from others while sending
+                other.execute('UPDATE monitored_queries SET description = ? WHERE id = ?', ('x', query.id))
+            return OK
+        run(query, email=count_from_outside)
+        assert seen['rows'] == 2
+        with db.engine.connect() as c:
+            assert c.exec_driver_sql('PRAGMA journal_mode').scalar() == 'wal'
 
 
 def run_check(query, email_result=None, channel_result=None):
