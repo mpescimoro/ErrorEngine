@@ -26,9 +26,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Services and scheduled tasks start in C:\Windows\System32: work from the project folder.
 os.chdir(BASE_DIR)
 
-# Logging is configured before importing the app, so the logging.basicConfig() call in
-# app.py becomes a no-op and everything, startup errors included, also lands in the file:
-# a scheduled task has no console, so the file is the only place to read it.
+# Before importing the app (its basicConfig becomes a no-op): startup errors must reach
+# the file too, a scheduled task has no console
 LOG_FILE = os.path.join(BASE_DIR, 'logs', 'errorengine.log')
 os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
 _handlers = [RotatingFileHandler(LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5, encoding='utf-8')]
@@ -52,9 +51,8 @@ def _log_uncaught(exc_type, exc_value, exc_tb):
 
 sys.excepthook = _log_uncaught
 
-# .env is loaded only here: start.bat, start.sh, a service and a scheduled task all run
-# this file. This must happen before importing app/config, which read os.environ at import time.
-# utf-8-sig also accepts a .env saved by Notepad with a BOM.
+# .env is loaded only here (every way of starting runs this file), before importing
+# app/config, which read os.environ. utf-8-sig: also a .env saved by Notepad with a BOM
 from dotenv import load_dotenv
 load_dotenv(os.path.join(BASE_DIR, '.env'), encoding='utf-8-sig')
 
@@ -75,7 +73,6 @@ def main():
     # APScheduler logs every run of the 1-minute job at INFO: keep only warnings and errors.
     logging.getLogger('apscheduler').setLevel(logging.WARNING)
 
-    # create_app passes an instance of ProductionConfig: its SECRET_KEY @property is read
     app = create_app('production')
 
     host = os.environ.get('ERRORENGINE_HOST', '0.0.0.0')

@@ -1,10 +1,12 @@
 """
 Notification delivery tests: email per recipient, recording who received each
-error, channels sent only once, queries with channels only.
+error, channels sent only once and their messages, queries with channels only.
 """
+import json
 import pytest
 from datetime import timedelta
-from unittest.mock import patch
+from decimal import Decimal
+from unittest.mock import MagicMock, patch
 from models import db, MonitoredQuery, RoutingRule, RoutingCondition, ErrorRecord, NotificationChannel
 from utils import get_utc_now
 
@@ -72,7 +74,7 @@ def send_channels():
 
 
 class TestEmailDelivery:
-    """Original delivery: one email per recipient when routing is on."""
+    """Emails: one for everyone with routing off, one per recipient with routing on, or per error."""
 
     def test_routing_off_one_email_to_everyone(self, app, send_email, send_channels):
         from monitor_service import monitor_service
@@ -128,10 +130,10 @@ class TestRecordedRecipients:
         """An error that matches two rules: addresses in configuration order, the helpdesk last."""
         from monitor_service import monitor_service
         query = make_query(routing_enabled=True, routing_default_recipients='helpdesk@x.it', rules=[
-            ('anna@x.it, luca@x.it, helpdesk@x.it', [('USER', 'RCISANA')]),
-            ('giulia@x.it, anna@x.it, helpdesk@x.it', [('USER', 'RCISANA')]),
+            ('anna@x.it, luca@x.it, helpdesk@x.it', [('USER', 'USER01')]),
+            ('giulia@x.it, anna@x.it, helpdesk@x.it', [('USER', 'USER01')]),
         ])
-        mock_execute.return_value = (['ID', 'USER'], [{'ID': 1, 'USER': 'RCISANA'}])
+        mock_execute.return_value = (['ID', 'USER'], [{'ID': 1, 'USER': 'USER01'}])
 
         monitor_service.check_query(query, force=True)
 
@@ -200,7 +202,10 @@ class TestRecordedRecipients:
 
 
 class TestChannels:
-    """Channels (Telegram, Teams, webhook): a single delivery, even without email."""
+    """
+    Channels (Telegram, Teams, webhook): a single delivery, even without email;
+    messages they accept and their answers read correctly.
+    """
 
     def test_channel_sent_once_with_several_recipients(self, app, channel, send_email, send_channels):
         from monitor_service import monitor_service
@@ -232,6 +237,36 @@ class TestChannels:
             monitor_service.check_query(query, force=True)
 
         assert ErrorRecord.query.filter_by(query_id=query.id).one().email_sent is False
+
+    def test_teams_202_response_is_a_successful_delivery(self, app):
+        from notification_service import notification_service
+        with patch('notification_service.requests.post') as post:
+            post.return_value.status_code = 202
+            assert notification_service._post_teams('https://example.invalid/workflow', {})['success'] is True
+
+    def test_telegram_converts_html_characters(self, app):
+        from notification_service import notification_service
+        query = MagicMock(name='Q')
+        query.name = 'Orders <B2B>'
+        with patch('notification_service.requests.post') as post:
+            post.return_value.json.return_value = {'ok': True}
+            notification_service._send_telegram({'bot_token': 'T', 'chat_id': '1'}, query,
+                                                [{'NOTE': 'qty < 0 & stock > 5'}])
+        message = post.call_args.kwargs['json']['text']
+        assert 'Orders &lt;B2B&gt;' in message
+        assert 'qty &lt; 0 &amp; stock &gt; 5' in message
+        assert message.startswith('<b>ErrorEngine</b>')
+
+    def test_webhook_with_decimal_values(self, app):
+        from notification_service import notification_service
+        query = MagicMock(id=1, description='')
+        query.name = 'IBM i'
+        with patch('notification_service.requests.request') as request:
+            request.return_value.status_code = 200
+            result = notification_service._send_webhook({'url': 'https://example.invalid/hook'}, query,
+                                                        [{'AMOUNT': Decimal('12.50')}])
+        assert result['success'] is True
+        assert json.loads(request.call_args.kwargs['data'])['errors'] == [{'AMOUNT': '12.50'}]
 
 
 class TestEmailFromTheScheduler:

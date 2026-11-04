@@ -1,5 +1,5 @@
 """
-SQLite database models for ErrorEngine monitoring
+Models of the internal database (SQLite by default).
 """
 from datetime import datetime, time, timedelta
 from utils import get_utc_now
@@ -27,30 +27,27 @@ class MonitoredQuery(db.Model):
     # Database connection (for SQL sources)
     db_connection_id = db.Column(db.Integer, db.ForeignKey('database_connections.id'), nullable=True)
     
-    # For databases: SQL query
     sql_query = db.Column(db.Text)
     
-    # For HTTP/API: JSON configuration
-    # HTTP: {"url": "...", "method": "GET/POST", "headers": {...}, "body": {...}, "response_path": "data.items"}
-    # API: {"endpoint": "...", "auth_type": "bearer/basic/api_key", "auth_value": "...", ...}
+    # HTTP sources, JSON: url, method, headers, auth_type, auth_token, response_path
     source_config = db.Column(db.Text)
     
     # Fields that uniquely identify an error (comma-separated)
     key_fields = db.Column(db.String(500), nullable=False)
     
-    # === BASIC EMAIL CONFIGURATION ===
+    # === EMAIL ===
     email_subject = db.Column(db.String(200), default='[ErrorEngine] New errors: {query_name}')
     email_recipients = db.Column(db.Text)  # Comma-separated emails
-    email_template = db.Column(db.Text)  # Custom HTML template
+    email_template = db.Column(db.Text)  # empty: default; {name}: templates/email/name.html; or HTML
     
-    # === ADVANCED SCHEDULING ===
+    # === SCHEDULE ===
     check_interval_minutes = db.Column(db.Integer, default=15)
     is_active = db.Column(db.Boolean, default=True)
     
     # Time window
-    schedule_start_time = db.Column(db.Time)  # es. 08:00
-    schedule_end_time = db.Column(db.Time)    # es. 20:00
-    schedule_days = db.Column(db.String(20))  # es. "1,2,3,4,5" (lun-ven, ISO weekday)
+    schedule_start_time = db.Column(db.Time)  # e.g. 08:00
+    schedule_end_time = db.Column(db.Time)    # e.g. 20:00; before the start: the window crosses midnight
+    schedule_days = db.Column(db.String(20))  # ISO weekdays, e.g. "1,2,3,4,5" (Mon-Fri); empty: every day
     schedule_reference_time = db.Column(db.Time)  # Reference time for the runs (e.g. 00:00)
     
     # === REMINDER ===
@@ -256,14 +253,11 @@ class MonitoredQuery(db.Model):
         if now is None:
             now = self._get_local_now()
         
-        # Check the time window and the day
         if not self.is_in_schedule(now):
             return False, "Outside schedule window"
         
-        # After a skipped (inactive) day, the first run of the new active day
-        # must fall on reference_time, not on a slot inherited from the alignment of the
-        # skipped day. Without this, the scheduler starts at 00:00 (the first minute in which
-        # the day becomes active) because a past slot of the skipped day precedes "now".
+        # After an inactive day the first run is at reference_time, not at 00:00
+        # (a slot left over from the inactive day would precede "now")
         ref_time = self.schedule_reference_time or time(0, 0)
         prev_day = now.date() - timedelta(days=1)
         prev_day_inactive = prev_day.isoweekday() not in self.get_schedule_days_list()
@@ -276,7 +270,6 @@ class MonitoredQuery(db.Model):
         if self.last_check_at is None:
             return True, "First run"
         
-        # last_check_at in local time
         last_check_local = self._utc_to_local(self.last_check_at)
         
         # If the last run is before the current slot, run now
@@ -304,7 +297,6 @@ class DatabaseConnection(db.Model):
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=get_utc_now)
     
-    # Relationship
     queries = db.relationship('MonitoredQuery', backref='db_connection', lazy='dynamic')
     
     def get_driver(self):
@@ -388,7 +380,6 @@ class RoutingRule(db.Model):
     # Descriptive name (optional, for the UI)
     name = db.Column(db.String(100))
     
-    # Logic between multiple conditions
     condition_logic = db.Column(db.String(5), default='AND')  # 'AND' / 'OR'
     
     # Action: recipients on match (comma-separated)
@@ -402,7 +393,6 @@ class RoutingRule(db.Model):
     
     is_active = db.Column(db.Boolean, default=True)
     
-    # Relationship with the conditions
     conditions = db.relationship('RoutingCondition', backref='rule',
                                 cascade='all, delete-orphan',
                                 order_by='RoutingCondition.id')
@@ -427,17 +417,12 @@ class RoutingCondition(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     rule_id = db.Column(db.Integer, db.ForeignKey('routing_rules.id'), nullable=False)
     
-    # Generic condition on any field
     field_name = db.Column(db.String(100), nullable=False)
-    operator = db.Column(db.String(20), nullable=False)
+    operator = db.Column(db.String(20), nullable=False)  # one of routing_service.OPERATORS
     value = db.Column(db.String(500))  # Can be empty for is_empty/is_not_empty
     
     # Case sensitivity for text comparisons
     case_sensitive = db.Column(db.Boolean, default=False)
-    
-    # Supported operators (for documentation):
-    # equals, not_equals, contains, not_contains, startswith, endswith,
-    # in, not_in, gt, gte, lt, lte, is_empty, is_not_empty, regex
     
     def __repr__(self):
         return f'<RoutingCondition {self.field_name} {self.operator} {self.value}>'
@@ -466,8 +451,7 @@ class ErrorRecord(db.Model):
     # Recipients who received the notification by email (JSON list)
     notified_to = db.Column(db.Text)
 
-    # Notification not yet delivered to everyone: retried at every check,
-    # only towards the missing recipients and channels
+    # Not yet delivered to every recipient and channel: retried later, only towards those missing
     notify_pending = db.Column(db.Boolean, default=False)
     notified_channels = db.Column(db.Text)  # ids of the channels reached (JSON list)
     notify_attempts = db.Column(db.Integer, default=0)  # failed attempts
@@ -599,7 +583,6 @@ class QueryLog(db.Model):
     
     executed_at = db.Column(db.DateTime, default=get_utc_now)
     
-    # Run result
     status = db.Column(db.String(20))  # 'success', 'error', 'skipped'
     
     # Run statistics
@@ -628,13 +611,11 @@ class EmailLog(db.Model):
     recipients = db.Column(db.Text)
     subject = db.Column(db.String(200))
     
-    # Email type
     email_type = db.Column(db.String(20), default='new_errors')  # new_errors, reminder, monitor_failed, monitor_recovered
     
     # Number of errors in the email
     error_count = db.Column(db.Integer, default=0)
     
-    # Delivery status
     status = db.Column(db.String(20))  # 'sent', 'failed'
     error_message = db.Column(db.Text)
     
@@ -660,12 +641,8 @@ NEW_COLUMNS = [
 
 def ensure_schema() -> list:
     """
-    Adds to the existing tables the columns introduced after they were
-    created: db.create_all() only creates missing tables, it does not change them.
-    Type and default come from the model, written in the database dialect.
-
-    Returns:
-        list: columns added (empty if the database was already up to date)
+    Adds the columns introduced after the tables were created (db.create_all() only
+    creates missing tables) and returns them. Type and default come from the model.
     """
     from sqlalchemy import inspect, text, false
 

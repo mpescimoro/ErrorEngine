@@ -6,7 +6,7 @@ import site
 
 # Adds clidriver/bin to the DLL path before importing ibm_db
 # pip install ibm_db downloads the clidriver into site-packages
-# Ugly code for an ugly problem, but well written
+# Ugly code for an ugly problem.
 if sys.platform == 'win32':
     for sp in site.getsitepackages() + [site.getusersitepackages()]:
         clidriver_bin = os.path.join(sp, 'clidriver', 'bin')

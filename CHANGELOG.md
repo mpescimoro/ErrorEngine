@@ -1,6 +1,24 @@
 # Changelog
 
-## 2.2.0 — 2026-11-02
+## 2.3.0
+
+**Added**
+- Microsoft 365 through Microsoft Graph: an application registered in Entra ID sends the emails, with no mailbox password and no SMTP AUTH (Microsoft turns SMTP with a password off by default at the end of December 2026)
+- SMTP relay without login: leave `MAIL_USERNAME` empty; `MAIL_SECURITY=none` for an internal relay without encryption (never with a password)
+- Email can be turned off: with `MAIL_SERVER` empty, notifications go only to the channels
+- Settings show how emails go out: method, server, sign-in and sender
+
+**Changed**
+- `MAIL_SERVER` no longer defaults to `smtp.office365.com`: a `.env` without it now has email off, as Settings and the startup log say
+- `MAIL_SECURITY` (`starttls`, `ssl`, `none`) replaces `MAIL_USE_TLS`, which is still read; without `MAIL_PORT` the port follows it (587, 465, 25); `MAIL_DEFAULT_SENDER` defaults to `MAIL_USERNAME`
+- `.env.example` keeps only the settings most installations need; the full list is in `docs/configuration.md`
+- Code comments trimmed to the reasons behind the code; tests grouped by feature, duplicates removed
+- Unused validation functions removed (no form called them)
+
+**Fixed**
+- SMTP connections left open when the sign-in or STARTTLS failed
+
+## 2.2.0
 
 **Added**
 - Login (single user) and API token for scripts
@@ -47,25 +65,25 @@
 - HTTP sources: the API key typed in the form was never sent; a response without the JSON path became an error (and resolved the real ones), now the source is reported as failing
 - Case-insensitive regex conditions changed meaning (`\D` became `\d`); an invalid regex is refused when the rule is saved
 - Deleting a query with email history failed on databases that enforce foreign keys
-- Teams (Workflows answers 202), Telegram messages with `<` or `&`, webhooks with decimal values
+- Channels: a Teams Workflows answer (202) counted as a failure; Telegram messages with `<` or `&` and webhooks with decimal values not sent
 - Internal database locked while notifications were sent (SQLite now in WAL mode)
 - Query detail showed "API" as source type for database queries
 - Saving a query with an empty field stored the text "None": an empty email template became an email with "None" as body
-- Query detail stopped counting active errors at 50; tags with a space after the comma; an empty tag badge
+- Query detail: active errors counted only up to 50, tag links broken by a space after the comma, an empty tag badge
 - Tag filter: "prod" also showed "preprod"
 - Write-query warning: "I know what I'm doing" did not save, a second click was needed
-- Editing a routing rule turned it back on; priority limited to 100 in the form and 1000 on the server
+- Editing a routing rule turned it back on; the form allowed priorities up to 100, the server up to 1000
 - Settings showed a hard-coded version and database
 - Layout: card titles pushed to the right, "Actions" headers not aligned, a tick inside switches, grey warning buttons
 - `LOG_LEVEL` in `.env` was ignored
 
-## 2.1.2 — 2026-02-11
+## 2.1.2
 
 - Fix `validate_key_fields` return value, `is_not_empty` operator, `api_query_status` 404
 - Test suite expanded from 85 to 153 tests
 - Old `routes.py` removed
 
-## 2.1.1 — 2026-02-10
+## 2.1.1
 
 - IBM i (AS/400) driver via JT400 JDBC
 - Schedules anchored to a reference time instead of the last run
@@ -76,7 +94,7 @@
 - Fix missing `logger` import in API routes
 - Remove unused imports
 
-## 2.1 — 2026-02-03
+## 2.1
 
 Multi-database, HTTP sources, notification channels, tags, statistics page.
 

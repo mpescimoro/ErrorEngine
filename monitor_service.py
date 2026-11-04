@@ -44,12 +44,7 @@ class MonitorService:
         7. If the source cannot be read, counts the failures and sends an alert
            (and another one when it works again)
 
-        Args:
-            query: MonitoredQuery to run
-            force: If True, ignores the time window
-            
-        Returns:
-            dict with the run statistics
+        force=True ignores the time window. Returns the run statistics.
         """
         start_time = time.time()
         result = {
@@ -65,15 +60,14 @@ class MonitorService:
         }
         
         try:
-            # 1. Time window
+            # Time window
             if not force and not query.is_in_schedule():
                 # Skips are not logged: they would only fill the logs
                 result['status'] = 'skipped'
                 result['error_message'] = 'Outside the configured time window'
                 return result
 
-            # ATOMIC LOCK: prevents concurrent runs of the same query
-            # The UPDATE is atomic in SQLite - only one process can take the lock
+            # Lock: one run at a time per query (the conditional UPDATE is atomic)
             LOCK_TTL = self._lock_ttl()
             now = get_utc_now()
             lock_expired_before = now - LOCK_TTL
@@ -100,21 +94,20 @@ class MonitorService:
                 result['error_message'] = 'Query already running in another process'
                 return result
 
-            # 2. Run the query on the configured source
+            # Read the source
             logger.info(f"Running query: {query.name} (source: {query.source_type})")
             columns, rows = execute_query_source(query)
             result['rows_returned'] = len(rows)
             
-            # 3. Key fields
             key_fields = query.get_key_fields_list()
             
-            # 4. Hashes of the current errors
+            # Hash of each row: the identity of the error
             current_errors = {}
             for row in rows:
                 error_hash = ErrorRecord.calculate_hash(row, key_fields)
                 current_errors[error_hash] = row
             
-            # 5. Existing unresolved errors
+            # Unresolved errors already known
             existing_errors = {
                 e.error_hash: e 
                 for e in ErrorRecord.query.filter_by(
@@ -123,12 +116,12 @@ class MonitorService:
                 ).all()
             }
             
-            # 6. New, resolved and continuing errors
+            # New, resolved and continuing errors
             new_error_hashes = set(current_errors.keys()) - set(existing_errors.keys())
             resolved_hashes = set(existing_errors.keys()) - set(current_errors.keys())
             continuing_hashes = set(current_errors.keys()) & set(existing_errors.keys())
             
-            # 7. New errors (in row order), to notify
+            # New errors (in row order), to notify
             new_records = []
             for hash_val, error_data in current_errors.items():
                 if hash_val not in new_error_hashes:
@@ -144,25 +137,24 @@ class MonitorService:
                 new_records.append(new_record)
                 result['new_errors'] += 1
 
-            # 8. Mark resolved errors
+            # Resolved errors
             for hash_val in resolved_hashes:
                 error = existing_errors[hash_val]
                 error.resolved_at = get_utc_now()
                 error.notify_pending = False
                 result['resolved_errors'] += 1
 
-            # 9. Update the existing errors still present
+            # Errors still present
             for hash_val in continuing_hashes:
                 error = existing_errors[hash_val]
                 error.last_seen_at = get_utc_now()
                 error.occurrence_count += 1
 
-            # Result saved before any delivery: the DB does not stay locked while
-            # sending, and a notification problem does not lose the errors found
+            # Saved before any delivery: the DB is not locked while sending, and a
+            # delivery problem does not lose the errors found
             db.session.commit()
 
-            # 10-11. Pending notifications and reminders: a problem here must not
-            # make the source read count as failed
+            # Notifications and reminders: a problem here is not a failed source read
             try:
                 # New errors + errors from previous checks not yet delivered to everyone,
                 # once their wait before the next attempt is over
@@ -187,7 +179,7 @@ class MonitorService:
                 db.session.rollback()
                 result['error_message'] = f"Notifications not completed: {redact_secrets(str(e))}"
 
-            # 12. Update the query statistics
+            # Query statistics
             recovery = self._mark_success(query)
             query.last_check_at = get_utc_now()
             query.locked_at = None  # Release the lock
@@ -235,7 +227,6 @@ class MonitorService:
                     logger.error(f"Failure alert not sent for {query.name}: {alert_error}")
                     db.session.rollback()
 
-        # 13. Run log
         self._log_execution(query, result, start_time)
         
         logger.info(
@@ -257,15 +248,12 @@ class MonitorService:
         'per_error' aggregation); with routing off, one to all recipients.
         Channels (Webhook, Telegram, Teams): a single delivery with all the errors,
         even when the query has no email recipients.
-        
-        Returns:
-            tuple: (emails sent successfully, channels reached successfully,
-                    {position of the error in 'errors': recipients who received it})
+
+        Returns (emails sent, channels reached, {position of the error: recipients reached}).
         """
         if not errors:
             return 0, 0, {}
         
-        # Apply routing
         routing_result = apply_routing_rules(query, errors)
         
         if not routing_result and not query.notification_channels:
@@ -275,12 +263,11 @@ class MonitorService:
         delivered = {}  # position of the error -> recipients who received it
         position = {id(error): i for i, error in enumerate(errors)}
         
-        # Send an email for each recipient/group
-        for recipients, recipient_errors in routing_result.items():
+        # Send an email for each recipient/group (none when email is off: channels only)
+        for recipients, recipient_errors in (routing_result.items() if email_service.is_enabled() else ()):
             if not recipient_errors:
                 continue
             
-            # Normalize recipients to a list
             if isinstance(recipients, tuple):
                 recipients_list = list(recipients)
             else:
@@ -363,19 +350,14 @@ class MonitorService:
 
         return lambda r: (r.lower() in everywhere, first_seen.get(r.lower(), len(first_seen)))
     
-    # ------------------------------------------------------------------
-    # Pending notifications: delivered and retried until they reach everyone
-    # ------------------------------------------------------------------
+    # --- Pending notifications: retried until delivered, or given up ---
 
     def _notify_pending(self, query: MonitoredQuery, records: list, columns: list) -> tuple:
         """
         Sends the notifications not yet delivered (new errors or deliveries that
-        failed in previous checks), only to the recipients and channels that have
-        not received them yet. An error stays pending, and is retried at the
-        next check, until it has reached everyone.
-
-        Returns:
-            tuple: (emails sent successfully, successful channel deliveries)
+        failed earlier), only to the recipients and channels still missing. Failed
+        ones are retried with growing waits, then given up after NOTIFY_RETRY_HOURS.
+        Returns (emails sent, channel deliveries).
         """
         errors = [record.get_error_data() for record in records]
         position = {id(error): i for i, error in enumerate(errors)}
@@ -393,6 +375,11 @@ class MonitorService:
                     if recipient not in intended[i]:
                         intended[i].append(recipient)
 
+        email_off = not email_service.is_enabled()
+        if email_off:
+            # No way to send emails: only the channels count, nothing waits for an email
+            intended = [[] for _ in errors]
+
         # Already reached, or given up (see the end of this method)
         given_up = [record.get_undeliverable() for record in records]
         received = [{r.lower() for r in record.get_notified_to() + given_up[i]['recipients']}
@@ -407,7 +394,8 @@ class MonitorService:
         ]
 
         if not any(intended) and not channels:
-            logger.warning(f"Query {query.name}: no recipients for {len(errors)} errors")
+            logger.warning(f"Query {query.name}: no recipients for {len(errors)} errors"
+                           + (" (email is off)" if email_off else ""))
 
         delivered = defaultdict(list)           # error -> recipients reached now
         delivered_channels = defaultdict(list)  # error -> channels reached now
@@ -415,11 +403,11 @@ class MonitorService:
         failures = defaultdict(list)            # error -> reasons for failed deliveries
         emails_sent = 0
 
-        smtp_down = False
+        email_down = False
         for recipients_list, idxs in self._plan_email_jobs(query, routing_result, position, missing):
-            if smtp_down:
+            if email_down:
                 for i in idxs:
-                    failures[i].append(f"{', '.join(recipients_list)}: SMTP server unreachable")
+                    failures[i].append(f"{', '.join(recipients_list)}: email service unreachable")
                 continue
             email_result = email_service.send_error_notification(
                 query=query,
@@ -435,8 +423,8 @@ class MonitorService:
             else:
                 for i in idxs:
                     failures[i].append(f"{', '.join(recipients_list)}: {email_result.get('message', 'delivery failed')}")
-                # If the server does not answer, no point trying the other emails of this round
-                smtp_down = email_result.get('smtp_unavailable') is True
+                # If the service does not answer, no point trying the other emails of this round
+                email_down = email_result.get('email_unavailable') is True
 
         channels_sent = 0
         if channels:
@@ -580,9 +568,7 @@ class MonitorService:
             return list(requested_ids)
         return []
 
-    # ------------------------------------------------------------------
-    # Queries that cannot read their source
-    # ------------------------------------------------------------------
+    # --- Queries that cannot read their source ---
 
     @staticmethod
     def _lock_ttl() -> timedelta:
@@ -662,7 +648,7 @@ class MonitorService:
             email_type, channel_event = 'monitor_recovered', 'monitor_recovered'
 
         delivered = False
-        recipients = self._monitor_alert_recipients(query)
+        recipients = self._monitor_alert_recipients(query) if email_service.is_enabled() else []
         if recipients:
             email_result = email_service.send_system_notification(
                 recipients, subject, title, lines, query=query, email_type=email_type)
@@ -680,15 +666,9 @@ class MonitorService:
 
     def _process_reminders(self, query: MonitoredQuery, columns: list, exclude_ids=()) -> tuple:
         """
-        Processes the reminders for unresolved errors.
-
-        Args:
-            exclude_ids: errors just (re)notified in this check, not to be reminded
-
-        Returns:
-            tuple: (reminder emails sent, channels reached)
+        Reminders for unresolved errors, except those just (re)notified (exclude_ids).
+        Returns (reminder emails sent, channels reached).
         """
-        # Errors that need a reminder
         errors_needing_reminder = []
         error_records = []
 
@@ -706,7 +686,6 @@ class MonitorService:
         if not errors_needing_reminder:
             return 0, 0
         
-        # Send the reminder
         emails_sent, channels_sent, notified_to = self._send_notifications(
             query, errors_needing_reminder, columns, email_type='reminder'
         )
@@ -717,8 +696,7 @@ class MonitorService:
             if i in notified_to:
                 error.add_notified_to(notified_to[i], sort_key)
         
-        # Update the reminder counters (even if it only went to the channels,
-        # otherwise the reminder would be repeated at every check)
+        # Counted even if it only reached the channels: otherwise it would repeat at every check
         if emails_sent + channels_sent > 0:
             for error in error_records:
                 error.last_reminder_at = get_utc_now()
@@ -802,11 +780,8 @@ class MonitorService:
     
     def get_active_errors(self, query_id: int = None, include_data: bool = True) -> list:
         """
-        Gets all the active (unresolved) errors.
-        
-        Args:
-            query_id: Optional, filters by a specific query
-            include_data: If True, includes the full error data
+        Active (unresolved) errors, of one query if query_id is given;
+        include_data=False leaves out the rows.
         """
         errors_query = ErrorRecord.query.filter_by(resolved_at=None)
         
@@ -847,5 +822,4 @@ class MonitorService:
         return get_query_fields(query)
 
 
-# Singleton
 monitor_service = MonitorService()

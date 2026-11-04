@@ -117,8 +117,8 @@ class NotificationService:
     @staticmethod
     def _http_failure(status: int, reason: str = '') -> dict:
         """
-        A failed HTTP answer. 4xx (except 408 and 429) is a definitive refusal: wrong or
-        deleted URL, credentials, retired Teams connector... retrying does not help.
+        A failed HTTP answer. 4xx (except 408 and 429) is a definitive refusal
+        (wrong URL, credentials...): retrying does not help.
         """
         permanent = 400 <= status < 500 and status not in (408, 429)
         reason = reason if isinstance(reason, str) else ''
@@ -219,8 +219,7 @@ class NotificationService:
             body = json.dumps(card, default=str, ensure_ascii=False).encode('utf-8')
             response = requests.post(webhook_url, data=body, timeout=self.timeout,
                                      headers={'Content-Type': 'application/json'})
-            # Workflows webhooks (after Office 365 connectors were retired)
-            # answer 202 Accepted: any 2xx means the message was delivered
+            # Workflows webhooks answer 202 Accepted: any 2xx means delivered
             if 200 <= response.status_code < 300:
                 return {'success': True, 'message': 'Sent'}
             return self._http_failure(response.status_code, response.reason)
@@ -229,11 +228,8 @@ class NotificationService:
 
     def send_system_message(self, query, event: str, title: str, lines: list) -> dict:
         """
-        Service message to the active channels of the query
-        (e.g. query failing or recovered).
-
-        Returns:
-            dict: {'total': channels contacted, 'success': channels reached}
+        Service message to the active channels of the query (e.g. query failing or
+        recovered). Returns {'total': channels contacted, 'success': channels reached}.
         """
         total = success = 0
         for channel in query.notification_channels:

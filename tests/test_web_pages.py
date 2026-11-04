@@ -1,7 +1,6 @@
 """
-Interface fixes of v2.2: dashboard order and counters, exact tag filter,
-query detail counts and badges, empty values in the forms, Settings,
-statistics in local time.
+Pages: dashboard order and counters, tag filter, query detail, deleting a query,
+empty values in the forms, Settings, statistics in local time.
 """
 import json
 import re
@@ -70,9 +69,7 @@ class FormValues(HTMLParser):
             self.values[self._textarea][-1] += data
 
 
-# ---------------------------------------------------------------------------
-# Dashboard
-# ---------------------------------------------------------------------------
+# --- Dashboard ---
 
 class TestDashboard:
 
@@ -115,9 +112,7 @@ class TestDashboard:
         assert 'bi-pause"' not in html
 
 
-# ---------------------------------------------------------------------------
-# Queries list
-# ---------------------------------------------------------------------------
+# --- Queries list ---
 
 def test_tag_filter_is_exact(app, client):
     make_query('Production orders', tags='erp,prod')
@@ -128,9 +123,7 @@ def test_tag_filter_is_exact(app, client):
     assert 'Pre-production orders' in client.get('/queries?tag=preprod').get_data(as_text=True)
 
 
-# ---------------------------------------------------------------------------
-# Query detail
-# ---------------------------------------------------------------------------
+# --- Query detail ---
 
 class TestQueryDetail:
 
@@ -172,9 +165,32 @@ class TestQueryDetail:
         assert 'Paused' in html and '0 conditions' in html and '1 rule<' in html
 
 
-# ---------------------------------------------------------------------------
-# Forms: an empty value must not come back as the text "None"
-# ---------------------------------------------------------------------------
+# --- Deleting a query ---
+
+def test_delete_query_with_email_history(app, client):
+    from sqlalchemy import event
+    engine = db.engine
+
+    @event.listens_for(engine, 'connect')
+    def foreign_keys_on(dbapi_connection, record):
+        dbapi_connection.execute('PRAGMA foreign_keys=ON')
+    try:
+        with engine.connect() as c:
+            c.exec_driver_sql('PRAGMA foreign_keys=ON')
+        query = make_query('Orders')
+        db.session.add(EmailLog(query_id=query.id, recipients='ops@x.it', status='sent'))
+        db.session.commit()
+        db.session.execute(db.text('PRAGMA foreign_keys=ON'))
+        response = client.post(f'/queries/{query.id}/delete')
+        assert response.status_code == 302
+        assert db.session.get(MonitoredQuery, query.id) is None
+        log = EmailLog.query.one()
+        assert log.query_id is None
+    finally:
+        event.remove(engine, 'connect', foreign_keys_on)
+
+
+# --- Forms: an empty value must not come back as the text "None" ---
 
 class TestEmptyValues:
 
@@ -206,28 +222,15 @@ class TestEmptyValues:
         assert '>None<' not in client.get('/connections').get_data(as_text=True)
 
 
-# ---------------------------------------------------------------------------
-# Settings, health check
-# ---------------------------------------------------------------------------
+# --- Settings ---
 
 def test_settings_show_version_and_internal_database(app, client):
     html = client.get('/settings').get_data(as_text=True)
-    assert f'v{__version__}' in html and 'v2.1.1' not in html
-    assert 'SQLite (local)' not in html
+    assert f'v{__version__}' in html
     assert re.search(r'Internal database</td>\s*<td>\s*SQLite', html)
 
 
-def test_health_check_reports_the_version(app, client):
-    assert client.get('/api/health').get_json()['version'] == __version__
-
-
-def test_changelog_has_the_current_version():
-    assert f'## {__version__}' in (ROOT / 'CHANGELOG.md').read_text(encoding='utf-8')
-
-
-# ---------------------------------------------------------------------------
-# Statistics in local time
-# ---------------------------------------------------------------------------
+# --- Statistics in local time ---
 
 class TestStatisticsLocalTime:
 
@@ -261,9 +264,7 @@ class TestStatisticsLocalTime:
         assert row['last_error'] != first_seen.strftime('%d/%m/%y %H:%M')     # Rome is never UTC
 
 
-# ---------------------------------------------------------------------------
-# Browser-side fixes (checked in the browser for the screenshots, here in the source)
-# ---------------------------------------------------------------------------
+# --- Scripts and styles, checked in their source ---
 
 class TestSourceChecks:
 
@@ -279,11 +280,7 @@ class TestSourceChecks:
         handler = form[form.index("fresh.addEventListener('click'"):]
         assert handler.index('resolve(true)') < handler.index('modal.close()')
 
-    def test_no_dead_sql_test_api(self):
-        js = (ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
-        assert '/api/test/sql' not in js
-
-    def test_css_fixes(self):
+    def test_css_rules(self):
         css = (ROOT / 'static' / 'css' / 'app.css').read_text(encoding='utf-8')
         assert '.btn-warning {' in css
         assert '.table th.text-right' in css

@@ -1,3 +1,3 @@
 """
-Test suite per ErrorEngine.
+ErrorEngine tests.
 """

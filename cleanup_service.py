@@ -26,12 +26,7 @@ class CleanupService:
         app.extensions['cleanup'] = self
     
     def cleanup_query_logs(self) -> int:
-        """
-        Deletes query logs older than the configured retention.
-        
-        Returns:
-            int: Number of deleted records
-        """
+        """Deletes the run logs older than LOG_RETENTION_DAYS; returns how many."""
         retention_days = current_app.config.get('LOG_RETENTION_DAYS', 30)
         cutoff_date = get_utc_now() - timedelta(days=retention_days)
         
@@ -52,12 +47,7 @@ class CleanupService:
             return 0
     
     def cleanup_email_logs(self) -> int:
-        """
-        Deletes email logs older than the configured retention.
-        
-        Returns:
-            int: Number of deleted records
-        """
+        """Deletes the email logs older than EMAIL_LOG_RETENTION_DAYS; returns how many."""
         retention_days = current_app.config.get('EMAIL_LOG_RETENTION_DAYS', 90)
         cutoff_date = get_utc_now() - timedelta(days=retention_days)
         
@@ -78,12 +68,7 @@ class CleanupService:
             return 0
     
     def cleanup_resolved_errors(self) -> int:
-        """
-        Deletes resolved errors older than the configured retention.
-        
-        Returns:
-            int: Number of deleted records
-        """
+        """Deletes the errors resolved more than RESOLVED_ERRORS_RETENTION_DAYS ago; returns how many."""
         retention_days = current_app.config.get('RESOLVED_ERRORS_RETENTION_DAYS', 60)
         cutoff_date = get_utc_now() - timedelta(days=retention_days)
         
@@ -105,12 +90,7 @@ class CleanupService:
             return 0
     
     def run_full_cleanup(self) -> dict:
-        """
-        Runs the full cleanup of every record type.
-        
-        Returns:
-            dict: Cleanup statistics
-        """
+        """Applies every retention; returns the counts."""
         logger.info("Starting periodic database cleanup")
         
         results = {
@@ -135,12 +115,8 @@ class CleanupService:
     
     def run_manual_cleanup(self) -> dict:
         """
-        Runs a FULL cleanup, for manual use.
-        Deletes ALL logs and resolved errors (ignores retention).
-        Active errors are NOT touched.
-        
-        Returns:
-            dict: Cleanup statistics
+        Deletes ALL run logs, email logs and resolved errors, whatever the retention.
+        Active errors are NOT touched. Returns the counts.
         """
         logger.info("Starting FULL manual cleanup")
         
@@ -152,10 +128,8 @@ class CleanupService:
         }
         
         try:
-            # Delete ALL QueryLog
             results['query_logs_deleted'] = QueryLog.query.delete(synchronize_session=False)
             
-            # Delete ALL EmailLog
             results['email_logs_deleted'] = EmailLog.query.delete(synchronize_session=False)
             
             # Delete ALL resolved errors (but NOT the active ones!)
@@ -181,12 +155,7 @@ class CleanupService:
         return results
     
     def get_stats(self) -> dict:
-        """
-        Returns statistics about the records in the database.
-        
-        Returns:
-            dict: Counts and dates
-        """
+        """Number of records and oldest dates, for the Settings page."""
         retention_config = {
             'log_retention_days': current_app.config.get('LOG_RETENTION_DAYS', 30),
             'email_log_retention_days': current_app.config.get('EMAIL_LOG_RETENTION_DAYS', 90),
@@ -220,5 +189,4 @@ class CleanupService:
         }
 
 
-# Singleton
 cleanup_service = CleanupService()

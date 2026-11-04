@@ -14,6 +14,10 @@ No, it checks on a schedule: from every minute to every 24 hours.
 
 Yes: create one connection per database and choose it in each query.
 
+### Do I need an email server?
+
+No. Leave `MAIL_SERVER` empty in `.env` and choose notification channels (Teams, Telegram, webhook) in the queries. Email also works with any SMTP server, an internal relay or Microsoft 365, see [Email](configuration.md#email).
+
 ### What if a query cannot read its data?
 
 The query shows **Failing** in the lists and the scheduler tries again every minute. After `MONITOR_FAILURE_THRESHOLD` failed runs in a row (3 by default) an alert goes to `ERRORENGINE_ADMIN_EMAILS` (or to the query's recipients) and to the query's channels; a second message says when it works again.
@@ -28,11 +32,12 @@ The sign-in page says what is missing: `ERRORENGINE_PASSWORD_HASH`, or a `SECRET
 
 ### Emails are not sent
 
-1. **Settings** → **Send test email**
-2. Check the SMTP settings in `.env`
+1. **Settings** shows how emails go out; **Send test email** tries it and shows the error
+2. Check the email settings in `.env`, see [Email](configuration.md#email)
 3. "certificate verify failed": the SMTP server certificate is checked. Put in `MAIL_SERVER` the name the certificate is issued to, not an IP address; for an internal server with its own certificate, set `MAIL_CA_FILE` to its CA (PEM file)
-4. Microsoft 365: the mailbox needs SMTP AUTH enabled; with MFA you may need an app password
-5. Look at `logs/errorengine.log` and at the errors page: notifications that fail are tried again, with longer and longer waits, for `NOTIFY_RETRY_HOURS` (24 by default); then the error shows **Not delivered**
+4. Microsoft 365: SMTP with a password is turned off by default from the end of December 2026. Send through Microsoft Graph instead, see [Microsoft 365](configuration.md#microsoft-365)
+5. Gmail: use an app password, which needs 2-Step Verification
+6. Look at `logs/errorengine.log` and at the errors page: notifications that fail are tried again, with longer and longer waits, for `NOTIFY_RETRY_HOURS` (24 by default); then the error shows **Not delivered**
 
 ### Teams messages stopped arriving
 
@@ -75,7 +80,7 @@ Better not. It has a single-user login, but keep it on the internal network or b
 
 ### Are database passwords encrypted?
 
-Not yet (planned for v2.4): they are stored in plain text in the internal database. Protect the `instance/` folder.
+Not yet (planned for v2.5): they are stored in plain text in the internal database. Protect the `instance/` folder.
 
 ### What permissions does the database user need?
 

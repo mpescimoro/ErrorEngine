@@ -6,10 +6,23 @@ from datetime import timedelta
 
 # Key used only when SECRET_KEY is missing
 DEFAULT_SECRET_KEY = 'secret-key-to-change-in-production'
-# Public keys (the default, the old default of the Italian versions and the
-# .env.example placeholder): with these, login stays blocked
+# Publicly known keys (defaults and the .env.example placeholder): with these, login stays blocked
 INSECURE_SECRET_KEYS = {DEFAULT_SECRET_KEY, 'chiave-segreta-da-cambiare-in-produzione',
                         'change-this-to-a-random-string'}
+
+
+def _mail_security():
+    """
+    starttls, ssl or none. Without MAIL_SECURITY: MAIL_USE_TLS of older .env files
+    (true: starttls, false: ssl), otherwise ssl on port 465 and starttls on the others.
+    """
+    value = (os.environ.get('MAIL_SECURITY') or '').strip().lower()
+    if value:
+        return value
+    legacy = (os.environ.get('MAIL_USE_TLS') or '').strip().lower()
+    if legacy:
+        return 'starttls' if legacy == 'true' else 'ssl'
+    return 'ssl' if (os.environ.get('MAIL_PORT') or '').strip() == '465' else 'starttls'
 
 
 class Config:
@@ -28,18 +41,27 @@ class Config:
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = 'Lax'
     
-    # SQLite database (internal DB)
+    # Internal database (SQLite unless DATABASE_URL is set)
     SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or 'sqlite:///errorengine.db'
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     
-    # Email configuration (Exchange/SMTP)
-    MAIL_SERVER = os.environ.get('MAIL_SERVER') or 'smtp.office365.com'
-    MAIL_PORT = int(os.environ.get('MAIL_PORT') or 587)
-    MAIL_USE_TLS = os.environ.get('MAIL_USE_TLS', 'true').lower() == 'true'
+    # Email through any SMTP server. MAIL_SERVER empty: email is off and the
+    # notifications go only to the channels
+    MAIL_SERVER = (os.environ.get('MAIL_SERVER') or '').strip()
+    # starttls, ssl or none (none: only for a relay on the internal network, without login)
+    MAIL_SECURITY = _mail_security()
+    MAIL_PORT = int(os.environ.get('MAIL_PORT') or {'ssl': 465, 'none': 25}.get(MAIL_SECURITY, 587))
+    # Without a user name there is no login: a relay that accepts this server by its address
     MAIL_USERNAME = os.environ.get('MAIL_USERNAME', '')
     MAIL_PASSWORD = os.environ.get('MAIL_PASSWORD', '')
-    MAIL_DEFAULT_SENDER = os.environ.get('MAIL_DEFAULT_SENDER', '')
-    # Maximum wait for the SMTP server (connection, login, sending)
+    # Address the emails are sent from; empty: MAIL_USERNAME
+    MAIL_DEFAULT_SENDER = os.environ.get('MAIL_DEFAULT_SENDER') or os.environ.get('MAIL_USERNAME', '')
+    # Microsoft 365 through Graph (an Entra ID app with Mail.Send): with these three set,
+    # emails go out from MAIL_DEFAULT_SENDER through Graph instead of SMTP
+    M365_TENANT_ID = (os.environ.get('M365_TENANT_ID') or '').strip()
+    M365_CLIENT_ID = (os.environ.get('M365_CLIENT_ID') or '').strip()
+    M365_CLIENT_SECRET = os.environ.get('M365_CLIENT_SECRET', '')
+    # Maximum wait for the email server (connection, login, sending)
     MAIL_TIMEOUT_SECONDS = int(os.environ.get('MAIL_TIMEOUT_SECONDS') or 30)
     # CA (or certificate) of an internal SMTP server; empty: the system certificates
     MAIL_CA_FILE = os.environ.get('MAIL_CA_FILE', '')
@@ -74,7 +96,7 @@ class Config:
     # Email retention (days)
     EMAIL_LOG_RETENTION_DAYS = int(os.environ.get('EMAIL_LOG_RETENTION_DAYS') or 90)
     
-    # Resolved errors retention (days): resolved errors are deleted after this period
+    # Resolved errors retention (days)
     RESOLVED_ERRORS_RETENTION_DAYS = int(os.environ.get('RESOLVED_ERRORS_RETENTION_DAYS') or 60)
     
     # Time zone for displayed dates (default: UTC)
@@ -112,7 +134,8 @@ class TestingConfig(Config):
     # Email mock
     MAIL_SERVER = 'localhost'
     MAIL_PORT = 25
-    MAIL_USE_TLS = False
+    MAIL_SECURITY = 'ssl'
+    M365_TENANT_ID = M365_CLIENT_ID = M365_CLIENT_SECRET = ''
     MAIL_USERNAME = 'test@test.com'
     MAIL_PASSWORD = 'test'
     MAIL_DEFAULT_SENDER = 'test@test.com'

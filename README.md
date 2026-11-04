@@ -16,7 +16,7 @@ You write a query that returns the problems: ErrorEngine runs it on a schedule a
 ## Features
 
 - **Databases and APIs** — Oracle, PostgreSQL, MySQL/MariaDB, SQL Server, SQLite, IBM i (AS/400), HTTP/JSON sources
-- **Notifications** — Email, webhook, Telegram, Microsoft Teams; reminders while an error stays open
+- **Notifications** — Email (any SMTP server or Microsoft 365), webhook, Telegram, Microsoft Teams; reminders while an error stays open
 - **Conditional routing** — Different recipients depending on the content of each error
 - **Scheduling** — Intervals, time windows, days of the week
 - **Reliable delivery** — Failed notifications are retried; an alert when a query cannot read its source; health check for external monitors
@@ -42,7 +42,7 @@ cp .env.example .env        # Windows: copy .env.example .env
    venv/bin/python -c "import getpass; from werkzeug.security import generate_password_hash as h; print(h(getpass.getpass('Password: ')))"
    ```
 
-3. Put them in `.env` as `SECRET_KEY` and `ERRORENGINE_PASSWORD_HASH`, together with your SMTP settings.
+3. Put them in `.env` as `SECRET_KEY` and `ERRORENGINE_PASSWORD_HASH`, together with your email settings: an SMTP server, Microsoft 365, or nothing to notify only through channels (see [Email](docs/configuration.md#email)).
 4. Start it again and open **http://localhost:5000**. The user is `admin`.
 
 The start scripts run `serve.py`, the production server. Windows service, log file and every setting: see [Configuration](docs/configuration.md).

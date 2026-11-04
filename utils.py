@@ -30,7 +30,6 @@ def get_configured_timezone():
     except ImportError:
         from backports.zoneinfo import ZoneInfo
     
-    # Time zone name
     tz_name = None
     
     # Try the Flask context
@@ -49,7 +48,6 @@ def get_configured_timezone():
     if tz_name == _cached_tz_name and _cached_tz is not None:
         return _cached_tz
     
-    # Build the ZoneInfo
     try:
         _cached_tz = ZoneInfo(tz_name)
         _cached_tz_name = tz_name
@@ -62,37 +60,19 @@ def get_configured_timezone():
 
 def get_local_now():
     """
-    Returns current time in configured timezone as naive datetime.
-    Use for scheduling calculations and comparisons with time windows.
-    
-    Returns:
-        datetime: Local time without tzinfo (naive local)
+    Current time in the configured time zone, naive: for schedules and time windows.
     """
     tz = get_configured_timezone()
     return datetime.now(timezone.utc).astimezone(tz).replace(tzinfo=None)
 
 
 def get_utc_now():
-    """
-    Returns current UTC time as naive datetime.
-    Use for database storage.
-    
-    Returns:
-        datetime: UTC time without tzinfo (naive UTC)
-    """
+    """Current UTC time, naive: the dates stored in the database."""
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def utc_to_local(utc_dt):
-    """
-    Converts naive UTC datetime to naive local datetime.
-    
-    Args:
-        utc_dt: datetime in UTC (naive, assumed UTC)
-    
-    Returns:
-        datetime: Local time without tzinfo (naive local)
-    """
+    """Naive UTC datetime to naive local datetime."""
     if utc_dt is None:
         return None
     
@@ -106,15 +86,7 @@ def utc_to_local(utc_dt):
 
 
 def local_to_utc(local_dt):
-    """
-    Converts naive local datetime to naive UTC datetime.
-    
-    Args:
-        local_dt: datetime in local time (naive, assumed local)
-    
-    Returns:
-        datetime: UTC time without tzinfo (naive UTC)
-    """
+    """Naive local datetime to naive UTC datetime."""
     if local_dt is None:
         return None
     
@@ -129,29 +101,15 @@ def local_to_utc(local_dt):
 
 def local_day_start_utc(days_ago=0):
     """
-    Start of a local day (midnight in the configured time zone), as naive UTC.
-
-    Args:
-        days_ago: 0 = today, 1 = yesterday, ...
-
-    Returns:
-        datetime: UTC time without tzinfo, to compare with the stored dates
+    Midnight of a local day (days_ago: 0 today, 1 yesterday...) as naive UTC,
+    to compare with the stored dates.
     """
     day = get_local_now().date() - timedelta(days=days_ago)
     return local_to_utc(datetime.combine(day, time.min))
 
 
 def format_local(utc_dt, fmt='%d/%m/%Y %H:%M'):
-    """
-    Formats a UTC datetime as local time string.
-    
-    Args:
-        utc_dt: datetime in UTC
-        fmt: strftime format string
-    
-    Returns:
-        str: Formatted local time
-    """
+    """UTC datetime as text in the configured time zone ('' for None)."""
     if utc_dt is None:
         return ''
     
@@ -160,22 +118,11 @@ def format_local(utc_dt, fmt='%d/%m/%Y %H:%M'):
 
 
 def format_local_now(fmt='%d/%m/%Y %H:%M:%S', app=None):
-    """
-    Returns current local time formatted as string.
-    
-    Args:
-        fmt: strftime format
-        app: Flask app (ignored, kept for compatibility)
-    
-    Returns:
-        str: Formatted local time
-    """
+    """Current local time as text (app is ignored, kept for compatibility)."""
     return get_local_now().strftime(fmt)
 
 
-# ---------------------------------------------------------------------------
-# Secrets out of messages: error texts end up in logs, pages and alerts
-# ---------------------------------------------------------------------------
+# --- Secrets out of messages (error texts reach logs, pages and alerts) ---
 
 _URL_RE = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s'\"<>]+", re.I)
 
@@ -235,9 +182,7 @@ def install_log_redaction():
             handler.addFilter(RedactSecretsFilter())
 
 
-# ---------------------------------------------------------------------------
-# Server log file (set up by serve.py), shown in Settings
-# ---------------------------------------------------------------------------
+# --- Server log file (set up by serve.py), shown in Settings ---
 
 def format_size(size) -> str:
     """Bytes in a readable form: 512 B, 1.5 KB, 244 KB, 10 MB."""

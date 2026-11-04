@@ -54,12 +54,7 @@ def _run_query(app, query_id: int):
 
 
 def dispatch_due_queries(app) -> list:
-    """
-    Finds the queries that are due and starts them in the pool.
-
-    Returns:
-        list: ids of the queries started in this round
-    """
+    """Starts the queries that are due in the pool; returns their ids."""
     started = []
     with app.app_context():
         _state['last_tick_at'] = get_utc_now()

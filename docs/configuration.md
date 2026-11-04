@@ -1,6 +1,6 @@
 # Configuration
 
-Settings live in `.env` in the project folder: copy `.env.example`, which has the same list with short comments. Restart ErrorEngine after a change.
+Settings live in `.env` in the project folder: copy `.env.example`, which has the ones most installations need. All of them are listed below, with their defaults. Restart ErrorEngine after a change.
 
 ## Settings
 
@@ -14,12 +14,15 @@ Settings live in `.env` in the project folder: copy `.env.example`, which has th
 | `ERRORENGINE_HOST` | `0.0.0.0` | Address the server listens on |
 | `ERRORENGINE_PORT` | `5000` | Port the server listens on |
 | `TIMEZONE` | `UTC` | Time zone of dates, schedules and statistics, e.g. `Europe/Rome` |
-| `MAIL_SERVER` | `smtp.office365.com` | SMTP server |
-| `MAIL_PORT` | `587` | SMTP port |
-| `MAIL_USE_TLS` | `true` | `true`: STARTTLS (usually port 587); `false`: SSL (usually port 465) |
-| `MAIL_USERNAME`, `MAIL_PASSWORD` | — | SMTP account |
-| `MAIL_DEFAULT_SENDER` | — | Sender of the notifications |
-| `MAIL_TIMEOUT_SECONDS` | `30` | Maximum wait for the SMTP server |
+| `MAIL_SERVER` | — | SMTP server. Empty: email is off and notifications go only to the channels, see [Email](#email) |
+| `MAIL_SECURITY` | `starttls` | `starttls`, `ssl` (the default on port 465) or `none`, only for a relay without login on the internal network |
+| `MAIL_PORT` | `587` | SMTP port; `465` with `ssl`, `25` with `none` |
+| `MAIL_USERNAME`, `MAIL_PASSWORD` | — | SMTP account. Without a user name there is no login (relay) |
+| `MAIL_DEFAULT_SENDER` | `MAIL_USERNAME` | Address the emails are sent from |
+| `M365_TENANT_ID`, `M365_CLIENT_ID` | — | Microsoft 365 through Graph: directory (tenant) ID and application (client) ID, see [Microsoft 365](#microsoft-365) |
+| `M365_CLIENT_SECRET` | — | Client secret of that application |
+| `MAIL_USE_TLS` | — | Older setting, still read when `MAIL_SECURITY` is not set: `true` means `starttls`, `false` means `ssl` |
+| `MAIL_TIMEOUT_SECONDS` | `30` | Maximum wait for the email server |
 | `MAIL_CA_FILE` | — | CA, or certificate, of an internal SMTP server (PEM). The certificate is always checked |
 | `DB_CONNECT_TIMEOUT_SECONDS` | `15` | Maximum wait to connect to a monitored database |
 | `DB_QUERY_TIMEOUT_SECONDS` | `300` | Maximum duration of a query |
@@ -44,6 +47,37 @@ venv/bin/python -c "import getpass; from werkzeug.security import generate_passw
 `SECRET_KEY` must be a random value, for example from `venv/bin/python -c "import secrets; print(secrets.token_hex(32))"`. Until both are set, nobody can sign in, and the sign-in page says what is missing.
 
 Scripts call the API with `Authorization: Bearer <ERRORENGINE_API_TOKEN>`. Only `/api/health` needs no login.
+
+## Email
+
+ErrorEngine sends email through an SMTP server or through Microsoft 365. With neither configured, email is off: notifications go only to the channels (Teams, Telegram, webhook). **Settings** shows how emails go out, and **Send test email** tries it.
+
+### SMTP server
+
+`MAIL_SERVER`, `MAIL_PORT`, `MAIL_USERNAME` and `MAIL_PASSWORD` work with any provider: your own mail server, Gmail (it needs an app password, which needs 2-Step Verification) or services such as Amazon SES, Brevo or Mailgun. The connection uses STARTTLS (port 587), or SSL when `MAIL_PORT` is 465 or `MAIL_SECURITY=ssl`; the server certificate is always checked (`MAIL_CA_FILE` for an internal CA).
+
+### Relay without login
+
+Leave `MAIL_USERNAME` empty and set `MAIL_DEFAULT_SENDER`: ErrorEngine connects without signing in. That is what an internal relay expects, or a Microsoft 365 connector that recognizes your server by its IP address (`MAIL_SERVER` is then your domain's MX endpoint, `…mail.protection.outlook.com`, with `MAIL_PORT=25`). If the relay does not support encryption, `MAIL_SECURITY=none` sends in clear text: use it only on the internal network. With a user name set, ErrorEngine never sends the password unencrypted.
+
+### Microsoft 365
+
+Microsoft turns off SMTP with a password by default at the end of December 2026. ErrorEngine can send through Microsoft Graph instead, with an application registered in Microsoft Entra ID: no mailbox password, and SMTP AUTH can stay off. In the Microsoft Entra admin center:
+
+1. *App registrations* → *New registration*: any name, accounts in this organizational directory only
+2. *API permissions* → *Add a permission* → *Microsoft Graph* → *Application permissions* → `Mail.Send`, then *Grant admin consent*
+3. *Certificates & secrets* → *New client secret*, and copy its value
+
+Then in `.env`:
+
+```
+M365_TENANT_ID=<Directory (tenant) ID, from the app's Overview>
+M365_CLIENT_ID=<Application (client) ID>
+M365_CLIENT_SECRET=<the secret's value>
+MAIL_DEFAULT_SENDER=alerts@yourcompany.com
+```
+
+With these set, ErrorEngine sends through Graph from `MAIL_DEFAULT_SENDER` and does not use the SMTP settings. `Mail.Send` allows sending as any mailbox of the organization: limit the application to the sender mailbox in Exchange Online (RBAC for Applications). The secret expires: put a new one in `.env` before its expiry date.
 
 ## Database drivers
 
@@ -93,5 +127,5 @@ Every day at 03:00 (server time) ErrorEngine deletes the run logs, email logs an
 ## Security
 
 - Keep ErrorEngine on the internal network or behind a VPN, with HTTPS.
-- Database passwords, tokens and channel URLs are stored in plain text in the internal database (encryption is planned for v2.4): protect the `instance/` folder and `.env`.
+- Database passwords, tokens and channel URLs are stored in plain text in the internal database (encryption is planned for v2.5): protect the `instance/` folder and `.env`.
 - Use read-only database users.

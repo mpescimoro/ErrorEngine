@@ -3,9 +3,7 @@
  * Handles UI interactions, API calls, form validation, and notifications
  */
 
-// ============================================
-// Utility Functions
-// ============================================
+// --- Utilities ---
 
 /**
  * Escape HTML to prevent XSS
@@ -84,9 +82,7 @@ function debounce(func, wait) {
     };
 }
 
-// ============================================
-// API Client
-// ============================================
+// --- API client ---
 
 const api = {
     /**
@@ -128,9 +124,7 @@ const api = {
     delete(url) { return this.request(url, 'DELETE'); }
 };
 
-// ============================================
-// Toast Notifications
-// ============================================
+// --- Toasts ---
 
 const toast = {
     container: null,
@@ -186,9 +180,7 @@ const toast = {
     info(message) { return this.show(message, 'info'); }
 };
 
-// ============================================
-// Form Validation
-// ============================================
+// --- Form validation ---
 
 const validator = {
     patterns: {
@@ -348,9 +340,7 @@ const validator = {
     }
 };
 
-// ============================================
-// Modal Manager
-// ============================================
+// --- Modals ---
 
 const modal = {
     current: null,
@@ -407,9 +397,7 @@ const modal = {
     }
 };
 
-// ============================================
-// Sidebar
-// ============================================
+// --- Sidebar ---
 
 const sidebar = {
     init() {
@@ -431,9 +419,7 @@ const sidebar = {
     }
 };
 
-// ============================================
-// Clock
-// ============================================
+// --- Clock ---
 
 const clock = {
     element: null,
@@ -460,9 +446,7 @@ const clock = {
     }
 };
 
-// ============================================
-// Query Functions
-// ============================================
+// --- Queries ---
 
 const queryManager = {
     /**
@@ -504,9 +488,7 @@ const queryManager = {
     }
 };
 
-// ============================================
-// Error Functions
-// ============================================
+// --- Errors ---
 
 const errorManager = {
     /**
@@ -525,9 +507,7 @@ const errorManager = {
     }
 };
 
-// ============================================
-// Routing Rules Manager
-// ============================================
+// --- Routing rules ---
 
 const routingManager = {
     rules: [],
@@ -755,9 +735,7 @@ const routingManager = {
     }
 };
 
-// ============================================
-// Day Picker
-// ============================================
+// --- Day picker ---
 
 const dayPicker = {
     init() {
@@ -785,9 +763,7 @@ const dayPicker = {
     }
 };
 
-// ============================================
-// Source Type Toggle
-// ============================================
+// --- Source type ---
 
 const sourceToggle = {
     init() {
@@ -904,9 +880,7 @@ async function testSqlQuery() {
 }
 
 
-// ============================================
-// Test Connections
-// ============================================
+// --- Connection tests ---
 
 const testConnections = {
     async email(recipient) {
@@ -935,9 +909,7 @@ const testConnections = {
 };
 
 
-// ============================================
-// Next Check Timer - Real time countdown
-// ============================================
+// --- Countdown to the next check ---
 
 const nextCheckTimer = {
     element: null,
@@ -1021,9 +993,7 @@ const nextCheckTimer = {
 };
 
 
-// ============================================
-// Dashboard Statistics
-// ============================================
+// --- Dashboard statistics ---
 
 const dashboardStats = {
     async init() {
@@ -1125,9 +1095,7 @@ const dashboardStats = {
 };
 
 
-// ============================================
-// Error Expandable Details
-// ============================================
+// --- Expandable error details ---
 
 const errorExpander = {
     toggle(button, errorId) {
@@ -1147,9 +1115,7 @@ const errorExpander = {
     }
 };
 
-// ============================================
-// Settings Page - Auto-load stats
-// ============================================
+// --- Settings page ---
 
 const settingsPage = {
     init() {
@@ -1269,13 +1235,9 @@ const settingsPage = {
     }
 };
 
-// ============================================
-// Live Updates
-// Every 30 seconds, check whether the active errors have changed:
-// always update the counter in the menu and, on pages with
-// data-live-reload (Errors, Dashboard), reload the page.
-// If the user is working on the page, show a notice instead.
-// ============================================
+// --- Live updates ---
+// Every 30 s: update the error counter in the menu and reload the pages with
+// data-live-reload (Errors, Dashboard), or show a notice if the user is working there
 
 const liveUpdates = {
     intervalMs: 30000,
@@ -1363,9 +1325,7 @@ const liveUpdates = {
     }
 };
 
-// ============================================
-// Initialize on DOM Ready
-// ============================================
+// --- Start-up ---
 
 document.addEventListener('DOMContentLoaded', () => {
     sidebar.init();
@@ -1390,9 +1350,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 });
 
-// ============================================
-// Global Exports
-// ============================================
+// --- Globals ---
 
 window.api = api;
 window.toast = toast;

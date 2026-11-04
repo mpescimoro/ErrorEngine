@@ -3,15 +3,7 @@ Tests for the API routes.
 """
 import json
 
-
-class TestDashboard:
-    """Dashboard tests."""
-    
-    def test_dashboard_loads(self, client):
-        """The dashboard should load correctly."""
-        response = client.get('/')
-        assert response.status_code == 200
-        assert b'Dashboard' in response.data or b'dashboard' in response.data
+from version import __version__
 
 
 class TestQueriesAPI:
@@ -229,6 +221,7 @@ class TestHealthAPI:
         assert data['status'] == 'healthy'
         assert 'checks' in data
         assert data['checks']['database'] == 'ok'
+        assert data['version'] == __version__
 
 
 class TestTestEndpoints:
@@ -246,13 +239,13 @@ class TestTestEndpoints:
         data = json.loads(response.data)
         assert data['success'] is False
     
-    def test_test_query_missing_sql(self, client, sample_query):
-        """Test query on connection without SQL."""
-        # Use a dummy connection (does not exist, 404)
+    def test_test_query_missing_sql(self, client, sample_connection):
+        """Test query on a connection without SQL."""
         response = client.post(
-            '/api/connections/99999/test-query',
+            f'/api/connections/{sample_connection.id}/test-query',
             data=json.dumps({}),
             content_type='application/json'
         )
         
-        assert response.status_code == 404
+        assert response.status_code == 400
+        assert json.loads(response.data)['error'] == 'SQL query required'

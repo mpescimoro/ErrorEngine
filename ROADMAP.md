@@ -2,16 +2,14 @@
 
 Planned work, in order. Released versions are in [CHANGELOG.md](CHANGELOG.md).
 
-## v2.3 — Email and Teams
+## v2.4 — Notifications
 
-- [ ] OAuth 2.0 for Microsoft 365, needed by end of December 2026 (SMTP basic auth turned off by default)
-- [ ] SMTP relay without authentication
 - [ ] Link to the error page in notifications
 - [ ] Webhooks, Teams and Telegram tell reminders from new errors; a stable error id in webhooks
 - [ ] Test email from the query form
 - [ ] One SMTP connection per check
 
-## v2.4 — Forms and data
+## v2.5 — Forms and data
 
 - [ ] Server-side validation and CSRF protection on every form; after a failed save the form keeps what was typed
 - [ ] Security headers, `Secure` cookie option, client address behind a reverse proxy, login rate limiting that does not hold a server thread
@@ -29,8 +27,9 @@ Planned work, in order. Released versions are in [CHANGELOG.md](CHANGELOG.md).
 - [ ] Time windows across daylight saving changes
 - [ ] Unknown placeholders in the email subject no longer block sending
 - [ ] Monitoring queries read-only on every driver
+- [ ] Retention, alerts on failing queries and notification retries set in **Settings** instead of `.env`
 
-## v2.5 — Alert handling
+## v2.6 — Alert handling
 
 - [ ] Acknowledge and snooze errors, maintenance windows
 - [ ] Thresholds: notify after N minutes or N rows, resolve after N absences

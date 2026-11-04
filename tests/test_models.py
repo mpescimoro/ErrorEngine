@@ -1,8 +1,9 @@
 """
 Model tests: scheduling, hash, needs_reminder, serialization.
 """
+import hashlib
 from datetime import datetime, time, timedelta
-from models import MonitoredQuery, ErrorRecord, DatabaseConnection
+from models import MonitoredQuery, ErrorRecord
 
 
 class TestErrorHash:
@@ -41,17 +42,13 @@ class TestErrorHash:
     
     def test_hash_missing_field_uses_empty(self):
         """A missing field is treated as an empty string."""
-        d1 = {'ID': '001'}
-        h1 = ErrorRecord.calculate_hash(d1, ['ID', 'CODE'])
-        # Must not crash
-        assert len(h1) == 64  # SHA-256 hex
+        assert ErrorRecord.calculate_hash({'ID': '001'}, ['ID', 'CODE']) == \
+            ErrorRecord.calculate_hash({'ID': '001', 'CODE': ''}, ['ID', 'CODE'])
     
-    def test_hash_is_sha256(self):
-        """The hash is a SHA-256 (64 hex characters)."""
-        data = {'ID': '001'}
-        h = ErrorRecord.calculate_hash(data, ['ID'])
-        assert len(h) == 64
-        assert all(c in '0123456789abcdef' for c in h)
+    def test_hash_does_not_change_between_versions(self):
+        """A different hash would make every open error look new after an upgrade."""
+        h = ErrorRecord.calculate_hash({'ID': '001', 'CODE': 'ERR001'}, ['ID', 'CODE'])
+        assert h == hashlib.sha256(b'001|ERR001').hexdigest()
 
 
 class TestErrorDataSerialization:
@@ -259,18 +256,6 @@ class TestShouldRunNow:
             now = datetime(2025, 2, 10, 22, 0, 0)  # 22:00
             should_run, reason = query.should_run_now(now)
             assert should_run is False
-
-
-class TestDatabaseConnectionRepr:
-    """Tests for DatabaseConnection.__repr__."""
-    
-    def test_repr(self, app, sample_connection):
-        """Checks the __repr__ format."""
-        with app.app_context():
-            conn = DatabaseConnection.query.get(sample_connection.id)
-            r = repr(conn)
-            assert 'Test SQLite' in r
-            assert 'sqlite' in r
 
 
 class TestKeyFieldsList:

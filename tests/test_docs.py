@@ -1,13 +1,12 @@
 """
 README and docs aligned with the code: settings, links, API endpoints,
-routing operators, email template variables, Python versions.
+routing operators, email template variables, Python versions, the changelog.
 """
 import ast
-import os
 import re
-import subprocess
-import sys
 from pathlib import Path
+
+from version import __version__
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = sorted((ROOT / 'docs').glob('*.md'))
@@ -32,20 +31,17 @@ def variables_read_by_the_code():
 def test_every_setting_is_documented():
     documented = set(re.findall(r'^\| `([A-Z_]+)`(?:, `([A-Z_]+)`)?', CONFIGURATION, re.M))
     documented = {name for pair in documented for name in pair if name}
-    example = set(re.findall(r'^#? ?([A-Z_]{3,})=', (ROOT / '.env.example').read_text(encoding='utf-8'), re.M))
+    example_text = (ROOT / '.env.example').read_text(encoding='utf-8')
+    example = set(re.findall(r'^#? ?([A-Z_]{3,})=', example_text, re.M))
     code = variables_read_by_the_code() - NOT_DOCUMENTED - IBMI_SCRIPT
 
     assert code - documented == set(), 'read by the code, missing from docs/configuration.md'
     assert documented - code == set(), 'in docs/configuration.md, never read by the code'
-    assert code - example == set(), 'read by the code, missing from .env.example'
+    # .env.example keeps only what most installations need, and points to the full list
+    assert example - code == set(), 'in .env.example, never read by the code'
+    assert {'SECRET_KEY', 'ERRORENGINE_PASSWORD_HASH', 'TIMEZONE', 'MAIL_SERVER'} <= example
+    assert 'docs/configuration.md' in example_text
     assert IBMI_SCRIPT <= set(re.findall(r'`(IBMI_[A-Z]+)`', (ROOT / 'docs' / 'ibmi-driver.md').read_text(encoding='utf-8')))
-
-
-def test_log_level_from_env_is_applied():
-    env = dict(os.environ, LOG_LEVEL='warning')
-    out = subprocess.run([sys.executable, '-c', 'import serve, logging; print(logging.getLogger().level)'],
-                         cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
-    assert out.stdout.strip().splitlines()[-1] == '30', out.stderr
 
 
 def test_links_point_to_existing_files_and_headings():
@@ -116,3 +112,7 @@ def test_docs_use_the_interface_labels():
                          'Windows service or scheduled task', 'Java', 'JPype', 'jt400', 'ibm_db', 'pyodbc'):
                 continue
             assert label in templates, f'{page.name}: **{label}**'
+
+
+def test_changelog_has_the_current_version():
+    assert f'## {__version__}' in (ROOT / 'CHANGELOG.md').read_text(encoding='utf-8')

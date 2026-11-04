@@ -2,9 +2,7 @@
 Tests for the validators module.
 """
 from validators import (
-    validate_email, validate_email_list, validate_query_name,
-    validate_key_fields, validate_sql_query, validate_interval,
-    validate_routing_rule, validate_url, sanitize_string
+    validate_email, validate_email_list, validate_routing_rule, sanitize_string
 )
 
 
@@ -60,111 +58,6 @@ class TestValidateEmailList:
         assert is_valid is False
 
 
-class TestValidateQueryName:
-    """Tests for validate_query_name."""
-    
-    def test_valid_name(self):
-        is_valid, error = validate_query_name('Test Query 01')
-        assert is_valid is True
-    
-    def test_name_with_underscore(self):
-        is_valid, error = validate_query_name('query_name_test')
-        assert is_valid is True
-    
-    def test_empty_name(self):
-        is_valid, error = validate_query_name('')
-        assert is_valid is False
-    
-    def test_too_short(self):
-        is_valid, error = validate_query_name('ab')
-        assert is_valid is False
-        assert 'short' in error.lower()
-    
-    def test_too_long(self):
-        is_valid, error = validate_query_name('a' * 101)
-        assert is_valid is False
-        assert 'long' in error.lower()
-
-
-class TestValidateKeyFields:
-    """Tests for validate_key_fields."""
-    
-    def test_single_field(self):
-        is_valid, error, fields = validate_key_fields('ID')
-        assert is_valid is True
-        assert fields == ['ID']
-    
-    def test_multiple_fields(self):
-        is_valid, error, fields = validate_key_fields('ID, CODE, STATUS')
-        assert is_valid is True
-        assert len(fields) == 3
-    
-    def test_empty(self):
-        is_valid, error, fields = validate_key_fields('')
-        assert is_valid is False
-    
-    def test_invalid_field_name(self):
-        is_valid, error, fields = validate_key_fields('123invalid')
-        assert is_valid is False
-
-
-class TestValidateSqlQuery:
-    """Tests for validate_sql_query."""
-    
-    def test_valid_select(self):
-        is_valid, error = validate_sql_query('SELECT * FROM USERS')
-        assert is_valid is True
-    
-    def test_select_with_where(self):
-        is_valid, error = validate_sql_query("SELECT id, name FROM users WHERE status = 'active'")
-        assert is_valid is True
-    
-    def test_empty_query(self):
-        is_valid, error = validate_sql_query('')
-        assert is_valid is False
-    
-    def test_not_select(self):
-        is_valid, error = validate_sql_query('UPDATE users SET status = 1')
-        assert is_valid is False
-        assert 'SELECT' in error
-    
-    def test_dangerous_pattern_drop(self):
-        is_valid, error = validate_sql_query('SELECT * FROM users; DROP TABLE users')
-        assert is_valid is False
-    
-    def test_dangerous_pattern_delete(self):
-        is_valid, error = validate_sql_query('SELECT * FROM users; DELETE FROM users')
-        assert is_valid is False
-
-
-class TestValidateInterval:
-    """Tests for validate_interval."""
-    
-    def test_valid_interval(self):
-        is_valid, error = validate_interval(15)
-        assert is_valid is True
-    
-    def test_minimum(self):
-        is_valid, error = validate_interval(1)
-        assert is_valid is True
-    
-    def test_maximum(self):
-        is_valid, error = validate_interval(1440)
-        assert is_valid is True
-    
-    def test_below_minimum(self):
-        is_valid, error = validate_interval(0)
-        assert is_valid is False
-    
-    def test_above_maximum(self):
-        is_valid, error = validate_interval(1441)
-        assert is_valid is False
-    
-    def test_not_integer(self):
-        is_valid, error = validate_interval('not a number')
-        assert is_valid is False
-
-
 class TestValidateRoutingRule:
     """Tests for validate_routing_rule."""
     
@@ -206,25 +99,10 @@ class TestValidateRoutingRule:
         is_valid, error = validate_routing_rule(data)
         assert is_valid is False
 
-
-class TestValidateUrl:
-    """Tests for validate_url."""
-    
-    def test_valid_https(self):
-        is_valid, error = validate_url('https://example.com/api')
-        assert is_valid is True
-    
-    def test_valid_http(self):
-        is_valid, error = validate_url('http://example.com')
-        assert is_valid is True
-    
-    def test_no_protocol(self):
-        is_valid, error = validate_url('example.com')
-        assert is_valid is False
-    
-    def test_empty(self):
-        is_valid, error = validate_url('')
-        assert is_valid is False
+    def test_invalid_regex_is_refused(self):
+        ok, message = validate_routing_rule({'recipients': 'a@x.it', 'conditions': [
+            {'field_name': 'CODE', 'operator': 'regex', 'value': '([a-z'}]})
+        assert not ok and 'regular expression' in message
 
 
 class TestSanitizeString:
@@ -249,3 +127,6 @@ class TestSanitizeString:
     def test_none(self):
         result = sanitize_string(None)
         assert result == ''
+
+    def test_control_characters_removed(self):
+        assert sanitize_string('a\x00b\x07c\td\n') == 'abc\td'

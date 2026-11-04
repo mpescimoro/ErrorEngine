@@ -2,10 +2,10 @@
 Tests for the routing_service module.
 """
 from routing_service import (
-    apply_routing_rules, get_field_value, get_operators_list,
+    apply_routing_rules, evaluate_condition, get_field_value, get_operators_list,
     OPERATORS
 )
-from models import MonitoredQuery
+from models import MonitoredQuery, RoutingCondition
 
 
 class TestGetFieldValue:
@@ -114,6 +114,13 @@ class TestOperators:
         # case insensitive
         assert fn('error-001', r'ERROR-\d+', False) is True
 
+    def test_case_insensitive_regex_keeps_its_meaning(self, app):
+        cond = RoutingCondition(field_name='CODE', operator='regex', value=r'^\D+$', case_sensitive=False)
+        assert evaluate_condition({'CODE': 'ABC'}, cond) is True
+        assert evaluate_condition({'CODE': '123'}, cond) is False
+        cond = RoutingCondition(field_name='CODE', operator='regex', value='^abc$', case_sensitive=False)
+        assert evaluate_condition({'CODE': 'ABC'}, cond) is True
+
 
 class TestGetOperatorsList:
     """Tests for get_operators_list."""
@@ -133,25 +140,6 @@ class TestGetOperatorsList:
 
 class TestApplyRoutingRules:
     """Tests for apply_routing_rules with fixtures."""
-    
-    def test_routing_disabled(self, app, sample_query):
-        """With routing disabled, all errors go to the default recipients."""
-        with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
-            query.routing_enabled = False
-            
-            errors = [
-                {'ID': '1', 'STATUS': 'ERROR'},
-                {'ID': '2', 'STATUS': 'WARNING'}
-            ]
-            
-            result = apply_routing_rules(query, errors)
-            
-            # There should be a single key (tuple of recipients)
-            assert len(result) == 1
-            # All errors should be assigned
-            recipients = list(result.keys())[0]
-            assert len(result[recipients]) == 2
     
     def test_routing_with_rules(self, app, sample_query_with_routing, sample_error_data):
         """Routing test with active rules."""

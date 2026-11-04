@@ -25,35 +25,17 @@ class DataSource(ABC):
     
     @abstractmethod
     def execute(self, config: dict) -> tuple:
-        """
-        Runs the query/request and returns the data.
-        
-        Args:
-            config: Source-specific configuration
-            
-        Returns:
-            tuple: (columns: list[str], rows: list[dict])
-        """
+        """Runs the request; returns (columns, rows as a list of dicts)."""
         pass
     
     @abstractmethod
     def test(self, config: dict) -> dict:
-        """
-        Tests the connection/configuration.
-        
-        Returns:
-            dict: {'success': bool, 'message': str, 'details': dict}
-        """
+        """Tests the configuration; returns {'success', 'message', 'details'}."""
         pass
     
     @abstractmethod
     def get_fields(self, config: dict) -> list:
-        """
-        Returns the available fields (to help configure routing).
-        
-        Returns:
-            list: [{'name': str, 'type': str, 'sample': str}, ...]
-        """
+        """Fields available, to help configure routing: [{'name', 'type', 'sample'}, ...]."""
         pass
 
 
@@ -92,7 +74,6 @@ class HttpDataSource(DataSource):
                 # Default: header
                 headers[key_name] = key_value
         
-        # Run the request
         try:
             response = requests.request(
                 method=method,
@@ -107,9 +88,8 @@ class HttpDataSource(DataSource):
             
             data = response.json()
             
-            # Extract the data at the given path (e.g. "data.items", "results" or "data.0.rows").
-            # A missing step is a source failure, not data: an error body answered with
-            # HTTP 200 would otherwise become a "new error" and resolve the real ones.
+            # Data at the JSON path (e.g. "data.items" or "data.0.rows"). A missing step is a source failure:
+            # an error body answered with HTTP 200 would otherwise become an error and resolve the real ones
             response_path = config.get('response_path', '')
             if response_path:
                 for key in response_path.split('.'):
@@ -201,15 +181,7 @@ class DataSourceFactory:
     
     @classmethod
     def get_source(cls, source_type: str) -> DataSource:
-        """
-        Returns the appropriate DataSource instance.
-        
-        Args:
-            source_type: 'http'
-            
-        Returns:
-            DataSource instance
-        """
+        """DataSource instance for a source type ('http')."""
         source_class = cls._sources.get(source_type.lower())
         if not source_class:
             raise ValueError(f"Unsupported source type: {source_type}")
@@ -219,15 +191,7 @@ class DataSourceFactory:
 # === HELPER FUNCTIONS ===
 
 def execute_query_source(query) -> tuple:
-    """
-    Runs the query on the configured source.
-    
-    Args:
-        query: MonitoredQuery instance
-        
-    Returns:
-        tuple: (columns, rows)
-    """
+    """Runs the query on its source (database connection or HTTP); returns (columns, rows)."""
     # With a database connection, use it
     if query.db_connection_id:
         from models import DatabaseConnection
@@ -246,15 +210,7 @@ def execute_query_source(query) -> tuple:
 
 
 def test_query_source(query) -> dict:
-    """
-    Tests the data source of a query.
-    
-    Args:
-        query: MonitoredQuery instance
-        
-    Returns:
-        dict: test result
-    """
+    """Tests the source of a query; returns {'success', 'message', 'details'}."""
     # With a database connection, test through it
     if query.db_connection_id:
         from models import DatabaseConnection
@@ -286,15 +242,7 @@ def test_query_source(query) -> dict:
 
 
 def get_query_fields(query) -> list:
-    """
-    Returns the fields available for a query.
-    
-    Args:
-        query: MonitoredQuery instance
-        
-    Returns:
-        list: available fields
-    """
+    """Fields available for a query (see DataSource.get_fields)."""
     # With a database connection, get the fields from it
     if query.db_connection_id:
         from models import DatabaseConnection

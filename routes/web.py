@@ -8,15 +8,14 @@ from models import (db, MonitoredQuery, ErrorRecord, QueryLog, EmailLog,
                     DatabaseConnection, NotificationChannel)
 from routing_service import get_operators_list
 from utils import local_day_start_utc, server_log_info
+from email_service import email_service
 
 import json
 
 main_bp = Blueprint('main', __name__)
 
 
-# ============================================================================
-# CONTEXT PROCESSOR - Inject global data into templates
-# ============================================================================
+# --- Data for every template ---
 
 @main_bp.app_context_processor
 def inject_global_data():
@@ -29,9 +28,7 @@ def inject_global_data():
     }
 
 
-# ============================================================================
-# HELPER FUNCTIONS
-# ============================================================================
+# --- Helpers ---
 
 def parse_time(time_str):
     """Converts an HH:MM string to a time object."""
@@ -82,9 +79,7 @@ def problems_first(queries, error_counts: dict) -> list:
     return sorted(queries, key=key)
 
 
-# ============================================================================
-# WEB PAGES
-# ============================================================================
+# --- Pages ---
 
 @main_bp.route('/')
 def dashboard():
@@ -419,12 +414,11 @@ def settings():
     }
     return render_template('settings.html', scheduler_status=get_scheduler_status(),
                            failing_queries=failing_queries, version=__version__,
-                           database=database, server_log=server_log_info())
+                           database=database, server_log=server_log_info(),
+                           email_status=email_service.status())
 
 
-# ============================================================================
-# DATABASE CONNECTIONS ROUTES
-# ============================================================================
+# --- Database connections ---
 
 @main_bp.route('/connections')
 def connections_list():
@@ -502,9 +496,7 @@ def connection_delete(conn_id):
     return redirect(url_for('main.connections_list'))
 
 
-# ============================================================================
-# NOTIFICATION CHANNELS
-# ============================================================================
+# --- Notification channels ---
 
 CHANNEL_TYPES = {
     'webhook': 'Generic webhook',

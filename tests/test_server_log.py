@@ -1,12 +1,19 @@
 """
-Server log file in Settings: where it is, how much space it takes and how it rotates.
+Server log: the level from LOG_LEVEL, and the log file in Settings (where it is, how much
+space it takes and how it rotates).
 """
 import logging
+import os
+import subprocess
+import sys
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 import pytest
 
 from utils import format_size, server_log_info
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture
@@ -72,3 +79,10 @@ def test_a_plain_file_without_rotation(tmp_path):
         root.removeHandler(handler)
         handler.close()
     assert info['files'] == 1 and info['rotation'] == 'no rotation, the file keeps growing'
+
+
+def test_log_level_from_env_is_applied():
+    env = dict(os.environ, LOG_LEVEL='warning')
+    out = subprocess.run([sys.executable, '-c', 'import serve, logging; print(logging.getLogger().level)'],
+                         cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
+    assert out.stdout.strip().splitlines()[-1] == '30', out.stderr

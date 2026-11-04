@@ -173,3 +173,10 @@ class TestTokenApi:
     def test_token_not_configured(self, client):
         headers = {'Authorization': 'Bearer '}
         assert client.get('/api/queries', headers=headers).status_code == 401
+
+    def test_public_health_check_shows_only_the_state(self, client, auth_app):
+        auth_app.config['API_TOKEN'] = 'token-script'
+        public = client.get('/api/health').get_json()
+        assert 'version' not in public and set(public['checks']) == {'database', 'scheduler'}
+        detailed = client.get('/api/health', headers={'Authorization': 'Bearer token-script'}).get_json()
+        assert 'version' in detailed and 'queries_failing' in detailed['checks']

@@ -34,12 +34,6 @@ def client(app):
 
 
 @pytest.fixture(scope='function')
-def runner(app):
-    """Runner for CLI commands."""
-    return app.test_cli_runner()
-
-
-@pytest.fixture(scope='function')
 def sample_query(app):
     """Creates a sample query for the tests."""
     with app.app_context():

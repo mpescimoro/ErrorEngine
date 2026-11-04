@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def create_app(config_name=None):
-    """Application Factory Pattern"""
+    """Creates and configures the application."""
     
     if config_name is None:
         config_name = os.environ.get('FLASK_ENV', 'development')
@@ -90,9 +90,8 @@ def create_app(config_name=None):
     return app
 
 
-# Development only: in production run serve.py (or start.bat / start.sh).
-# The development server listens on this computer only and without the reloader,
-# which would start a second scheduler; the debugger is on only with FLASK_DEBUG=1.
+# Development only (production: serve.py). Local only, and no reloader: it would start
+# a second scheduler. The debugger is on only with FLASK_DEBUG=1.
 if __name__ == '__main__':
     app = create_app()
     app.run(host='127.0.0.1', port=5000,

@@ -85,9 +85,7 @@ def api_query_fields(query_id):
     return jsonify({'fields': fields})
 
 
-# ============================================================================
-# API ROUTING RULES
-# ============================================================================
+# --- Routing rules ---
 
 @api_bp.route('/queries/<int:query_id>/routing/rules', methods=['GET'])
 def api_get_routing_rules(query_id):
@@ -128,7 +126,6 @@ def api_create_routing_rule(query_id):
     MonitoredQuery.query.get_or_404(query_id)   # 404 if the query does not exist
     data = request.get_json()
     
-    # Input validation
     is_valid, error = validate_routing_rule(data)
     if not is_valid:
         return jsonify({'success': False, 'message': error}), 400
@@ -175,7 +172,6 @@ def api_update_routing_rule(query_id, rule_id):
     rule = RoutingRule.query.filter_by(id=rule_id, query_id=query_id).first_or_404()
     data = request.get_json()
     
-    # Input validation
     is_valid, error = validate_routing_rule(data)
     if not is_valid:
         return jsonify({'success': False, 'message': error}), 400
@@ -267,9 +263,7 @@ def api_get_operators():
     return jsonify(get_operators_list())
 
 
-# ============================================================================
-# API ERRORS
-# ============================================================================
+# --- Errors ---
 
 @api_bp.route('/errors', methods=['GET'])
 def api_errors_list():
@@ -298,9 +292,7 @@ def api_resolve_error(error_id):
     })
 
 
-# ============================================================================
-# API DATABASE CONNECTIONS
-# ============================================================================
+# --- Database connections ---
 
 @api_bp.route('/connections', methods=['GET'])
 def api_connections_list():
@@ -380,9 +372,7 @@ def api_connection_test_query(conn_id):
         return jsonify({'valid': False, 'error': redact_secrets(str(e))})
 
 
-# ============================================================================
-# API NOTIFICATION CHANNELS
-# ============================================================================
+# --- Notification channels ---
 
 @api_bp.route('/channels', methods=['GET'])
 def api_channels_list():
@@ -401,9 +391,7 @@ def api_channel_test(channel_id):
     return jsonify(result)
 
 
-# ============================================================================
-# API TAGS
-# ============================================================================
+# --- Tags ---
 
 @api_bp.route('/tags', methods=['GET'])
 def api_tags_list():
@@ -414,9 +402,7 @@ def api_tags_list():
     return jsonify(sorted(all_tags))
 
 
-# ============================================================================
-# API STATISTICS
-# ============================================================================
+# --- Statistics ---
 
 @api_bp.route('/stats/overview', methods=['GET'])
 def api_stats_overview():
@@ -607,9 +593,7 @@ def api_stats_all_queries():
     } for r in results])
 
 
-# ============================================================================
-# API TEST
-# ============================================================================
+# --- Test email and totals ---
 
 @api_bp.route('/test/email', methods=['POST'])
 def api_test_email():
@@ -637,9 +621,7 @@ def api_stats():
     })
 
 
-# ============================================================================
-# API CLEANUP & MAINTENANCE
-# ============================================================================
+# --- Cleanup and health check ---
 
 @api_bp.route('/cleanup/run', methods=['POST'])
 def api_run_cleanup():
@@ -680,7 +662,7 @@ def api_health():
     cannot read their source.
     """
     try:
-        # SQLite database check
+        # Internal database
         db_ok = True
         try:
             MonitoredQuery.query.limit(1).all()

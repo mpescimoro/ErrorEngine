@@ -118,16 +118,7 @@ def _regex_match(field_value, pattern, case_sensitive):
 
 
 def get_field_value(error: dict, field_name: str):
-    """
-    Gets the value of a field from the error (case-insensitive).
-    
-    Args:
-        error: dictionary with the error data
-        field_name: name of the field to look up
-        
-    Returns:
-        The field value, or None if not found
-    """
+    """Value of a field of the error, looked up case-insensitively."""
     for key, value in error.items():
         if key.upper() == field_name.upper():
             return value
@@ -135,16 +126,7 @@ def get_field_value(error: dict, field_name: str):
 
 
 def evaluate_condition(error: dict, condition: RoutingCondition) -> bool:
-    """
-    Checks whether an error satisfies a single condition.
-    
-    Args:
-        error: dictionary with the error data
-        condition: RoutingCondition to evaluate
-        
-    Returns:
-        True if the condition is satisfied
-    """
+    """Whether the error satisfies a single condition."""
     # Field value
     field_value = get_field_value(error, condition.field_name)
     
@@ -180,16 +162,7 @@ def evaluate_condition(error: dict, condition: RoutingCondition) -> bool:
 
 
 def evaluate_rule(error: dict, rule: RoutingRule) -> bool:
-    """
-    Checks whether an error satisfies all/any of the conditions of a rule.
-    
-    Args:
-        error: dictionary with the error data
-        rule: RoutingRule to evaluate
-        
-    Returns:
-        True if the rule is satisfied
-    """
+    """Whether the error satisfies the conditions of a rule (AND or OR)."""
     if not rule.is_active:
         return False
     
@@ -207,16 +180,8 @@ def evaluate_rule(error: dict, rule: RoutingRule) -> bool:
 
 def apply_routing_rules(query: MonitoredQuery, errors: list) -> dict:
     """
-    Applies the routing rules and groups the errors by recipient.
-    
-    Args:
-        query: MonitoredQuery with the configured rules
-        errors: list of dictionaries with the error data
-        
-    Returns:
-        dict: {recipient: [errors]} 
-              - Routing disabled: {tuple(recipients): all_errors}
-              - Routing enabled: {recipient1: [err1, err3], recipient2: [err2], ...}
+    Groups the errors by recipient, applying the rules.
+    Routing off: {tuple(recipients): all errors}; on: {recipient: [errors]}.
     """
     if not query.routing_enabled:
         # Classic behaviour: every error to every recipient
