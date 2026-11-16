@@ -104,6 +104,9 @@ class HttpDataSource(DataSource):
                 data = [data]
             elif not isinstance(data, list):
                 raise ValueError(f"Invalid response: expected a list, got {type(data).__name__}")
+            if not all(isinstance(item, dict) for item in data):
+                kind = next(type(item).__name__ for item in data if not isinstance(item, dict))
+                raise ValueError(f"Invalid response: the list holds {kind} values, not objects with fields")
             
             if not data:
                 return [], []

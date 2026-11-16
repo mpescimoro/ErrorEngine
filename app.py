@@ -3,6 +3,7 @@ Application Factory - ErrorEngine Monitoring System
 """
 import os
 import logging
+from zoneinfo import ZoneInfo
 from flask import Flask
 from config import config
 
@@ -23,6 +24,13 @@ def create_app(config_name=None):
     app = Flask(__name__)
     # An instance, not the class: this way ProductionConfig's SECRET_KEY @property is read
     app.config.from_object(config[config_name]())
+
+    try:
+        ZoneInfo(app.config['TIMEZONE'] or 'UTC')   # empty: UTC, the default
+    except Exception:
+        # Otherwise dates and schedules would be in UTC without a word
+        logger.warning(f"TIMEZONE={app.config['TIMEZONE']!r} is not a time zone (e.g. Europe/Rome): "
+                       "dates and schedules use UTC")
 
     # SQLite: with the scheduler running in parallel, several threads write to the internal DB,
     # so wait up to 30 s for the lock instead of failing after 5

@@ -14,8 +14,9 @@ Logs: printed to the console (when there is one) and written to logs\errorengine
 rotated at 10 MB with 5 old files kept.
 
 Optional settings (in .env):
-    ERRORENGINE_HOST   default 0.0.0.0 (all interfaces)
-    ERRORENGINE_PORT   default 5000
+    ERRORENGINE_HOST     default 0.0.0.0 (all interfaces)
+    ERRORENGINE_PORT     default 5000
+    ERRORENGINE_THREADS  default 4: requests handled at the same time
 """
 import logging
 import os
@@ -64,6 +65,11 @@ from waitress import serve
 from app import create_app
 
 
+def server_threads() -> int:
+    """Requests Waitress handles at the same time: ERRORENGINE_THREADS, else 4 as Waitress does."""
+    return max(1, int(os.environ.get('ERRORENGINE_THREADS') or 4))
+
+
 def main():
     secret_key = os.environ.get('SECRET_KEY')
     if not secret_key:
@@ -77,8 +83,10 @@ def main():
 
     host = os.environ.get('ERRORENGINE_HOST', '0.0.0.0')
     port = int(os.environ.get('ERRORENGINE_PORT', '5000'))
+    threads = server_threads()
+    logger.info(f"Web server: up to {threads} requests at a time")
     try:
-        serve(app, host=host, port=port)
+        serve(app, host=host, port=port, threads=threads)
     finally:
         # On a clean stop, let the queries still running finish (bounded by their
         # timeouts) and release their locks.

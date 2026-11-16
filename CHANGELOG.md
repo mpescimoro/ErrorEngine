@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.4.1
+
+**Added**
+- `ERRORENGINE_THREADS` in `.env`: the requests the web server handles at the same time (4, as before)
+
+**Changed**
+- AS/400 (DB2): the default port is 446, the DRDA port of IBM i, instead of 50000, the one of DB2 on Linux and Windows
+- The docs say what `NOTIFY_ATTEMPTS` above 5 does: the further attempts come every 60 minutes
+- Unused code removed: a dashboard script that no page loaded, two Python functions nothing called
+
+**Fixed**
+- A connection saved without a port did not connect with Oracle and AS/400 (DB2): it now uses the driver's default, as the test in the form already did, and the form shows the AS/400 one
+- A routing condition with quotes in its value was cut short when the rule was opened and saved again
+- An inline email template that starts and ends with Jinja code (e.g. `{% if errors %}…{% endif %}`) was taken for a template name and replaced by the default one
+- Emails sent through SMTP had no `Date` and `Message-ID` headers: some mail servers do not add them, and spam filters count it against the sender
+- Errors while saving or deleting a query showed the database error on screen, SQL and values included: now the details go only in the log
+- A `TIMEZONE` that does not exist became UTC without a word: now the log says so at startup
+- Resolving an error already resolved moved its resolution time
+- An HTTP source that returns plain values instead of objects failed with a Python error: now it says what it found
+- The API took routing rules with an operator that does not exist, whose condition never matched, and failed on rules sent in the wrong shape
+
 ## 2.4.0
 
 **Added**

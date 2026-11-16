@@ -11,7 +11,7 @@ All endpoints return JSON and need a login: the browser session, or for scripts 
 | GET | `/api/queries/{id}/status` | Status of a query |
 | POST | `/api/queries/{id}/run` | Run a query now |
 | GET | `/api/errors` | Active errors (`?query_id=` for one query) |
-| POST | `/api/errors/{id}/resolve` | Mark an error as resolved |
+| POST | `/api/errors/{id}/resolve` | Mark an error as resolved; one already resolved keeps its time |
 | GET | `/api/stats/overview?days=7` | Error statistics |
 | GET | `/api/stats/timeline?days=14` | Errors per day, today included |
 | GET | `/api/scheduler/next` | Next scheduled check |

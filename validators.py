@@ -4,6 +4,8 @@ Validators - Input validation functions for the APIs.
 import re
 from typing import Tuple, List
 
+from routing_service import OPERATORS
+
 EMAIL_PATTERN = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
 
 
@@ -57,8 +59,12 @@ def write_statement_keyword(sql: str):
 
 def validate_routing_rule(data: dict) -> Tuple[bool, str]:
     """Validates the data of a routing rule: (is_valid, error_message)."""
+    if not isinstance(data, dict):
+        return False, "The rule must be a JSON object"
     # Recipients are required
     recipients = data.get('recipients', '')
+    if not isinstance(recipients, str):
+        return False, "Rule recipients: comma-separated addresses, as text"
     is_valid, error, _ = validate_email_list(recipients)
     if not is_valid:
         return False, f"Rule recipients: {error}"
@@ -81,11 +87,16 @@ def validate_routing_rule(data: dict) -> Tuple[bool, str]:
     
     # Conditions
     conditions = data.get('conditions', [])
+    if not isinstance(conditions, list) or not all(isinstance(cond, dict) for cond in conditions):
+        return False, "Conditions must be a list of objects"
     for i, cond in enumerate(conditions):
         if not cond.get('field_name'):
             return False, f"Condition {i+1}: field is required"
         if not cond.get('operator'):
             return False, f"Condition {i+1}: operator is required"
+        if cond.get('operator') not in OPERATORS:
+            # Saved, it would never match
+            return False, f"Condition {i+1}: unknown operator {cond.get('operator')!r}"
         if cond.get('operator') == 'regex':
             try:
                 re.compile(cond.get('value') or '')

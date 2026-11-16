@@ -6,6 +6,11 @@ import ast
 import io
 import json
 import logging
+import os
+import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -65,6 +70,17 @@ class TestConfirmationsAndXss:
         html = client.get(f'/channels/{channel.id}/edit').get_data(as_text=True)
         assert 'escapeHtml(res.message)' in html and 'escapeHtml(e.message)' in html
         assert "+ res.message +" not in html and "+ e.message +" not in html
+
+    def test_escape_html_also_escapes_quotes(self):
+        # The page scripts put values inside attributes too: value="..." of a routing condition
+        node = shutil.which('node')
+        if not node:
+            pytest.skip('Node.js not installed')
+        js = (ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+        function = re.search(r'^function escapeHtml\(text\) \{.*?^\}', js, re.S | re.M).group(0)
+        script = function + "\nprocess.stdout.write(escapeHtml(`<a title=\"x\">Tom's & co</a>`));"
+        out = subprocess.run([node, '-e', script], capture_output=True, text=True, timeout=60)
+        assert out.stdout == '&lt;a title=&quot;x&quot;&gt;Tom&#39;s &amp; co&lt;/a&gt;', out.stderr
 
 
 class TestTestQuery:
@@ -183,6 +199,13 @@ class TestStartup:
         content = (ROOT / script).read_text(encoding='utf-8')
         assert 'python serve.py' in content
         assert 'app.py' not in content
+
+    @pytest.mark.parametrize('value, threads', [('', 4), ('12', 12), ('0', 1)])
+    def test_server_threads_from_env(self, value, threads):
+        env = dict(os.environ, ERRORENGINE_THREADS=value)   # empty: the default, whatever .env says
+        out = subprocess.run([sys.executable, '-c', 'import serve; print(serve.server_threads())'],
+                             cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
+        assert out.stdout.strip().splitlines()[-1] == str(threads), out.stderr
 
     def test_waitress_on_every_platform_and_no_gunicorn(self):
         lines = [l.strip() for l in (ROOT / 'requirements.txt').read_text(encoding='utf-8').splitlines()

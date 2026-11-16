@@ -13,7 +13,8 @@ Settings live in `.env` in the project folder: copy `.env.example`, which has th
 | `ERRORENGINE_API_TOKEN` | — | Token for scripts that call the [API](api-reference.md) |
 | `ERRORENGINE_HOST` | `0.0.0.0` | Address the server listens on |
 | `ERRORENGINE_PORT` | `5000` | Port the server listens on |
-| `TIMEZONE` | `UTC` | Time zone of dates, schedules and statistics, e.g. `Europe/Rome` |
+| `ERRORENGINE_THREADS` | `4` | Requests the server handles at the same time: raise it if pages wait while **Run now** or **Test query** run slow queries |
+| `TIMEZONE` | `UTC` | Time zone of dates, schedules and statistics, e.g. `Europe/Rome`. A name that does not exist means UTC, and the log says so at startup |
 | `MAIL_SERVER` | — | SMTP server. Empty: email is off and notifications go only to the channels, see [Email](#email) |
 | `MAIL_SECURITY` | `starttls` | `starttls`, `ssl` (the default on port 465) or `none`, only for a relay without login on the internal network |
 | `MAIL_PORT` | `587` | SMTP port; `465` with `ssl`, `25` with `none` |
@@ -28,7 +29,7 @@ Settings live in `.env` in the project folder: copy `.env.example`, which has th
 | `DB_QUERY_TIMEOUT_SECONDS` | `300` | Maximum duration of a query |
 | `HTTP_TIMEOUT_SECONDS` | `30` | Maximum wait for HTTP sources, webhooks, Telegram and Teams |
 | `SCHEDULER_MAX_WORKERS` | `4` | Queries run in parallel |
-| `NOTIFY_ATTEMPTS` | `5` | Attempts to deliver a notification: the first, then after 1, 5, 15 and 60 minutes. Then the error stays active and shows **Not delivered**; `1`: no retries |
+| `NOTIFY_ATTEMPTS` | `5` | Attempts to deliver a notification: the first, then after 1, 5, 15 and 60 minutes, and every 60 minutes beyond the fifth (with `10`, the last comes about 6 hours 20 minutes after the first). Then the error stays active and shows **Not delivered**; `1`: no retries |
 | `MONITOR_FAILURE_THRESHOLD` | `3` | Alert after this many failed runs in a row (`0`: no alert) |
 | `ERRORENGINE_ADMIN_EMAILS` | — | Who gets that alert, comma-separated; if empty, the query's recipients, with routing on also its default recipients |
 | `LOG_RETENTION_DAYS` | `30` | Days run logs are kept |
@@ -93,7 +94,7 @@ Graph takes the email without saying which addresses do not exist: those come ba
 | MySQL / MariaDB | `PyMySQL` | |
 | SQL Server | `pymssql` | |
 | IBM i (AS/400) | `JPype1` + JT400 | Needs Java 8+ and `lib/jt400.jar`, see [IBM i driver](ibmi-driver.md) |
-| AS/400 (DB2) | `ibm_db` | DRDA: needs a DB2 Connect license |
+| AS/400 (DB2) | `ibm_db` | DRDA: needs a DB2 Connect license. Port 446 unless you set another |
 
 Use read-only database users: ErrorEngine runs the query you write, and the form only warns before saving one that changes data.
 

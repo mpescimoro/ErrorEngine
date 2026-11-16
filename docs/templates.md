@@ -8,7 +8,7 @@ Set it per query in the **Email template** field:
 |-------------|---------------|
 | *(empty)* or `{default}` | `templates/email/default.html` |
 | `{custom}` | `templates/email/custom.html` (letters, digits, `-` and `_` only) |
-| HTML code | The HTML itself |
+| HTML code | The HTML itself, also when it starts and ends with Jinja code such as `{% if ... %}` |
 
 If a template cannot be used (missing file, syntax error), the email goes out with the default template.
 

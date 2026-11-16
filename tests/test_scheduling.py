@@ -1,6 +1,8 @@
 """
-Time windows: past midnight, the last slot of the window, the days of the week.
+Time windows: past midnight, the last slot of the window, the days of the week, a TIMEZONE
+that does not exist.
 """
+import logging
 import re
 from datetime import datetime, time as dtime, timedelta
 
@@ -60,3 +62,12 @@ class TestTimeWindows:
         assert 'id="noDaysModal"' in html and 'scheduleCheck.noDays()' in html
         # An empty value saved earlier shows every day, so it is not taken for "no days"
         assert re.search(r'name="schedule_days" id="schedule_days"\s+value="1,2,3,4,5,6,7"', html)
+
+
+def test_a_timezone_that_does_not_exist_warns_at_startup(caplog, monkeypatch):
+    import config
+    from app import create_app
+    monkeypatch.setattr(config.TestingConfig, 'TIMEZONE', 'Europe/Rom')
+    with caplog.at_level(logging.WARNING, logger='app'):
+        create_app('testing')
+    assert "TIMEZONE='Europe/Rom' is not a time zone" in caplog.text

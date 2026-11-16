@@ -13,6 +13,7 @@ import threading
 import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import formatdate, make_msgid, parseaddr
 from urllib.parse import quote
 import requests
 from contextlib import contextmanager
@@ -185,10 +186,9 @@ def resolve_template(template_field, strict=False):
     
     if template_field.startswith('{') and template_field.endswith('}'):
         template_name = template_field[1:-1].strip()
-        if template_name:
-            return load_email_template(template_name, strict)
-        else:
-            return load_email_template('default')
+        # {{ ... }}, {% ... %} and {# ... #} are Jinja: HTML that starts and ends with code, not a name
+        if not template_name.startswith(('{', '%', '#')):
+            return load_email_template(template_name or 'default', strict)
     
     return template_field
 
@@ -409,6 +409,9 @@ class EmailService:
         message['Subject'] = subject
         message['From'] = sender
         message['To'] = ', '.join(recipients)
+        # Not every server adds them, and spam filters count emails without them against the sender
+        message['Date'] = formatdate(localtime=True)
+        message['Message-ID'] = make_msgid(domain=parseaddr(sender)[1].rpartition('@')[2] or None)
         if text:
             message.attach(MIMEText(text, 'plain'))
         message.attach(MIMEText(html, 'html'))

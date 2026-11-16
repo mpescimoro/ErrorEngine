@@ -53,7 +53,7 @@
                             {% for key, label in drivers.items() %}
                             <option value="{{ key }}" 
                                     {{ 'selected' if connection and connection.db_type == key }}
-                                    data-port="{{ {'oracle': 1521, 'postgres': 5432, 'mysql': 3306, 'sqlserver': 1433, 'sqlite': ''}[key] }}">
+                                    data-port="{{ {'oracle': 1521, 'postgres': 5432, 'mysql': 3306, 'sqlserver': 1433, 'as400': 446, 'sqlite': ''}[key] }}">
                                 {{ label }}
                             </option>
                             {% endfor %}

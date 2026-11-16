@@ -24,7 +24,7 @@ The query shows **Failing** in the lists and the scheduler tries again every min
 
 ### What if a notification cannot be delivered?
 
-It is tried again after 1, 5, 15 and 60 minutes, only towards the recipients and channels that did not get it: 5 attempts in all (`NOTIFY_ATTEMPTS`). Then the error stays among the active ones and shows **Not delivered**, to whom and why; the errors page lists them with its filter, and the dashboard counts them.
+It is tried again after 1, 5, 15 and 60 minutes, only towards the recipients and channels that did not get it: 5 attempts in all (`NOTIFY_ATTEMPTS`; with more, the further ones come every 60 minutes). Then the error stays among the active ones and shows **Not delivered**, to whom and why; the errors page lists them with its filter, and the dashboard counts them.
 
 An address the mail server refuses counts as not reached too, with the server's reason, and gets the same attempts, also when the server takes the other addresses of the email. ErrorEngine sees only the refusals given while it sends: a refusal that comes back later, as an email to the sender, does not reach it. That is always the case with Microsoft 365, and with mail servers that check the addresses after taking the email: look in the sender's mailbox.
 

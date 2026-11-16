@@ -3,10 +3,12 @@ Pages: dashboard order and counters, tag filter, query detail, deleting a query,
 what a query form save keeps, empty values in the forms, Settings, statistics in local time.
 """
 import json
+import logging
 import re
 from datetime import timedelta
 from html.parser import HTMLParser
 from pathlib import Path
+from unittest.mock import patch
 
 from models import (db, MonitoredQuery, ErrorRecord, EmailLog, DatabaseConnection, RoutingRule,
                     NotificationChannel)
@@ -202,6 +204,21 @@ def save_form(client, query, **changes):
 
 
 class TestQueryFormSave:
+
+    def test_a_database_error_stays_in_the_log(self, app, client, caplog):
+        from sqlalchemy.exc import IntegrityError
+        query = make_query('Orders')
+        error = IntegrityError('UPDATE monitored_queries SET name=?', ('s3cret',), Exception('constraint failed'))
+        with patch.object(db.session, 'commit', side_effect=error), caplog.at_level(logging.ERROR):
+            html = save_form(client, query, name='Renamed').get_data(as_text=True)
+        assert 'Error while updating the query: the details are in the log' in html
+        assert 's3cret' not in html and 'UPDATE monitored_queries' not in html
+        assert 's3cret' in caplog.text
+
+    def test_our_own_checks_say_what_to_fix(self, app, client):
+        query = make_query('Orders', source_type='http')
+        html = save_form(client, query, source_headers='[1]').get_data(as_text=True)
+        assert 'Error while updating: Headers must be a JSON object' in html
 
     def test_disabled_connection_and_channel_are_kept(self, app, client):
         connection = DatabaseConnection(name='AS400 prod', db_type='sqlite', database=':memory:', is_active=False)

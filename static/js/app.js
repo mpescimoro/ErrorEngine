@@ -6,13 +6,16 @@
 // --- Utilities ---
 
 /**
- * Escape HTML to prevent XSS
+ * Text safe inside HTML, attribute values included: quotes too, or a value with " is cut short
  */
 function escapeHtml(text) {
     if (text === null || text === undefined) return '';
-    const div = document.createElement('div');
-    div.textContent = String(text);
-    return div.innerHTML;
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 /**
@@ -1063,108 +1066,6 @@ const nextCheckTimer = {
 };
 
 
-// --- Dashboard statistics ---
-
-const dashboardStats = {
-    async init() {
-        if (!document.getElementById('statErrorsToday')) return;
-        
-        await this.loadOverview();
-        await this.loadTimeline();
-    },
-    
-    async loadOverview() {
-        try {
-            const data = await api.get('/api/stats/overview');
-            
-            document.getElementById('statErrorsToday').textContent = data.errors_today;
-            document.getElementById('statErrorsWeek').textContent = data.errors_week;
-            document.getElementById('statErrorsActive').textContent = data.errors_active;
-            document.getElementById('statAvgResolution').textContent = 
-                data.avg_resolution_hours > 0 ? `${data.avg_resolution_hours}h` : '-';
-            
-            // Trend
-            const trendEl = document.getElementById('statTrend');
-            if (data.trend_percent !== 0) {
-                const icon = data.trend_direction === 'up' ? '↑' : '↓';
-                const color = data.trend_direction === 'up' ? 'text-danger' : 'text-success';
-                trendEl.innerHTML = `<span class="${color}">${icon} ${Math.abs(data.trend_percent)}%</span>`;
-            } else {
-                trendEl.innerHTML = '<span class="text-muted">= unchanged</span>';
-            }
-            
-            // Top queries
-            const topEl = document.getElementById('topQueries');
-            if (data.top_queries.length > 0) {
-                let html = '<div class="table-container"><table class="table"><tbody>';
-                data.top_queries.forEach((q, i) => {
-                    const barWidth = (q.count / data.top_queries[0].count) * 100;
-                    html += `
-                        <tr>
-                            <td style="width: 40px;" class="text-muted">#${i + 1}</td>
-                            <td>
-                                <a href="/queries/${q.id}">${escapeHtml(q.name)}</a>
-                                <div class="mt-xs" style="background: var(--gray-200); height: 4px; border-radius: 2px;">
-                                    <div style="background: var(--primary); height: 100%; width: ${barWidth}%; border-radius: 2px;"></div>
-                                </div>
-                            </td>
-                            <td style="width: 60px;" class="text-right">
-                                <span class="badge badge-danger">${q.count}</span>
-                            </td>
-                        </tr>
-                    `;
-                });
-                html += '</tbody></table></div>';
-                topEl.innerHTML = html;
-            } else {
-                topEl.innerHTML = '<p class="text-muted text-center">No errors in the last 30 days</p>';
-            }
-            
-        } catch (error) {
-            console.error('Error loading stats:', error);
-        }
-    },
-    
-    async loadTimeline() {
-        const container = document.getElementById('errorChart');
-        if (!container) return;
-        
-        try {
-            const data = await api.get('/api/stats/timeline?days=14');
-            
-            if (data.length === 0 || data.every(d => d.count === 0)) {
-                container.innerHTML = '<p class="text-muted text-center">No data available</p>';
-                return;
-            }
-            
-            // Simple chart with CSS bars (no external libraries)
-            const maxCount = Math.max(...data.map(d => d.count), 1);
-            
-            let html = '<div class="flex items-end gap-xs" style="height: 180px;">';
-            data.forEach(d => {
-                const height = (d.count / maxCount) * 160;
-                const heightPx = Math.max(height, d.count > 0 ? 4 : 0);
-                html += `
-                    <div class="flex-1 flex flex-col items-center">
-                        <div class="text-xs text-muted mb-xs">${d.count > 0 ? d.count : ''}</div>
-                        <div style="width: 100%; height: ${heightPx}px; background: var(--primary); border-radius: 2px 2px 0 0;" 
-                             title="${d.label}: ${d.count} errors"></div>
-                        <div class="text-xs text-muted mt-xs">${d.label}</div>
-                    </div>
-                `;
-            });
-            html += '</div>';
-            
-            container.innerHTML = html;
-            
-        } catch (error) {
-            console.error('Error loading timeline:', error);
-            container.innerHTML = '<p class="text-danger text-center">Failed to load data</p>';
-        }
-    }
-};
-
-
 // --- Expandable error details ---
 
 const errorExpander = {
@@ -1405,7 +1306,6 @@ document.addEventListener('DOMContentLoaded', () => {
     dayPicker.init();
     sourceToggle.init();
     settingsPage.init();
-	dashboardStats.init();
     
     // Setup form validation on forms with data-validate
     document.querySelectorAll('form[data-validate]').forEach(form => {

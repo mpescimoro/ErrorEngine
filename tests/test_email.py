@@ -129,6 +129,13 @@ class TestSmtp:
         result, smtp, _ = self.send(app, MAIL_SECURITY='tls')
         assert not result['success'] and 'starttls, ssl or none' in result['message']
 
+    def test_date_and_message_id(self, app):
+        from email.utils import parsedate_to_datetime
+        result, _, smtp_ssl = self.send(app, MAIL_DEFAULT_SENDER='alerts@x.it')
+        message = email.message_from_string(smtp_ssl.return_value.sendmail.call_args.args[2])
+        assert result['success'] and parsedate_to_datetime(message['Date']).tzinfo is not None
+        assert message['Message-ID'].endswith('@x.it>')
+
     def test_sender_falls_back_to_the_user_name(self, app):
         result, _, smtp_ssl = self.send(app, MAIL_DEFAULT_SENDER='', MAIL_USERNAME='alerts@x.it')
         assert result['success'] and smtp_ssl.return_value.sendmail.call_args.args[0] == 'alerts@x.it'
@@ -544,6 +551,11 @@ class TestEmailTemplate:
         assert 'Sign in' not in html   # text of templates/login.html
         assert 'E-1' in html                # default template
 
+    def test_inline_template_that_starts_and_ends_with_jinja(self, app):
+        query = make_query(email_template="{% for e in errors %}<p>Row {{ e['ID'] }}</p>{% endfor %}")
+        result, html = send_notification(query)
+        assert result['success'] is True and '<p>Row E-1</p>' in html
+
     def test_custom_template_works_and_data_is_escaped(self, app):
         query = make_query(email_template=(
             "<h1>{{ query_name }}</h1>"
@@ -569,7 +581,7 @@ def send_sample(client, **form):
     from email_service import email_service
     form.setdefault('recipients', 'me@x.it')
     form.setdefault('name', 'Draft')
-    with patch.object(email_service, '_deliver') as deliver:
+    with patch.object(email_service, '_deliver', return_value={}) as deliver:
         answer = client.post('/api/test/sample-email', json=form)
     return answer, deliver
 
@@ -612,6 +624,10 @@ class TestSampleEmail:
         assert result['success'] is False and 'template' in result['message']
         assert 'default template' in result['message']
         assert not deliver.called
+
+    def test_inline_template_in_braces_is_not_a_name(self, app, client):
+        answer, deliver = send_sample(client, email_template='{{ query_name }}: {{ error_count }}')
+        assert answer.get_json()['success'] is True and deliver.call_args.args[2] == 'Draft: 1'
 
     def test_missing_template_file_reported(self, app, client):
         answer, deliver = send_sample(client, email_template='{no_such_template}')

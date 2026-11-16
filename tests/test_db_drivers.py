@@ -1,12 +1,15 @@
 """
-Database drivers: connections closed through the driver, the IBM i JVM started once,
-big DECIMAL values kept exact.
+Database drivers: connections closed through the driver, the default port for a connection
+saved without one, the IBM i JVM started once, big DECIMAL values kept exact.
 """
+import re
 import sys
 import threading
 import time
 import types
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from models import db, DatabaseConnection
 
@@ -51,6 +54,38 @@ class TestConnectionClosing:
         with patch.object(DatabaseConnection, 'get_driver', return_value=driver):
             data = client.post(f'/api/connections/{connection.id}/test-query', json={'sql': 'SELECT 1'}).get_json()
         assert data['valid'] is True and len(driver.closed) == 1
+
+
+class TestPortLeftEmpty:
+    """A connection saved without a port uses the driver's default, as the test in the form does."""
+
+    def connection(self, db_type, port=None):
+        return DatabaseConnection(name='ERP', db_type=db_type, host='db', port=port, database='X3',
+                                  username='u', password='p')
+
+    def test_oracle(self, app):
+        pytest.importorskip('oracledb')
+        with patch('db_drivers.oracle.oracledb.connect') as connect:
+            assert self.connection('oracle').test_connection()['status'] == 'ok'
+        assert connect.call_args.kwargs['dsn'] == 'db:1521/X3'
+
+    def test_as400(self, app):
+        pytest.importorskip('ibm_db')
+        with patch('db_drivers.as400.ibm_db') as ibm_db:
+            assert self.connection('as400').test_connection()['status'] == 'ok'
+        # 446: the DRDA port of IBM i, what this driver connects to through DB2 Connect
+        assert 'PORT=446;' in ibm_db.connect.call_args.args[0]
+
+    def test_a_port_given_is_kept(self, app):
+        pytest.importorskip('oracledb')
+        with patch('db_drivers.oracle.oracledb.connect') as connect:
+            self.connection('oracle', port=1600).test_connection()
+        assert connect.call_args.kwargs['dsn'] == 'db:1600/X3'
+
+    def test_the_form_shows_it(self, app, client):
+        pytest.importorskip('ibm_db')
+        html = client.get('/connections/new').get_data(as_text=True)
+        assert re.search(r'value="as400"[^>]*data-port="446"', html)
 
 
 def test_jvm_started_once_with_threads_in_parallel(monkeypatch):

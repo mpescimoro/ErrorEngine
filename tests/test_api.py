@@ -2,7 +2,10 @@
 Tests for the API routes.
 """
 import json
+from datetime import timedelta
 
+from models import db, ErrorRecord
+from utils import get_utc_now
 from version import __version__
 
 
@@ -171,6 +174,21 @@ class TestErrorsAPI:
         """Resolving an error that does not exist."""
         response = client.post('/api/errors/99999/resolve')
         assert response.status_code == 404
+
+    def test_resolving_again_keeps_when_it_was_resolved(self, app, client, sample_query):
+        resolved_at = get_utc_now() - timedelta(days=2)
+        error = ErrorRecord(query_id=sample_query.id, error_hash='h1', error_data='{"ID": 1}',
+                            resolved_at=resolved_at)
+        db.session.add(error)
+        db.session.commit()
+        response = client.post(f'/api/errors/{error.id}/resolve')
+        assert response.status_code == 200 and response.get_json()['resolved_at'] == resolved_at.isoformat()
+        db.session.expire_all()
+        assert db.session.get(ErrorRecord, error.id).resolved_at == resolved_at
+
+    def test_routing_rule_with_a_body_of_the_wrong_shape(self, app, client, sample_query):
+        response = client.post(f'/api/queries/{sample_query.id}/routing/rules', json=['ops@x.it'])
+        assert response.status_code == 400 and response.get_json()['success'] is False
 
 
 class TestStatsAPI:

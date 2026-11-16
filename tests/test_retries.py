@@ -547,6 +547,13 @@ class TestQueryEveryFiveMinutes:
         assert not error.notify_pending and error.notify_attempts == 5
         assert error.get_undeliverable()['recipients'] == ['ops@x.it'] and error.resolved_at is None
 
+    def test_attempts_beyond_the_fifth_come_every_hour(self, file_app, scheduler_pool):
+        file_app.config['NOTIFY_ATTEMPTS'] = 7
+        query, events = five_minute_query(230, errors_from={1: 0}, server_up_from=999,
+                                          app=file_app, pool=scheduler_pool)
+        assert [e[0] for e in events if e[1] == 'failed'] == [0, 1, 6, 21, 81, 141, 201]
+        assert records(query)[1].notify_attempts == 7
+
 
 REFUSED = {'bad@x.it': (550, b'5.1.1 User unknown')}
 

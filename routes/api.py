@@ -284,8 +284,10 @@ def api_errors_summary():
 def api_resolve_error(error_id):
     """API: Marks an error as resolved manually."""
     error = ErrorRecord.query.get_or_404(error_id)
-    error.resolved_at = get_utc_now()
-    db.session.commit()
+    # Already resolved: it keeps its time, which the cleanup of resolved errors counts from
+    if error.resolved_at is None:
+        error.resolved_at = get_utc_now()
+        db.session.commit()
     
     return jsonify({
         'id': error.id,

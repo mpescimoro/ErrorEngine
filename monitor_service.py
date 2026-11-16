@@ -10,7 +10,7 @@ from utils import get_utc_now, format_local, redact_secrets
 import time
 from collections import defaultdict
 from models import db, MonitoredQuery, ErrorRecord, QueryLog
-from data_sources import execute_query_source, test_query_source
+from data_sources import execute_query_source
 from routing_service import apply_routing_rules
 from email_service import email_service
 
@@ -920,14 +920,6 @@ class MonitorService:
             'reminder_count': e.reminder_count,
             'last_reminder_at': e.last_reminder_at
         } for e in errors]
-    
-    def test_query_connection(self, query_id: int) -> dict:
-        """Tests the connection/query of a query."""
-        query = MonitoredQuery.query.get(query_id)
-        if not query:
-            return {'success': False, 'message': 'Query not found'}
-        
-        return test_query_source(query)
     
     def get_query_available_fields(self, query_id: int) -> list:
         """

@@ -1,6 +1,7 @@
 """
 Web routes — HTML pages and form handling.
 """
+import logging
 from flask import Blueprint, render_template, request, redirect, url_for, flash
 from datetime import time
 from db_drivers import get_available_drivers, DRIVER_LABELS
@@ -12,6 +13,7 @@ from email_service import email_service, subject_warning
 
 import json
 
+logger = logging.getLogger(__name__)
 main_bp = Blueprint('main', __name__)
 
 
@@ -39,13 +41,6 @@ def parse_time(time_str):
         return time(int(parts[0]), int(parts[1]))
     except (ValueError, IndexError):
         return None
-
-
-def format_time(t):
-    """Formats a time object as an HH:MM string."""
-    if not t:
-        return ''
-    return t.strftime('%H:%M')
 
 
 def form_choices(query=None) -> tuple:
@@ -85,6 +80,19 @@ def http_source_config(form, saved: dict) -> dict:
             raise ValueError('Headers must be a JSON object, e.g. {"Accept": "application/json"}')
         config['headers'] = headers
     return config
+
+
+def report_failure(action: str, error: Exception):
+    """
+    A query not saved or not deleted. Our own checks (ValueError) say on screen what to fix;
+    anything else, such as a database error with its SQL and values, goes only in the log.
+    """
+    db.session.rollback()
+    if isinstance(error, ValueError):
+        flash(f'Error while {action}: {error}', 'danger')
+    else:
+        logger.error(f"Query form: error while {action}", exc_info=error)
+        flash(f'Error while {action} the query: the details are in the log', 'danger')
 
 
 def warn_about_the_subject(query):
@@ -247,8 +255,7 @@ def query_create():
             warn_about_the_subject(query)
             return redirect(url_for('main.query_detail', query_id=query.id))
         except Exception as e:
-            db.session.rollback()
-            flash(f'Error while creating: {str(e)}', 'danger')
+            report_failure('creating', e)
     
     connections, channels = form_choices()
     return render_template('query_form.html', query=None, operators=get_operators_list(),
@@ -349,8 +356,7 @@ def query_edit(query_id):
             warn_about_the_subject(query)
             return redirect(url_for('main.query_detail', query_id=query.id))
         except Exception as e:
-            db.session.rollback()
-            flash(f'Error while updating: {str(e)}', 'danger')
+            report_failure('updating', e)
     
     connections, channels = form_choices(query)
     return render_template('query_form.html', query=query, action='edit', operators=get_operators_list(),
@@ -371,8 +377,7 @@ def query_delete(query_id):
         db.session.commit()
         flash(f'Query "{name}" deleted.', 'success')
     except Exception as e:
-        db.session.rollback()
-        flash(f'Error while deleting: {str(e)}', 'danger')
+        report_failure('deleting', e)
     
     return redirect(url_for('main.queries_list'))
 

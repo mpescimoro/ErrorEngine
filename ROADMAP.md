@@ -2,20 +2,6 @@
 
 Planned work, in order. Released versions are in [CHANGELOG.md](CHANGELOG.md).
 
-## v2.4.1 — Small fixes
-
-- [ ] The threads of the web server set in `.env` (now always the 4 Waitress starts with)
-- [ ] Connections saved without a port use the driver's default, as the connection test does (Oracle and AS/400 do not connect)
-- [ ] Values with quotes kept whole in the routing rule window
-- [ ] An inline email template that starts with `{` and ends with `}` no longer taken for a template name
-- [ ] `Date` and `Message-ID` headers in the emails sent through SMTP
-- [ ] Messages on screen in plain words, with the details (SQL, parameters) only in the log
-- [ ] A `TIMEZONE` that does not exist reported at startup, instead of becoming UTC without a word
-- [ ] Resolving an error already resolved changes nothing
-- [ ] An HTTP source that returns plain values instead of objects says so
-- [ ] Routing rules with an operator that does not exist refused
-- [ ] Unused code removed
-
 ## v2.5 — Security
 
 - [ ] Server-side validation and CSRF protection on every form, the `Origin` checked on the requests that change something; after a failed save the form keeps what was typed

@@ -79,6 +79,8 @@ class DatabaseDriver(ABC):
 
     def open(self, host: str, port: int, database: str, username: str, password: str):
         """connect() with a guaranteed time limit for the whole connection phase."""
+        # A connection saved without a port uses the driver's, as the test in the form does
+        port = port or self.default_port
         if not self.connect_timeout:
             return self.connect(host, port, database, username, password)
         return call_with_deadline(

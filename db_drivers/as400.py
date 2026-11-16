@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 class AS400Driver(DatabaseDriver):
     name = "as400"
-    default_port = 50000
+    default_port = 446   # DRDA on IBM i
 
     def connect(self, host: str, port: int, database: str, username: str, password: str):
         """Creates and returns an ibm_db connection."""
