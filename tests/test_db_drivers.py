@@ -67,23 +67,16 @@ class TestPortLeftEmpty:
         pytest.importorskip('oracledb')
         with patch('db_drivers.oracle.oracledb.connect') as connect:
             assert self.connection('oracle').test_connection()['status'] == 'ok'
-        assert connect.call_args.kwargs['dsn'] == 'db:1521/X3'
+            assert connect.call_args.kwargs['dsn'] == 'db:1521/X3'
+            self.connection('oracle', port=1600).test_connection()   # a port given is kept
+            assert connect.call_args.kwargs['dsn'] == 'db:1600/X3'
 
-    def test_as400(self, app):
+    def test_as400_and_its_form(self, app, client):
         pytest.importorskip('ibm_db')
         with patch('db_drivers.as400.ibm_db') as ibm_db:
             assert self.connection('as400').test_connection()['status'] == 'ok'
         # 446: the DRDA port of IBM i, what this driver connects to through DB2 Connect
         assert 'PORT=446;' in ibm_db.connect.call_args.args[0]
-
-    def test_a_port_given_is_kept(self, app):
-        pytest.importorskip('oracledb')
-        with patch('db_drivers.oracle.oracledb.connect') as connect:
-            self.connection('oracle', port=1600).test_connection()
-        assert connect.call_args.kwargs['dsn'] == 'db:1600/X3'
-
-    def test_the_form_shows_it(self, app, client):
-        pytest.importorskip('ibm_db')
         html = client.get('/connections/new').get_data(as_text=True)
         assert re.search(r'value="as400"[^>]*data-port="446"', html)
 

@@ -215,11 +215,6 @@ class TestQueryFormSave:
         assert 's3cret' not in html and 'UPDATE monitored_queries' not in html
         assert 's3cret' in caplog.text
 
-    def test_our_own_checks_say_what_to_fix(self, app, client):
-        query = make_query('Orders', source_type='http')
-        html = save_form(client, query, source_headers='[1]').get_data(as_text=True)
-        assert 'Error while updating: Headers must be a JSON object' in html
-
     def test_disabled_connection_and_channel_are_kept(self, app, client):
         connection = DatabaseConnection(name='AS400 prod', db_type='sqlite', database=':memory:', is_active=False)
         channel = NotificationChannel(name='Teams IT', channel_type='teams', config='{}', is_active=False)
@@ -263,7 +258,8 @@ class TestQueryFormSave:
         query.set_source_config({'url': 'https://api.x.it/errors'})
         db.session.commit()
         html = save_form(client, query, source_headers='{not json').get_data(as_text=True)
-        assert 'Headers' in html and 'JSON' in html
+        # Our own check: its words on screen, unlike a database error (only in the log)
+        assert 'Error while updating: Headers must be a JSON object' in html
         db.session.refresh(query)
         assert not query.get_source_config().get('headers')
 
@@ -381,6 +377,27 @@ class TestStatisticsLocalTime:
         row = client.get('/api/stats/all-queries?days=30').get_json()[0]
         assert row['last_error'] == format_local(first_seen, '%d/%m/%y %H:%M')
         assert row['last_error'] != first_seen.strftime('%d/%m/%y %H:%M')     # Rome is never UTC
+
+
+class TestStatisticsOfOneQuery:
+    """Errors over time of one query: chosen on the page, or opened from the query page."""
+
+    def test_timeline_of_one_query(self, app, client):
+        orders, stock = make_query('Orders'), make_query('Stock')
+        add_errors(orders, 2)
+        add_errors(stock, 3)
+        one = client.get(f'/api/stats/timeline?days=7&query_id={orders.id}').get_json()
+        every = client.get('/api/stats/timeline?days=7').get_json()
+        assert sum(day['count'] for day in one) == 2 and sum(day['count'] for day in every) == 5
+
+    def test_the_page_opens_on_the_query_asked_and_the_query_page_asks(self, app, client):
+        orders, stock = make_query('Orders'), make_query('Stock')
+        html = client.get(f'/stats?query_id={stock.id}').get_data(as_text=True)
+        assert re.search(r'<option value="">All queries</option>', html)
+        assert re.search(rf'<option value="{orders.id}"\s*>Orders</option>', html)
+        assert re.search(rf'<option value="{stock.id}"\s+selected>Stock</option>', html)
+        html = client.get(f'/queries/{stock.id}').get_data(as_text=True)
+        assert """href="/stats?query_id=' + queryId""" in html
 
 
 # --- Scripts and styles, checked in their source ---

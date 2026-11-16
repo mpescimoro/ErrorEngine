@@ -104,13 +104,11 @@ class TestValidateRoutingRule:
             {'field_name': 'CODE', 'operator': 'regex', 'value': '([a-z'}]})
         assert not ok and 'regular expression' in message
 
-    def test_unknown_operator_is_refused(self):
-        # Saved, it would never match
+    def test_unknown_operator_and_wrong_shape_are_refused(self):
+        # An unknown operator, saved, would never match
         ok, message = validate_routing_rule({'recipients': 'a@x.it', 'conditions': [
             {'field_name': 'CODE', 'operator': 'equal', 'value': 'X'}]})
         assert not ok and "unknown operator 'equal'" in message
-
-    def test_body_of_the_wrong_shape_is_refused(self):
         for data in (['a@x.it'], {'recipients': ['a@x.it']}, {'recipients': 'a@x.it', 'conditions': 'CODE'},
                      {'recipients': 'a@x.it', 'conditions': ['CODE']}):
             ok, message = validate_routing_rule(data)

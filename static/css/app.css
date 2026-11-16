@@ -341,6 +341,17 @@ h4 { font-size: 1.125rem; }
     color: var(--color-primary);
 }
 
+/* A menu in a card header no taller than the title: cards side by side keep their lines aligned */
+.card-header .form-select {
+    width: auto;
+    max-width: 50%;
+    padding-top: 0.125rem;
+    padding-bottom: 0.125rem;
+    margin: -0.25rem 0;
+    font-size: 0.875rem;
+    font-weight: normal;
+}
+
 .card-body {
     padding: var(--space-lg);
 }
@@ -834,6 +845,16 @@ textarea.form-control {
 
 .table tbody tr:hover {
     background: var(--color-border-light);
+}
+
+/* Rows that choose what another part of the page shows, e.g. the query in the statistics chart */
+.table tbody tr.row-selectable {
+    cursor: pointer;
+}
+
+.table tbody tr.row-selected,
+.table tbody tr.row-selected:hover {
+    background: var(--color-primary-subtle);
 }
 
 .table tbody tr:last-child td {

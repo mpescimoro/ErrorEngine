@@ -3,7 +3,6 @@ Main monitoring service.
 Runs the queries periodically, with conditional routing and reminders.
 """
 import logging
-import os
 from datetime import timedelta
 from flask import current_app
 from utils import get_utc_now, format_local, redact_secrets
@@ -34,11 +33,6 @@ class MonitorService:
         """Initializes the Flask extension."""
         self.app = app
         app.extensions['monitor'] = self
-        if os.environ.get('NOTIFY_RETRY_HOURS'):
-            # Otherwise a setting of an older .env would be ignored without a word
-            logger.warning("NOTIFY_RETRY_HOURS is no longer used: a notification that cannot be delivered "
-                           "gets NOTIFY_ATTEMPTS attempts (5 by default), then it is shown as not delivered. "
-                           "Remove it from .env")
     
     def check_query(self, query: MonitoredQuery, force: bool = False) -> dict:
         """

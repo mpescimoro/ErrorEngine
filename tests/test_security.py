@@ -6,7 +6,6 @@ import ast
 import io
 import json
 import logging
-import os
 import re
 import shutil
 import subprocess
@@ -200,12 +199,30 @@ class TestStartup:
         assert 'python serve.py' in content
         assert 'app.py' not in content
 
-    @pytest.mark.parametrize('value, threads', [('', 4), ('12', 12), ('0', 1)])
-    def test_server_threads_from_env(self, value, threads):
-        env = dict(os.environ, ERRORENGINE_THREADS=value)   # empty: the default, whatever .env says
-        out = subprocess.run([sys.executable, '-c', 'import serve; print(serve.server_threads())'],
-                             cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
-        assert out.stdout.strip().splitlines()[-1] == str(threads), out.stderr
+    def test_settings_that_do_not_work_are_named_at_startup(self, caplog, monkeypatch):
+        import config
+        from app import create_app
+        warnings = ("is not a time zone", "MAIL_USE_TLS is no longer used", "NOTIFY_RETRY_HOURS is no longer used")
+        for name in ('MAIL_USE_TLS', 'NOTIFY_RETRY_HOURS'):
+            monkeypatch.delenv(name, raising=False)
+        with caplog.at_level(logging.WARNING, logger='app'):
+            create_app('testing')
+        assert not any(w in caplog.text for w in warnings)
+        monkeypatch.setattr(config.TestingConfig, 'TIMEZONE', 'Europe/Rom')
+        monkeypatch.setenv('MAIL_USE_TLS', 'true')
+        monkeypatch.setenv('NOTIFY_RETRY_HOURS', '24')
+        with caplog.at_level(logging.WARNING, logger='app'):
+            create_app('testing')
+        assert all(w in caplog.text for w in warnings)
+
+    def test_server_threads_from_env(self):
+        # serve.py reads .env when imported: a process of its own, and the value set after the import
+        code = ('import os, serve\n'
+                'for value in ("", "12", "0"):\n'
+                '    os.environ["ERRORENGINE_THREADS"] = value\n'
+                '    print(serve.server_threads())')
+        out = subprocess.run([sys.executable, '-c', code], cwd=ROOT, capture_output=True, text=True, timeout=60)
+        assert out.stdout.split()[-3:] == ['4', '12', '1'], out.stderr
 
     def test_waitress_on_every_platform_and_no_gunicorn(self):
         lines = [l.strip() for l in (ROOT / 'requirements.txt').read_text(encoding='utf-8').splitlines()

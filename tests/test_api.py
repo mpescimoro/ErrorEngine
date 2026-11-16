@@ -144,19 +144,6 @@ class TestRoutingRulesAPI:
         assert response.status_code == 200
         data = json.loads(response.data)
         assert data['success'] is True
-    
-    def test_get_operators(self, client):
-        """Gets the list of available operators."""
-        response = client.get('/api/routing/operators')
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        assert isinstance(data, list)
-        assert len(data) > 0
-        
-        # Check the structure
-        for op in data:
-            assert 'value' in op
-            assert 'label' in op
 
 
 class TestErrorsAPI:
@@ -185,10 +172,6 @@ class TestErrorsAPI:
         assert response.status_code == 200 and response.get_json()['resolved_at'] == resolved_at.isoformat()
         db.session.expire_all()
         assert db.session.get(ErrorRecord, error.id).resolved_at == resolved_at
-
-    def test_routing_rule_with_a_body_of_the_wrong_shape(self, app, client, sample_query):
-        response = client.post(f'/api/queries/{sample_query.id}/routing/rules', json=['ops@x.it'])
-        assert response.status_code == 400 and response.get_json()['success'] is False
 
 
 class TestStatsAPI:

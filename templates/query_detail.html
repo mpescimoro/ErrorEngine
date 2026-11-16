@@ -549,7 +549,7 @@
             html += '</div></div>';
 
             // Link to the full statistics
-            html += '<a href="/stats" class="btn btn-ghost btn-sm w-full mt-md">' +
+            html += '<a href="/stats?query_id=' + queryId + '" class="btn btn-ghost btn-sm w-full mt-md">' +
                 'Full statistics <i class="bi bi-arrow-right"></i></a>';
             
             container.innerHTML = html;

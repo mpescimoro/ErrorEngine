@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+**Added**
+- Statistics: **Errors over time** of one query, chosen in the menu above the chart or with a click on its row in **Details by query**; **Full statistics** on the query page opens on that query. `/api/stats/timeline` takes `query_id`
+
+**Changed**
+- `MAIL_USE_TLS` is no longer read: `MAIL_SECURITY` replaced it in 2.3.0. Still in `.env`, it gets a warning at startup, as `NOTIFY_RETRY_HOURS` does
+- API: `/api/tags` and `/api/routing/operators` removed, no page called them. The tags of the queries and the operators of the routing rules work as before
+- Unused code removed: two date functions of the page scripts, a fallback for Python versions older than the supported ones
+- Tests that repeated the same setup merged, duplicates removed
+
 ## 2.4.1
 
 **Added**

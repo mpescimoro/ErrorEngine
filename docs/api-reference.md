@@ -13,7 +13,7 @@ All endpoints return JSON and need a login: the browser session, or for scripts 
 | GET | `/api/errors` | Active errors (`?query_id=` for one query) |
 | POST | `/api/errors/{id}/resolve` | Mark an error as resolved; one already resolved keeps its time |
 | GET | `/api/stats/overview?days=7` | Error statistics |
-| GET | `/api/stats/timeline?days=14` | Errors per day, today included |
+| GET | `/api/stats/timeline?days=14` | Errors per day, today included (`&query_id=` for one query) |
 | GET | `/api/scheduler/next` | Next scheduled check |
 | GET | `/api/connections` | Active database connections |
 | POST | `/api/connections/{id}/test` | Test a connection |

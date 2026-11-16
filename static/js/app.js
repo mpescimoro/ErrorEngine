@@ -31,46 +31,6 @@ document.addEventListener('submit', (event) => {
 });
 
 /**
- * Format date for display
- */
-function formatDate(dateStr, format = 'short') {
-    if (!dateStr) return '-';
-    const date = new Date(dateStr);
-    if (isNaN(date.getTime())) return dateStr;
-    
-    if (format === 'short') {
-        return date.toLocaleDateString('en-GB', { 
-            day: '2-digit', 
-            month: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit'
-        });
-    }
-    
-    return date.toLocaleString('en-GB');
-}
-
-/**
- * Format relative time (e.g., "2 minutes ago")
- */
-function formatRelativeTime(dateStr) {
-    if (!dateStr) return '-';
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diffMs = now - date;
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMins / 60);
-    const diffDays = Math.floor(diffHours / 24);
-    
-    if (diffMins < 1) return 'Just now';
-    if (diffMins < 60) return `${diffMins} min ago`;
-    if (diffHours < 24) return `${diffHours} h ago`;
-    if (diffDays < 7) return `${diffDays} days ago`;
-    
-    return formatDate(dateStr, 'short');
-}
-
-/**
  * Debounce function
  */
 function debounce(func, wait) {
@@ -1333,5 +1293,3 @@ window.testConnections = testConnections;
 window.errorExpander = errorExpander;
 window.settingsPage = settingsPage;
 window.escapeHtml = escapeHtml;
-window.formatDate = formatDate;
-window.formatRelativeTime = formatRelativeTime;

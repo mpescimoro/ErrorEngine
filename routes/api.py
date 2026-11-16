@@ -12,7 +12,7 @@ from email_service import email_service
 from monitor_service import monitor_service
 from notification_service import notification_service
 from cleanup_service import cleanup_service
-from routing_service import get_operators_list, apply_routing_rules, get_routing_summary
+from routing_service import apply_routing_rules, get_routing_summary
 from data_sources import test_query_source
 from validators import validate_email_list, validate_routing_rule, sanitize_string, write_statement_keyword
 from utils import (get_utc_now, get_local_now, format_local, local_day_start_utc, utc_to_local,
@@ -258,12 +258,6 @@ def api_test_routing(query_id):
     })
 
 
-@api_bp.route('/routing/operators', methods=['GET'])
-def api_get_operators():
-    """API: List of the operators available for the conditions."""
-    return jsonify(get_operators_list())
-
-
 # --- Errors ---
 
 @api_bp.route('/errors', methods=['GET'])
@@ -394,17 +388,6 @@ def api_channel_test(channel_id):
     return jsonify(result)
 
 
-# --- Tags ---
-
-@api_bp.route('/tags', methods=['GET'])
-def api_tags_list():
-    """List of existing tags, for autocomplete."""
-    all_tags = set()
-    for q in MonitoredQuery.query.all():
-        all_tags.update(q.get_tags_list())
-    return jsonify(sorted(all_tags))
-
-
 # --- Statistics ---
 
 @api_bp.route('/stats/overview', methods=['GET'])
@@ -487,9 +470,9 @@ def api_stats_overview():
 
 @api_bp.route('/stats/timeline', methods=['GET'])
 def api_stats_timeline():
-    """Errors per day, for the chart: the last N local days, today included."""
+    """Errors per day, for the chart: the last N local days, today included; ?query_id= for one query."""
     days = max(1, request.args.get('days', 14, type=int))
-    stats_dict = errors_per_local_day(days)
+    stats_dict = errors_per_local_day(days, request.args.get('query_id', type=int))
     first_day = get_local_now().date() - timedelta(days=days - 1)
 
     timeline = []

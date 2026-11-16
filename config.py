@@ -10,18 +10,20 @@ DEFAULT_SECRET_KEY = 'secret-key-to-change-in-production'
 INSECURE_SECRET_KEYS = {DEFAULT_SECRET_KEY, 'chiave-segreta-da-cambiare-in-produzione',
                         'change-this-to-a-random-string'}
 
+# Settings of older versions, no longer read, and what took their place: still in an .env,
+# they get a warning at startup instead of being ignored without a word
+RETIRED_SETTINGS = {
+    'MAIL_USE_TLS': 'MAIL_SECURITY says starttls, ssl or none (without it: ssl on port 465, starttls on the others)',
+    'NOTIFY_RETRY_HOURS': 'a notification that cannot be delivered gets NOTIFY_ATTEMPTS attempts (5 by default), '
+                          'then it is shown as not delivered',
+}
+
 
 def _mail_security():
-    """
-    starttls, ssl or none. Without MAIL_SECURITY: MAIL_USE_TLS of older .env files
-    (true: starttls, false: ssl), otherwise ssl on port 465 and starttls on the others.
-    """
+    """starttls, ssl or none; without MAIL_SECURITY, ssl on port 465 and starttls on the others."""
     value = (os.environ.get('MAIL_SECURITY') or '').strip().lower()
     if value:
         return value
-    legacy = (os.environ.get('MAIL_USE_TLS') or '').strip().lower()
-    if legacy:
-        return 'starttls' if legacy == 'true' else 'ssl'
     return 'ssl' if (os.environ.get('MAIL_PORT') or '').strip() == '465' else 'starttls'
 
 

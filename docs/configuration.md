@@ -22,7 +22,6 @@ Settings live in `.env` in the project folder: copy `.env.example`, which has th
 | `MAIL_DEFAULT_SENDER` | `MAIL_USERNAME` | Address the emails are sent from |
 | `M365_TENANT_ID`, `M365_CLIENT_ID` | — | Microsoft 365 through Graph: directory (tenant) ID and application (client) ID, see [Microsoft 365](#microsoft-365) |
 | `M365_CLIENT_SECRET` | — | Client secret of that application |
-| `MAIL_USE_TLS` | — | Older setting, still read when `MAIL_SECURITY` is not set: `true` means `starttls`, `false` means `ssl` |
 | `MAIL_TIMEOUT_SECONDS` | `30` | Maximum wait for the email server |
 | `MAIL_CA_FILE` | — | CA, or certificate, of an internal SMTP server (PEM). The certificate is always checked |
 | `DB_CONNECT_TIMEOUT_SECONDS` | `15` | Maximum wait to connect to a monitored database |
@@ -36,6 +35,8 @@ Settings live in `.env` in the project folder: copy `.env.example`, which has th
 | `EMAIL_LOG_RETENTION_DAYS` | `90` | Days email logs are kept |
 | `RESOLVED_ERRORS_RETENTION_DAYS` | `60` | Days resolved errors are kept |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR` |
+
+Settings of older versions are no longer read: `MAIL_USE_TLS` (now `MAIL_SECURITY`) and `NOTIFY_RETRY_HOURS` (now `NOTIFY_ATTEMPTS`). If they are still in `.env`, the log says so at startup: remove them.
 
 ## Sign-in
 

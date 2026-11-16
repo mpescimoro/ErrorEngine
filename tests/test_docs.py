@@ -6,6 +6,7 @@ import ast
 import re
 from pathlib import Path
 
+from config import RETIRED_SETTINGS
 from version import __version__
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -16,8 +17,6 @@ CONFIGURATION = (ROOT / 'docs' / 'configuration.md').read_text(encoding='utf-8')
 NOT_DOCUMENTED = {'DATABASE_URL', 'FLASK_ENV', 'FLASK_DEBUG', 'PATH', 'EE_SECRET_MARKER'}
 # Only for scripts/check_ibmi.py, documented in docs/ibmi-driver.md
 IBMI_SCRIPT = {'IBMI_HOST', 'IBMI_USER', 'IBMI_PASSWORD', 'IBMI_LIBRARY'}
-# Read only to warn at startup that they are no longer used (the changelog says what replaces them)
-NO_LONGER_USED = {'NOTIFY_RETRY_HOURS'}
 
 
 def variables_read_by_the_code():
@@ -35,12 +34,15 @@ def test_every_setting_is_documented():
     documented = {name for pair in documented for name in pair if name}
     example_text = (ROOT / '.env.example').read_text(encoding='utf-8')
     example = set(re.findall(r'^#? ?([A-Z_]{3,})=', example_text, re.M))
-    code = variables_read_by_the_code() - NOT_DOCUMENTED - IBMI_SCRIPT - NO_LONGER_USED
+    code = variables_read_by_the_code() - NOT_DOCUMENTED - IBMI_SCRIPT
 
     assert code - documented == set(), 'read by the code, missing from docs/configuration.md'
     assert documented - code == set(), 'in docs/configuration.md, never read by the code'
     # .env.example keeps only what most installations need, and points to the full list
     assert example - code == set(), 'in .env.example, never read by the code'
+    # Settings of older versions: no longer in the table or in .env.example, only named as retired
+    assert not set(RETIRED_SETTINGS) & (documented | example)
+    assert all(f'`{name}`' in CONFIGURATION for name in RETIRED_SETTINGS)
     assert {'SECRET_KEY', 'ERRORENGINE_PASSWORD_HASH', 'TIMEZONE', 'MAIL_SERVER'} <= example
     assert 'docs/configuration.md' in example_text
     assert IBMI_SCRIPT <= set(re.findall(r'`(IBMI_[A-Z]+)`', (ROOT / 'docs' / 'ibmi-driver.md').read_text(encoding='utf-8')))

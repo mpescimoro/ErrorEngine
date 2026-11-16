@@ -33,12 +33,12 @@ def test_api_key_from_the_form_is_sent(app):
     assert req.call_args.kwargs['headers']['X-API-Key'] == 'K-123'
 
 
-@pytest.mark.parametrize('body', [['A-1', 'A-2'], [{'ID': 1}, 2]])
-def test_rows_that_are_not_objects_are_a_source_failure(app, body):
+def test_rows_that_are_not_objects_are_a_source_failure(app):
     from data_sources import HttpDataSource
-    with patch('data_sources.requests.request', return_value=http_response(body)):
-        with pytest.raises(ValueError, match='not objects with fields'):
-            HttpDataSource().execute({'url': 'https://api.x.com/items'})
+    for body in (['A-1', 'A-2'], [{'ID': 1}, 2]):
+        with patch('data_sources.requests.request', return_value=http_response(body)):
+            with pytest.raises(ValueError, match='not objects with fields'):
+                HttpDataSource().execute({'url': 'https://api.x.com/items'})
 
 
 class TestJsonPath:

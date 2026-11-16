@@ -7,6 +7,7 @@ import os
 import re
 from datetime import datetime, timezone, time, timedelta
 from urllib.parse import urlsplit, urlunsplit
+from zoneinfo import ZoneInfo
 
 # Cache to avoid repeated lookups
 _cached_tz = None
@@ -24,11 +25,6 @@ def get_configured_timezone():
     3. 'UTC' (fallback)
     """
     global _cached_tz, _cached_tz_name
-    
-    try:
-        from zoneinfo import ZoneInfo
-    except ImportError:
-        from backports.zoneinfo import ZoneInfo
     
     tz_name = None
     
@@ -117,8 +113,8 @@ def format_local(utc_dt, fmt='%d/%m/%Y %H:%M'):
     return local_dt.strftime(fmt)
 
 
-def format_local_now(fmt='%d/%m/%Y %H:%M:%S', app=None):
-    """Current local time as text (app is ignored, kept for compatibility)."""
+def format_local_now(fmt='%d/%m/%Y %H:%M:%S'):
+    """Current local time as text."""
     return get_local_now().strftime(fmt)
 
 

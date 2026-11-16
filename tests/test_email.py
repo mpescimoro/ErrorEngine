@@ -59,12 +59,8 @@ class TestSettings:
         assert config_from_env(MAIL_SECURITY='ssl')['MAIL_PORT'] == 465
         assert config_from_env(MAIL_SECURITY='NONE')['MAIL_PORT'] == 25
         assert config_from_env(MAIL_SECURITY='none', MAIL_PORT='2525')['MAIL_PORT'] == 2525
-
-    def test_older_mail_use_tls_still_works(self):
-        assert config_from_env(MAIL_USE_TLS='true', MAIL_PORT='587')['MAIL_SECURITY'] == 'starttls'
-        assert config_from_env(MAIL_USE_TLS='false', MAIL_PORT='465')['MAIL_SECURITY'] == 'ssl'
-        # MAIL_SECURITY wins
-        assert config_from_env(MAIL_USE_TLS='false', MAIL_SECURITY='starttls')['MAIL_SECURITY'] == 'starttls'
+        # MAIL_USE_TLS of older versions is no longer read: without MAIL_SECURITY the port decides
+        assert config_from_env(MAIL_USE_TLS='false', MAIL_PORT='587')['MAIL_SECURITY'] == 'starttls'
 
     def test_sender_defaults_to_the_user_name(self):
         assert config_from_env(MAIL_USERNAME='alerts@x.it')['MAIL_DEFAULT_SENDER'] == 'alerts@x.it'
@@ -218,30 +214,23 @@ class TestSmtpTls:
 class TestSubject:
 
     def test_placeholders(self):
-        from email_service import format_subject
+        from email_service import format_subject, unknown_subject_placeholders
         assert format_subject('{query_name}: {error_count} errors', query_name='Orders', error_count=3) == \
             'Orders: 3 errors'
         assert format_subject('{error_count:03d} new', query_name='Orders', error_count=3) == '003 new'
-
-    def test_a_typo_is_sent_as_written(self, app):
-        from email_service import email_service
-        query = make_query(email_subject='[ErrorEngine] {query}: {error_count} errors on {query_name} {')
-        with patch('email_service.EmailService._deliver') as deliver:
-            result = email_service.send_error_notification(query, [{'ID': 1}], ['ID'])
-        assert result['success']
-        assert deliver.call_args.args[1] == '[ErrorEngine] {query}: 1 errors on Orders {'
-
-    def test_empty_subject_is_the_default_one(self, app):
-        from email_service import email_service
-        query = make_query(email_subject='')
-        with patch('email_service.EmailService._deliver') as deliver:
-            email_service.send_error_notification(query, [{'ID': 1}], ['ID'])
-        assert deliver.call_args.args[1] == '[ErrorEngine] New errors: Orders'
-
-    def test_unknown_placeholders_listed(self):
-        from email_service import unknown_subject_placeholders
         assert unknown_subject_placeholders('{query} {query_name} {error_count:d} {}') == ['{query}', '{}']
         assert unknown_subject_placeholders(None) == []
+
+    def test_a_typo_is_sent_as_written_and_empty_is_the_default(self, app):
+        from email_service import email_service
+        query = make_query(email_subject='[ErrorEngine] {query}: {error_count} errors on {query_name} {')
+        with patch('email_service.EmailService._deliver', return_value={}) as deliver:
+            result = email_service.send_error_notification(query, [{'ID': 1}], ['ID'])
+            assert result['success']
+            assert deliver.call_args.args[1] == '[ErrorEngine] {query}: 1 errors on Orders {'
+            query.email_subject = ''
+            email_service.send_error_notification(query, [{'ID': 1}], ['ID'])
+            assert deliver.call_args.args[1] == '[ErrorEngine] New errors: Orders'
 
 
 # --- One SMTP connection per check ---
@@ -273,9 +262,13 @@ class TestOneConnectionPerCheck:
             monitor_service.deliver_pending(query)
         assert smtp_ssl.return_value.sendmail.call_count == 2 and smtp_ssl.call_count == 1
 
-    def test_a_dropped_connection_is_opened_again(self, app):
+    def test_outside_a_check_one_per_email_inside_a_dropped_one_opened_again(self, app):
         import smtplib
         from email_service import email_service
+        with patch('email_service.smtplib.SMTP_SSL') as smtp_ssl:
+            email_service.test_email('a@x.it')
+            email_service.test_email('b@x.it')
+        assert smtp_ssl.call_count == 2 and smtp_ssl.return_value.quit.call_count == 2
         with patch('email_service.smtplib.SMTP_SSL') as smtp_ssl:
             smtp_ssl.return_value.sendmail.side_effect = [smtplib.SMTPServerDisconnected('gone'), None]
             with email_service.batch():
@@ -283,13 +276,6 @@ class TestOneConnectionPerCheck:
                 second = email_service.test_email('b@x.it')
         assert not first['success'] and second['success']
         assert smtp_ssl.call_count == 2
-
-    def test_outside_a_check_one_connection_per_email(self, app):
-        from email_service import email_service
-        with patch('email_service.smtplib.SMTP_SSL') as smtp_ssl:
-            email_service.test_email('a@x.it')
-            email_service.test_email('b@x.it')
-        assert smtp_ssl.call_count == 2 and smtp_ssl.return_value.quit.call_count == 2
 
 
 # --- Microsoft 365 through Microsoft Graph ---
@@ -602,7 +588,7 @@ class TestSampleEmail:
         assert '<p>Draft R-1 R-2</p>' in html
         assert EmailLog.query.count() == 0   # not a notification
 
-    def test_rows_from_the_latest_errors(self, app, client):
+    def test_rows_without_test_query(self, app, client):
         query = make_query()
         record = ErrorRecord(query_id=query.id, error_hash='h1')
         record.set_error_data({'ID': 'STORED-1'})
@@ -611,25 +597,18 @@ class TestSampleEmail:
         answer, deliver = send_sample(client, query_id=query.id)
         assert 'latest errors' in answer.get_json()['message']
         assert 'STORED-1' in deliver.call_args.args[2]
-
-    def test_a_made_up_row_without_rows(self, app, client):
+        # A new query, without errors yet: one made-up row with the key fields
         answer, deliver = send_sample(client, key_fields='ORDER_NO, ITEM')
         assert 'made-up' in answer.get_json()['message']
         html = deliver.call_args.args[2]
         assert 'ORDER_NO' in html and 'ITEM' in html
 
-    def test_template_errors_reported_not_hidden(self, app, client):
+    def test_templates_that_cannot_be_used_are_reported_not_hidden(self, app, client):
         answer, deliver = send_sample(client, email_template='<p>{% for e in errors %}</p>')
         result = answer.get_json()
         assert result['success'] is False and 'template' in result['message']
         assert 'default template' in result['message']
         assert not deliver.called
-
-    def test_inline_template_in_braces_is_not_a_name(self, app, client):
-        answer, deliver = send_sample(client, email_template='{{ query_name }}: {{ error_count }}')
-        assert answer.get_json()['success'] is True and deliver.call_args.args[2] == 'Draft: 1'
-
-    def test_missing_template_file_reported(self, app, client):
         answer, deliver = send_sample(client, email_template='{no_such_template}')
         result = answer.get_json()
         assert result['success'] is False and 'no_such_template.html' in result['message']

@@ -74,7 +74,7 @@ class IBMiDriver(DatabaseDriver):
         _ensure_jvm()
         return super().open(host, port, database, username, password)
 
-    def connect(self, host: str, port: int, database: str, username: str, password: str, **kwargs):
+    def connect(self, host: str, port: int, database: str, username: str, password: str):
         """Connection via JT400 JDBC."""
         _ensure_jvm()
         _attach_as_daemon()
@@ -159,7 +159,7 @@ class IBMiDriver(DatabaseDriver):
         """Closes the connection."""
         connection.close()
 
-    def test_connection(self, host: str, port: int, database: str, username: str, password: str, **kwargs) -> dict:
+    def test_connection(self, host: str, port: int, database: str, username: str, password: str) -> dict:
         """Connection test."""
         try:
             conn = self.open(host, port, database, username, password)

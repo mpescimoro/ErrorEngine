@@ -96,6 +96,13 @@
                 <i class="bi bi-bar-chart"></i>
                 Errors over time
             </div>
+            <select id="queryFilter" class="form-control form-select" aria-label="Query shown in the chart"
+                    onchange="statsPage.selectQuery(this.value)">
+                <option value="">All queries</option>
+                {% for q in queries %}
+                <option value="{{ q.id }}" {{ 'selected' if q.id == selected_query_id }}>{{ q.name }}</option>
+                {% endfor %}
+            </select>
         </div>
         <div class="card-body">
             <div id="timelineChart" style="height: 280px;">
@@ -131,6 +138,7 @@
             <i class="bi bi-table"></i>
             Details by query
         </div>
+        <span class="text-muted" style="font-size: 0.8125rem; font-weight: normal;">Click a query to see it in the chart</span>
     </div>
     <div id="queryDetails">
         <div class="flex items-center justify-center p-lg">
@@ -152,6 +160,33 @@ var statsPage = {
         this.loadOverview(days);
         this.loadTimeline(days);
         this.loadQueryDetails(days);
+    },
+
+    // The query shown in the chart, '' for all of them
+    selectedQuery: function() {
+        return document.getElementById('queryFilter').value;
+    },
+
+    selectQuery: function(queryId) {
+        document.getElementById('queryFilter').value = queryId;
+        // In the address too: a reload keeps it, and the query page links here the same way
+        var url = new URL(window.location.href);
+        if (queryId) {
+            url.searchParams.set('query_id', queryId);
+        } else {
+            url.searchParams.delete('query_id');
+        }
+        history.replaceState(null, '', url);
+        this.markSelectedRow();
+        this.loadTimeline(document.getElementById('periodFilter').value);
+        document.getElementById('timelineChart').scrollIntoView({block: 'nearest', behavior: 'smooth'});
+    },
+
+    markSelectedRow: function() {
+        var selected = this.selectedQuery();
+        document.querySelectorAll('#queryDetails tr[data-query-id]').forEach(function(row) {
+            row.classList.toggle('row-selected', row.dataset.queryId === selected);
+        });
     },
 
     loadOverview: function(days) {
@@ -213,7 +248,8 @@ var statsPage = {
         var container = document.getElementById('timelineChart');
         if (!container) return;
 
-        api.get('/api/stats/timeline?days=' + days).then(function(data) {
+        var queryId = this.selectedQuery();
+        api.get('/api/stats/timeline?days=' + days + (queryId ? '&query_id=' + queryId : '')).then(function(data) {
             if (data.length === 0 || data.every(function(d) { return d.count === 0; })) {
                 container.innerHTML = '<div class="empty-state" style="height: 100%; display: flex; align-items: center; justify-content: center;">' +
                     '<div><div class="empty-state-icon" style="font-size: 2rem;"><i class="bi bi-bar-chart"></i></div>' +
@@ -276,6 +312,7 @@ var statsPage = {
     },
 
     loadQueryDetails: function(days) {
+        var self = this;
         var container = document.getElementById('queryDetails');
 
         api.get('/api/stats/all-queries?days=' + days).then(function(data) {
@@ -306,7 +343,7 @@ var statsPage = {
                     ? '<span class="text-danger" style="font-weight: 600;">' + q.active_count + '</span>'
                     : '<span class="text-muted">0</span>';
 
-                html += '<tr>' +
+                html += '<tr class="row-selectable" data-query-id="' + q.id + '" title="Show in the chart">' +
                     '<td><a href="/queries/' + q.id + '" class="query-name">' + escapeHtml(q.name) + '</a></td>' +
                     '<td>' + tags + '</td>' +
                     '<td><span class="badge badge-danger">' + q.error_count + '</span></td>' +
@@ -317,6 +354,7 @@ var statsPage = {
 
             html += '</tbody></table></div>';
             container.innerHTML = html;
+            self.markSelectedRow();
 
         }).catch(function(error) {
             console.error('Error loading query details:', error);
@@ -327,6 +365,12 @@ var statsPage = {
 
 document.addEventListener('DOMContentLoaded', function() {
     statsPage.init();
+    // A click on a row shows its query in the chart, a second one all of them again; the name opens the query
+    document.getElementById('queryDetails').addEventListener('click', function(event) {
+        var row = event.target.closest('tr[data-query-id]');
+        if (!row || event.target.closest('a')) return;
+        statsPage.selectQuery(row.dataset.queryId === statsPage.selectedQuery() ? '' : row.dataset.queryId);
+    });
 });
 </script>
 {% endblock %}

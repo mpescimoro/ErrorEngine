@@ -354,17 +354,15 @@ class TestKeyFields:
         db.session.commit()
         assert self.run(query, (['ID'], [{'ID': 1}, {'ID': 2}]))['new_errors'] == 2
 
-    def test_no_rows_nothing_to_check(self, app):
-        query = MonitoredQuery(name='API', source_type='http', key_fields='ID', email_recipients='ops@x.it')
-        db.session.add(query)
+    def test_without_rows(self, app):
+        api = MonitoredQuery(name='API', source_type='http', key_fields='ID', email_recipients='ops@x.it')
+        empty = MonitoredQuery(name='Orders', sql_query='SELECT 1', key_fields=' , ', email_recipients='ops@x.it')
+        db.session.add_all([api, empty])
         db.session.commit()
-        assert self.run(query, ([], []))['status'] == 'success'
-
-    def test_no_key_fields_at_all_is_a_failed_run_even_without_rows(self, app):
-        query = MonitoredQuery(name='Orders', sql_query='SELECT 1', key_fields=' , ', email_recipients='ops@x.it')
-        db.session.add(query)
-        db.session.commit()
-        result = self.run(query, (['ID'], []))
+        # Nothing to check against: an HTTP source without rows has no columns either
+        assert self.run(api, ([], []))['status'] == 'success'
+        # No key fields at all fails anyway: any row would be the same error
+        result = self.run(empty, (['ID'], []))
         assert result['status'] == 'error' and 'No key fields' in result['error_message']
 
 

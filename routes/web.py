@@ -444,8 +444,10 @@ def logs_list():
 
 @main_bp.route('/stats')
 def stats_page():
-    """Statistics page."""
-    return render_template('stats.html')
+    """Statistics page; ?query_id= opens the chart on that query."""
+    queries = MonitoredQuery.query.order_by(db.func.lower(MonitoredQuery.name)).all()
+    return render_template('stats.html', queries=queries,
+                           selected_query_id=request.args.get('query_id', type=int))
 
 
 @main_bp.route('/settings')

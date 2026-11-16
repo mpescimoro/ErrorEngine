@@ -320,22 +320,19 @@ def received_by(channel_type, query, errors=ERRORS[:2], **kwargs):
 class TestChannelMessages:
     """Webhooks, Telegram and Teams tell reminders from new errors; webhooks carry the error ids."""
 
-    def test_webhook_new_errors(self, app):
-        payload = received_by('webhook', make_query(), error_ids=[7, 8])
+    def test_webhook(self, app):
+        query = make_query()
+        payload = received_by('webhook', query, error_ids=[7, 8])
         assert payload['event'] == 'errors_detected'
         assert payload['errors'] == ERRORS[:2] and payload['error_ids'] == [7, 8]
         assert payload['errors_count'] == 2
         # UTC, and it says so
         assert re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ', payload['timestamp'])
-
-    def test_webhook_reminder(self, app):
-        payload = received_by('webhook', make_query(), reminder=True, error_ids=[7, 8])
-        assert payload['event'] == 'errors_reminder'
-        assert payload['error_ids'] == [7, 8]
-
-    def test_webhook_ids_follow_the_first_50_errors(self, app):
+        payload = received_by('webhook', query, reminder=True, error_ids=[7, 8])
+        assert payload['event'] == 'errors_reminder' and payload['error_ids'] == [7, 8]
+        # The ids follow the errors sent: the first 50
         rows = [{'ID': i} for i in range(60)]
-        payload = received_by('webhook', make_query(), errors=rows, error_ids=list(range(100, 160)))
+        payload = received_by('webhook', query, errors=rows, error_ids=list(range(100, 160)))
         assert payload['errors_count'] == 60
         assert len(payload['errors']) == len(payload['error_ids']) == 50
         assert payload['error_ids'][-1] == 149
