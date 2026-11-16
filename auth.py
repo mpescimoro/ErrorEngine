@@ -9,8 +9,9 @@ Single-user login, configured in .env:
     ERRORENGINE_SESSION_HOURS   hours of inactivity after which the session expires (default 12)
 
 Every page and API requires login, except the login page, static files
-and /api/health (for external checks). Until the password hash and the
-SECRET_KEY are set, nobody can open the interface; the scheduler keeps running.
+and /api/health (for external checks). Until the password hash and a SECRET_KEY
+other than the example one are set, nobody can open the interface; the scheduler
+keeps running. Without any SECRET_KEY, serve.py does not start at all.
 Changing the password or the username ends the open sessions.
 """
 import hashlib

@@ -8,7 +8,7 @@ from models import (db, MonitoredQuery, ErrorRecord, QueryLog, EmailLog,
                     DatabaseConnection, NotificationChannel)
 from routing_service import get_operators_list
 from utils import local_day_start_utc, server_log_info
-from email_service import email_service
+from email_service import email_service, subject_warning
 
 import json
 
@@ -48,6 +48,57 @@ def format_time(t):
     return t.strftime('%H:%M')
 
 
+def form_choices(query=None) -> tuple:
+    """
+    Connections and channels offered by the query form: the active ones, plus those the
+    query uses even when disabled (a form that does not show them would drop them).
+    """
+    connections = DatabaseConnection.query.filter_by(is_active=True).all()
+    channels = NotificationChannel.query.filter_by(is_active=True).all()
+    if query is not None:
+        if query.db_connection is not None and query.db_connection not in connections:
+            connections.append(query.db_connection)
+        channels += [c for c in query.notification_channels if c not in channels]
+    return connections, channels
+
+
+def http_source_config(form, saved: dict) -> dict:
+    """
+    HTTP settings from the query form, over the saved ones: a setting the form
+    does not show (e.g. a timeout) stays as it is.
+    """
+    config = dict(saved or {})
+    for key, field in (('url', 'source_url'), ('method', 'source_method'),
+                       ('response_path', 'source_response_path'), ('auth_type', 'source_auth_type'),
+                       ('api_key_name', 'source_api_key_name')):
+        if field in form:
+            config[key] = form.get(field, '').strip()
+    if 'source_auth_token' in form:
+        config['auth_token'] = form.get('source_auth_token', '')
+    if 'source_headers' in form:
+        text = form.get('source_headers', '').strip()
+        try:
+            headers = json.loads(text) if text else {}
+        except ValueError:
+            headers = None
+        if not isinstance(headers, dict):
+            raise ValueError('Headers must be a JSON object, e.g. {"Accept": "application/json"}')
+        config['headers'] = headers
+    return config
+
+
+def warn_about_the_subject(query):
+    """Placeholders that do not exist are sent as written: say so when saving."""
+    warning = subject_warning(query.email_subject)
+    if warning:
+        flash(warning, 'warning')
+
+
+def channel_names() -> dict:
+    """{id: name} of every channel: read once for a page, not once per error."""
+    return dict(db.session.query(NotificationChannel.id, NotificationChannel.name))
+
+
 def active_error_counts() -> dict:
     """Active errors per query: {query_id: count}, with a single query."""
     return dict(
@@ -65,13 +116,14 @@ def problems_first(queries, error_counts: dict) -> list:
     """
     def key(q):
         errors = error_counts.get(q.id, 0)
-        if q.is_active and q.consecutive_failures:
+        running = q.is_active and not q.connection_disabled()
+        if q.is_failing():
             group = 0
         elif errors:
             group = 1
-        elif q.is_active and q.is_in_schedule():
+        elif running and q.is_in_schedule():
             group = 2
-        elif q.is_active:
+        elif running:
             group = 3
         else:
             group = 4
@@ -100,6 +152,8 @@ def dashboard():
         'total_queries': len(queries),
         'active_queries': sum(1 for q in queries if q.is_active),
         'total_active_errors': sum(error_counts.values()),
+        'undelivered_errors': ErrorRecord.query.filter(ErrorRecord.resolved_at.is_(None),
+                                                       ErrorRecord.undeliverable.isnot(None)).count(),
         'emails_sent_today': emails_today.get('sent', 0),
         'emails_failed_today': emails_today.get('failed', 0),
     }
@@ -144,23 +198,14 @@ def query_create():
                 name=request.form['name'],
                 description=request.form.get('description', ''),
                 source_type=source_type,
-                db_connection_id=int(db_conn_id) if db_conn_id else None,
+                db_connection_id=int(db_conn_id) if db_conn_id and source_type != 'http' else None,
                 sql_query=request.form.get('sql_query', ''),
                 key_fields=request.form['key_fields'],
                 is_active=request.form.get('is_active') == 'on'
             )
             
-            # Source config for HTTP
             if source_type == 'http':
-                source_config = {
-                    'url': request.form.get('source_url', ''),
-                    'method': request.form.get('source_method', 'GET'),
-                    'headers': json.loads(request.form.get('source_headers', '{}') or '{}'),
-                    'response_path': request.form.get('source_response_path', ''),
-                    'auth_type': request.form.get('source_auth_type', ''),
-                    'auth_token': request.form.get('source_auth_token', ''),
-                }
-                query.set_source_config(source_config)
+                query.set_source_config(http_source_config(request.form, {}))
             
             # Email
             query.email_subject = request.form.get('email_subject', '[ErrorEngine] New errors: {query_name}')
@@ -199,16 +244,15 @@ def query_create():
             
             db.session.commit()
             flash(f'Query "{query.name}" created!', 'success')
+            warn_about_the_subject(query)
             return redirect(url_for('main.query_detail', query_id=query.id))
         except Exception as e:
             db.session.rollback()
             flash(f'Error while creating: {str(e)}', 'danger')
     
-    return render_template('query_form.html', 
-                        query=None, 
-                          operators=get_operators_list(),
-                        connections=DatabaseConnection.query.filter_by(is_active=True).all(),
-                        channels=NotificationChannel.query.filter_by(is_active=True).all())
+    connections, channels = form_choices()
+    return render_template('query_form.html', query=None, operators=get_operators_list(),
+                           connections=connections, channels=channels, email_on=email_service.is_enabled())
 
 
 @main_bp.route('/queries/<int:query_id>')
@@ -220,6 +264,7 @@ def query_detail(query_id):
     active = ErrorRecord.query.filter_by(query_id=query_id, resolved_at=None)
     active_error_count = active.count()
     active_errors = active.order_by(ErrorRecord.first_seen_at.desc()).limit(10).all()
+    undelivered_count = active.filter(ErrorRecord.undeliverable.isnot(None)).count()
 
     # Latest logs
     recent_logs = QueryLog.query.filter_by(
@@ -231,6 +276,8 @@ def query_detail(query_id):
         query=query,
         active_errors=active_errors,
         active_error_count=active_error_count,
+        undelivered_count=undelivered_count,
+        channel_names=channel_names(),
         recent_logs=recent_logs,
         operators=get_operators_list()
     )
@@ -248,25 +295,16 @@ def query_edit(query_id):
             query.description = request.form.get('description', '')
             query.source_type = request.form.get('source_type', 'database')
             
-            # Database connection
+            # An HTTP query has no database connection: a leftover one would hide the HTTP source
             db_conn_id = request.form.get('db_connection_id')
-            query.db_connection_id = int(db_conn_id) if db_conn_id else None
+            query.db_connection_id = int(db_conn_id) if db_conn_id and query.source_type != 'http' else None
             
             query.sql_query = request.form.get('sql_query', '')
             query.key_fields = request.form['key_fields']
             query.is_active = request.form.get('is_active') == 'on'
             
-            # Source config for HTTP
             if query.source_type == 'http':
-                source_config = {
-                    'url': request.form.get('source_url', ''),
-                    'method': request.form.get('source_method', 'GET'),
-                    'headers': json.loads(request.form.get('source_headers', '{}') or '{}'),
-                    'response_path': request.form.get('source_response_path', ''),
-                    'auth_type': request.form.get('source_auth_type', ''),
-                    'auth_token': request.form.get('source_auth_token', ''),
-                }
-                query.set_source_config(source_config)
+                query.set_source_config(http_source_config(request.form, query.get_source_config()))
             
             # Email
             query.email_subject = request.form.get('email_subject', query.email_subject)
@@ -295,9 +333,11 @@ def query_edit(query_id):
             
             # Basic routing (the rules are managed through the API)
             query.routing_enabled = request.form.get('routing_enabled') == 'on'
-            query.routing_default_recipients = request.form.get('routing_default_recipients', '')
-            query.routing_aggregation = request.form.get('routing_aggregation', 'per_recipient')
-            query.routing_no_match_action = request.form.get('routing_no_match_action', 'send_default')
+            query.routing_default_recipients = request.form.get('routing_default_recipients',
+                                                                query.routing_default_recipients)
+            query.routing_aggregation = request.form.get('routing_aggregation', query.routing_aggregation)
+            query.routing_no_match_action = request.form.get('routing_no_match_action',
+                                                             query.routing_no_match_action)
             
             channel_ids = request.form.getlist('notification_channels')
             query.notification_channels = NotificationChannel.query.filter(NotificationChannel.id.in_(channel_ids)).all() if channel_ids else []
@@ -306,15 +346,15 @@ def query_edit(query_id):
             
             db.session.commit()
             flash('Query updated!', 'success')
+            warn_about_the_subject(query)
             return redirect(url_for('main.query_detail', query_id=query.id))
         except Exception as e:
             db.session.rollback()
             flash(f'Error while updating: {str(e)}', 'danger')
     
-    return render_template('query_form.html', query=query, action='edit',
-                          operators=get_operators_list(),
-                          connections=DatabaseConnection.query.filter_by(is_active=True).all(),
-                          channels=NotificationChannel.query.filter_by(is_active=True).all())
+    connections, channels = form_choices(query)
+    return render_template('query_form.html', query=query, action='edit', operators=get_operators_list(),
+                           connections=connections, channels=channels, email_on=email_service.is_enabled())
 
 
 @main_bp.route('/queries/<int:query_id>/delete', methods=['POST'])
@@ -341,10 +381,18 @@ def query_delete(query_id):
 def errors_list():
     """List of all active errors."""
     query_id = request.args.get('query_id', type=int)
+    delivery = request.args.get('delivery', '')
     
     errors_query = ErrorRecord.query.filter_by(resolved_at=None)
     if query_id:
         errors_query = errors_query.filter_by(query_id=query_id)
+
+    # Notifications still being retried, and those given up: they stay among the active errors
+    pending = ErrorRecord.notify_pending.is_(True)
+    failed = ErrorRecord.undeliverable.isnot(None)
+    delivery_counts = {'pending': errors_query.filter(pending).count(), 'failed': errors_query.filter(failed).count()}
+    if delivery in ('pending', 'failed'):
+        errors_query = errors_query.filter(pending if delivery == 'pending' else failed)
     
     errors = errors_query.order_by(ErrorRecord.first_seen_at.desc()).all()
 
@@ -368,7 +416,9 @@ def errors_list():
 
     return render_template('errors_list.html', errors=errors, queries=queries,
                           selected_query_id=query_id, error_counts=error_counts,
-                          total_errors=sum(error_counts.values()))
+                          total_errors=sum(error_counts.values()),
+                          delivery_counts=delivery_counts, selected_delivery=delivery,
+                          channel_names=channel_names())
 
 
 @main_bp.route('/logs')
@@ -398,10 +448,8 @@ def settings():
     """Settings page and connection tests."""
     from scheduler import get_scheduler_status
     from version import __version__
-    failing_queries = MonitoredQuery.query.filter(
-        MonitoredQuery.is_active == True,
-        MonitoredQuery.consecutive_failures > 0
-    ).order_by(MonitoredQuery.name).all()
+    failing_queries = [q for q in MonitoredQuery.query.filter(MonitoredQuery.consecutive_failures > 0)
+                       .order_by(MonitoredQuery.name) if q.is_failing()]
 
     # Internal database actually in use (never user names or passwords)
     url = db.engine.url

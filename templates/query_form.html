@@ -20,7 +20,7 @@
     </h1>
 </div>
 
-<form method="POST" id="queryForm" data-validate>
+<form method="POST" id="queryForm" data-validate data-query-id="{{ query.id if query else '' }}">
     <div class="grid" style="grid-template-columns: 2fr 1fr; gap: var(--space-xl); align-items: start;">
         
         <!-- Main Column -->
@@ -53,10 +53,10 @@
                         <div class="form-group">
                             <label for="source_type" class="form-label">Source type</label>
                             <select class="form-control form-select" id="source_type" name="source_type" onchange="toggleSourceType()">
-                                <option value="database" {{ 'selected' if not query or query.db_connection_id }}>
+                                <option value="database" {{ 'selected' if not query or query.source_type != 'http' }}>
                                     Database
                                 </option>
-                                <option value="http" {{ 'selected' if query and query.source_type == 'http' and not query.db_connection_id }}>
+                                <option value="http" {{ 'selected' if query and query.source_type == 'http' }}>
                                     HTTP/REST
                                 </option>
                             </select>
@@ -71,7 +71,7 @@
                                 <option value="">-- Select a connection --</option>
                                 {% for conn in connections %}
                                 <option value="{{ conn.id }}" {{ 'selected' if query and query.db_connection_id == conn.id }}>
-                                    {{ conn.name }} ({{ driver_labels.get(conn.db_type, conn.db_type|upper) }})
+                                    {{ conn.name }} ({{ driver_labels.get(conn.db_type, conn.db_type|upper) }}{{ ', disabled' if not conn.is_active }})
                                 </option>
                                 {% endfor %}
                             </select>
@@ -208,7 +208,28 @@
                                    name="source_auth_token"
                                    value="{{ source_config.get('auth_token', '') }}"
                                    autocomplete="off">
-                            <div class="form-text">Bearer Token: sent as <code>Authorization: Bearer …</code>. API Key: sent in the <code>X-API-Key</code> header.</div>
+                            <div class="form-text">Bearer Token: sent as <code>Authorization: Bearer …</code>. API Key: sent in the header below.</div>
+                        </div>
+
+                        <div class="form-group" style="grid-column: span 2;">
+                            <label for="source_api_key_name" class="form-label">API key header</label>
+                            <input type="text"
+                                   class="form-control"
+                                   id="source_api_key_name"
+                                   name="source_api_key_name"
+                                   value="{{ source_config.get('api_key_name', '') }}"
+                                   placeholder="X-API-Key">
+                            <div class="form-text">Name of the header that carries the API key; empty: <code>X-API-Key</code>.</div>
+                        </div>
+
+                        <div class="form-group" style="grid-column: span 2;">
+                            <label for="source_headers" class="form-label">Headers</label>
+                            <textarea class="form-control font-mono"
+                                      id="source_headers"
+                                      name="source_headers"
+                                      rows="2"
+                                      placeholder='{"Accept": "application/json"}'>{{ source_config.get('headers')|tojson if source_config.get('headers') else '' }}</textarea>
+                            <div class="form-text">Other headers to send, as a JSON object. Optional.</div>
                         </div>
                         
                         <div class="form-group" style="grid-column: span 2;">
@@ -249,6 +270,7 @@
                         <div class="form-text" id="keyFieldsHelp">
                             Fields that uniquely identify an error (comma-separated).
                             Rows with the same values in these fields count as the same error.
+                            {% if query %}Changing them closes the open errors and notifies their rows again, as new errors.{% endif %}
                         </div>
                     </div>
                 </div>
@@ -261,6 +283,15 @@
                     Email configuration
                 </div>
                 <div class="card-body">
+                    {% if not email_on %}
+                    <div class="alert alert-warning mb-md">
+                        <i class="alert-icon bi bi-envelope-x"></i>
+                        <div class="alert-content">
+                            Email is off: the notifications go only to the channels
+                            (see <a href="{{ url_for('main.settings') }}">Settings</a>).
+                        </div>
+                    </div>
+                    {% endif %}
                     <div class="form-group">
                         <label for="email_recipients" class="form-label">Recipients</label>
                         <input type="text" 
@@ -302,6 +333,30 @@
 							HTML code = inline custom template
 						</div>
 					</div>
+
+                    {% if email_on %}
+                    <div class="form-group mb-0 mt-lg">
+                        <label for="sampleEmailRecipients" class="form-label">Send a sample to</label>
+                        <div class="flex gap-sm" style="flex-wrap: wrap;">
+                            <input type="text"
+                                   class="form-control"
+                                   id="sampleEmailRecipients"
+                                   style="flex: 1 1 14rem; min-width: 0;"
+                                   value="{{ (query.email_recipients or '') if query else '' }}"
+                                   placeholder="you@example.com"
+                                   onkeydown="if (event.key === 'Enter') { event.preventDefault(); sendSampleEmail(); }">
+                            <button type="button" class="btn btn-secondary" id="sampleEmailBtn" onclick="sendSampleEmail()">
+                                <i class="bi bi-send"></i>
+                                Send sample email
+                            </button>
+                        </div>
+                        <div class="form-text">
+                            The email of this form as it is now, saved or not, with the rows of Test query
+                            or the latest errors of the query.
+                        </div>
+                        <div id="sampleEmailResult" class="hidden"></div>
+                    </div>
+                    {% endif %}
                 </div>
             </div>
             
@@ -331,7 +386,7 @@
                             {% elif channel.channel_type == 'teams' %}
                             <i class="bi bi-microsoft-teams" style="color: #6264a7;"></i>
                             {% endif %}
-                            <span>{{ channel.name }}</span>
+                            <span>{{ channel.name }}{{ ' (disabled)' if not channel.is_active }}</span>
                         </label>
                         {% endfor %}
                     </div>
@@ -367,7 +422,7 @@
                 </div>
                 <div class="card-body">
                     <div class="grid grid-cols-2 gap-md mb-lg">
-                        <div class="form-group mb-0">
+                        <div class="form-group mb-0" style="grid-column: span 2;">
                             <label for="routing_default_recipients" class="form-label">Default recipients</label>
                             <input type="text" 
                                    class="form-control" 
@@ -383,12 +438,25 @@
                             <label for="routing_no_match_action" class="form-label">When no rule matches</label>
                             <select class="form-control form-select" id="routing_no_match_action" name="routing_no_match_action">
                                 <option value="send_default" {{ 'selected' if query.routing_no_match_action == 'send_default' }}>
-                                    Send to the default recipients
+                                    Default recipients
                                 </option>
                                 <option value="skip" {{ 'selected' if query.routing_no_match_action == 'skip' }}>
                                     Don't send
                                 </option>
                             </select>
+                        </div>
+
+                        <div class="form-group mb-0">
+                            <label for="routing_aggregation" class="form-label">Emails</label>
+                            <select class="form-control form-select" id="routing_aggregation" name="routing_aggregation">
+                                <option value="per_recipient" {{ 'selected' if query.routing_aggregation != 'per_error' }}>
+                                    One per recipient
+                                </option>
+                                <option value="per_error" {{ 'selected' if query.routing_aggregation == 'per_error' }}>
+                                    One per error
+                                </option>
+                            </select>
+                            <div class="form-text">One per recipient: all their errors in one email</div>
                         </div>
                     </div>
                     
@@ -406,7 +474,7 @@
                         <div class="empty-state-icon" style="font-size: 2rem;">
                             <i class="bi bi-signpost"></i>
                         </div>
-                        <p class="text-muted mb-0">No rules configured. Emails go to the standard recipients.</p>
+                        <p class="text-muted mb-0">No rules yet: with routing on, every error goes to the default recipients, or to nobody if you choose so above.</p>
                     </div>
                 </div>
             </div>
@@ -528,6 +596,7 @@
                                    value="{{ (query.reminder_interval_minutes or 60) if query else 60 }}">
                             <span class="input-group-text">minutes</span>
                         </div>
+                        <div class="form-text">Sent at the query's checks: never more often than the query runs</div>
                     </div>
                     
                     <div class="form-group mb-0">

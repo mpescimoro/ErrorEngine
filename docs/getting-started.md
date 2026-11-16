@@ -42,7 +42,7 @@ Click **Test query**. If the scheduler works, the query returns no rows.
 
 ## 4. Add recipients and save
 
-Enter your email in **Recipients**, or choose a notification channel, then save. The query runs by itself at every interval; **Run now** runs it immediately.
+Enter your email in **Recipients**, or choose a notification channel, then save. **Send sample email** shows the email before saving. The query runs by itself at every interval; **Run now** runs it immediately.
 
 ---
 
@@ -58,7 +58,7 @@ Pick the columns that identify each problem:
 | Log entries | `LOG_ID`, or `TIMESTAMP, MESSAGE` |
 | Stock | `WAREHOUSE, PRODUCT_CODE` |
 
-Rows with the same values in the key fields count as the same error.
+Rows with the same values in the key fields count as the same error. Choose them before the first run: changing them later closes the open errors and notifies their rows again.
 
 ### A good monitor query
 

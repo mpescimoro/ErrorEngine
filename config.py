@@ -80,9 +80,9 @@ class Config:
     DB_CONNECT_TIMEOUT_SECONDS = int(os.environ.get('DB_CONNECT_TIMEOUT_SECONDS') or 15)
     DB_QUERY_TIMEOUT_SECONDS = int(os.environ.get('DB_QUERY_TIMEOUT_SECONDS') or 300)
 
-    # Notifications that fail are retried, with longer and longer waits, for this many
-    # hours from when the error appeared; then they are marked as not delivered
-    NOTIFY_RETRY_HOURS = int(os.environ.get('NOTIFY_RETRY_HOURS') or 24)
+    # Attempts to deliver a notification: the first, then after 1, 5, 15 and 60 minutes.
+    # Then it is marked as not delivered; 1 = no retries
+    NOTIFY_ATTEMPTS = int(os.environ.get('NOTIFY_ATTEMPTS') or 5)
 
     # Alert when a query cannot read its source N times in a row
     # (after a failure the scheduler retries every minute); 0 = no alert

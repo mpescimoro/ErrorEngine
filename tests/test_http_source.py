@@ -67,3 +67,19 @@ class TestJsonPath:
         assert ErrorRecord.query.filter_by(query_id=query.id).count() == 2
         assert ErrorRecord.query.filter(ErrorRecord.resolved_at.isnot(None)).count() == 0
         assert send.call_count == 1
+
+
+def test_http_query_with_a_leftover_connection_reads_http(app):
+    """Queries switched to HTTP before 2.4 kept their database connection: HTTP wins."""
+    from data_sources import execute_query_source
+    from models import DatabaseConnection
+    connection = DatabaseConnection(name='ERP', db_type='sqlite', database=':memory:')
+    db.session.add(connection)
+    db.session.flush()
+    query = make_query(source_type='http', db_connection_id=connection.id)
+    query.set_source_config({'url': 'https://api.x.it/errors'})
+    db.session.commit()
+    with patch('data_sources.requests.request', return_value=http_response([{'ID': 1}])) as get, \
+            patch('models.DatabaseConnection.execute_query') as sql:
+        assert execute_query_source(query) == (['ID'], [{'ID': 1}])
+    assert get.called and not sql.called

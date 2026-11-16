@@ -4,6 +4,7 @@ REST API routes — JSON endpoints.
 import logging
 from flask import Blueprint, request, jsonify
 from datetime import timedelta
+from types import SimpleNamespace
 from db_drivers import get_driver, driver_timeouts, DRIVER_LABELS
 from models import (db, MonitoredQuery, ErrorRecord, EmailLog, RoutingRule,
                     RoutingCondition, DatabaseConnection, NotificationChannel)
@@ -13,7 +14,7 @@ from notification_service import notification_service
 from cleanup_service import cleanup_service
 from routing_service import get_operators_list, apply_routing_rules, get_routing_summary
 from data_sources import test_query_source
-from validators import validate_routing_rule, sanitize_string, write_statement_keyword
+from validators import validate_email_list, validate_routing_rule, sanitize_string, write_statement_keyword
 from utils import (get_utc_now, get_local_now, format_local, local_day_start_utc, utc_to_local,
                    redact_secrets)
 from version import __version__
@@ -593,7 +594,7 @@ def api_stats_all_queries():
     } for r in results])
 
 
-# --- Test email and totals ---
+# --- Test email, sample email and totals ---
 
 @api_bp.route('/test/email', methods=['POST'])
 def api_test_email():
@@ -605,6 +606,49 @@ def api_test_email():
         return jsonify({'success': False, 'message': 'Recipient required'}), 400
     
     result = email_service.test_email(recipient)
+    return jsonify(result)
+
+
+def sample_rows(data: dict, query_id) -> tuple:
+    """
+    Rows for the sample email, as (columns, rows, where they come from): those of Test query,
+    else the latest errors of the query, else one made-up row with the key fields.
+    """
+    rows = [row for row in (data.get('rows') or []) if isinstance(row, dict)][:5]
+    if rows:
+        columns = [str(c) for c in (data.get('columns') or [])] or list(dict.fromkeys(k for r in rows for k in r))
+        return columns, rows, 'the rows of Test query'
+    if query_id:
+        records = ErrorRecord.query.filter_by(query_id=query_id).order_by(ErrorRecord.id.desc()).limit(5).all()
+        rows = [record.get_error_data() for record in reversed(records)]
+        if rows:
+            return list(dict.fromkeys(k for r in rows for k in r)), rows, 'the latest errors of the query'
+    fields = [f.strip() for f in str(data.get('key_fields') or '').split(',') if f.strip()] or ['ID']
+    return fields, [{field: 'sample' for field in fields}], 'a made-up row (Test query gives real ones)'
+
+
+@api_bp.route('/test/sample-email', methods=['POST'])
+def api_sample_email():
+    """
+    API: the notification email of the query form, as the form is now (saved or not),
+    to the addresses given.
+    """
+    data = request.get_json(silent=True) or {}
+    valid, error, recipients = validate_email_list(str(data.get('recipients') or ''))
+    if not valid or not recipients:
+        return jsonify({'success': False, 'message': error or 'Enter an email address'}), 400
+    try:
+        query_id = int(data.get('query_id') or 0) or None
+    except (TypeError, ValueError):
+        query_id = None
+    query = SimpleNamespace(id=query_id, name=str(data.get('name') or 'Query'),
+                            description=str(data.get('description') or ''),
+                            email_subject=str(data.get('email_subject') or ''),
+                            email_template=str(data.get('email_template') or ''))
+    columns, rows, origin = sample_rows(data, query_id)
+    result = email_service.send_sample(query, rows, columns, recipients)
+    if result['success']:
+        result['message'] += f' with {origin}'
     return jsonify(result)
 
 
@@ -686,10 +730,8 @@ def api_health():
         scheduler_ok = scheduler_check in ('ok', 'disabled')
 
         # Active queries that cannot read their source
-        failing = MonitoredQuery.query.filter(
-            MonitoredQuery.is_active == True,
-            MonitoredQuery.consecutive_failures > 0
-        ).count() if db_ok else 0
+        failing = sum(1 for q in MonitoredQuery.query.filter(MonitoredQuery.consecutive_failures > 0)
+                      if q.is_failing()) if db_ok else 0
 
         if not (db_ok and scheduler_ok):
             status = 'unhealthy'

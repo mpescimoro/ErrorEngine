@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.4.0
+
+**Added**
+- **Send sample email** in the query form: the email as the form is now, saved or not, with the rows of **Test query** or the latest errors of the query, to the addresses typed. A template that cannot be used is reported there
+- Webhooks: the `errors_reminder` event for reminders and `error_ids`, the id of each error: the same in reminders and retries, and the one `POST /api/errors/{id}/resolve` takes. Telegram and Teams tell reminders from new errors
+- Query form: **Emails** for routing (one per recipient, or one per error), the API key header and the headers of HTTP sources
+- Errors whose notification was given up show to whom and why, on the errors page and on the query page; a filter on the errors page lists them, and the dashboard counts them
+
+**Changed**
+- Failed notifications: 5 attempts, the first and then after 1, 5, 15 and 60 minutes, sent by the scheduler also between the checks of the query and outside its time window. `NOTIFY_ATTEMPTS` replaces `NOTIFY_RETRY_HOURS`, which kept trying for 24 hours (about 30 attempts): if it is still in `.env`, a warning at startup says so
+- An email subject with something between braces that is not a placeholder (e.g. `{query}`) goes out with it as written, and saving the query points it out
+- One SMTP connection for all the emails of a check
+- The log has one line per delivery attempt, whatever the number of errors: what went out, what is still pending and when it is tried again, what was given up, and why
+- A disabled database connection stops its queries: they are skipped, not failing, and the lists say "Connection disabled"
+- Opening the query form no longer runs the query: the fields offered by routing come from the latest errors, or from **Test query**
+- Webhook `timestamp` in UTC with a `Z`, to the second (`2026-11-13T17:00:00Z`)
+- Telegram and Teams: "New errors" or "Errors still active", and "Time" for the time of the message
+- The query form says when email is off
+
+**Fixed**
+- Failed notifications were sent again only at the next check of the query, not after 1 to 60 minutes as the docs said: a query checked once a day tried again the next day, and gave up if that attempt failed too
+- An address the mail server refused, while it took the others, counted as reached: now it gets the attempts of a failed notification, and the error shows the server's reason. With Microsoft 365 a refusal comes back later as an email to the sender, which ErrorEngine does not see
+- An unknown placeholder in the email subject blocked every email of the query
+- Saving a query dropped what the form did not show: a disabled connection or channel, the routing aggregation, the HTTP headers and the API key header name
+- An HTTP query that had been a database query kept reading the database
+- Key fields missing from the results merged every row into a single error: now the check fails and names the missing fields; the same with no key fields at all (e.g. `,`)
+- A query left locked by a check cut short (ErrorEngine stopped while it ran) was skipped for about 15 minutes after a restart: now it is unlocked at startup
+- The email log showed the subject of failed emails with its placeholders
+- Texts that said something else: routing with no rules (errors go to the default recipients, or to nobody), Resolve (a row the query still returns comes back as a new error and is notified again), Run now (it said "Done" also when the notifications had not gone out), reminders (they go out at the checks of the query), automatic cleanup (server time), sign-in without `SECRET_KEY` (ErrorEngine does not start), export of the errors (only the active ones)
+
 ## 2.3.0
 
 **Added**

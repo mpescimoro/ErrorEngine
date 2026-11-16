@@ -5,13 +5,14 @@ Time windows are handled by MonitorService.
 
 Every minute the job picks the queries to run and hands them to a thread
 pool: a slow or stuck source takes a single thread and does not stop the others.
-A query that is still running is not started a second time.
+A query that is still running is not started a second time. Notifications that
+failed are sent again when their wait is over, without waiting for the next check.
 """
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from flask_apscheduler import APScheduler
-from models import db, MonitoredQuery
+from models import db, MonitoredQuery, ErrorRecord
 from utils import get_utc_now
 
 logger = logging.getLogger(__name__)
@@ -53,13 +54,52 @@ def _run_query(app, query_id: int):
             _in_flight.discard(query_id)
 
 
+def _deliver_pending(app, query_id: int):
+    """Sends again the notifications of a query whose wait is over, in its own thread."""
+    try:
+        with app.app_context():
+            from monitor_service import monitor_service
+            query = db.session.get(MonitoredQuery, query_id)
+            if query is not None and query.is_active:
+                monitor_service.deliver_pending(query)
+    except Exception as e:
+        logger.exception(f"Scheduler: pending notifications of query {query_id}: {e}")
+    finally:
+        with _lock:
+            _in_flight.discard(query_id)
+
+
+def queries_with_due_retries(exclude=()) -> list:
+    """
+    Active queries with notifications to send again now (also outside their time window:
+    the errors were found inside it). Their ids, without those in exclude.
+    """
+    rows = (
+        db.session.query(ErrorRecord.query_id)
+        .join(MonitoredQuery, MonitoredQuery.id == ErrorRecord.query_id)
+        .filter(MonitoredQuery.is_active.is_(True),
+                ErrorRecord.resolved_at.is_(None),
+                ErrorRecord.notify_pending.is_(True),
+                db.or_(ErrorRecord.notify_retry_at.is_(None), ErrorRecord.notify_retry_at <= get_utc_now()))
+        .distinct()
+        .order_by(ErrorRecord.query_id)
+        .all()
+    )
+    return [query_id for (query_id,) in rows if query_id not in exclude]
+
+
 def dispatch_due_queries(app) -> list:
-    """Starts the queries that are due in the pool; returns their ids."""
+    """
+    Starts in the pool the queries that are due, and the deliveries to retry of the
+    others; returns the ids of the queries started.
+    """
     started = []
     with app.app_context():
         _state['last_tick_at'] = get_utc_now()
         due = []
         for query in MonitoredQuery.query.filter_by(is_active=True).all():
+            if query.connection_disabled():
+                continue
             try:
                 should_run, reason = query.should_run_now()
             except Exception as e:
@@ -70,6 +110,8 @@ def dispatch_due_queries(app) -> list:
                 due.append((query.id, query.name))
             else:
                 logger.debug(f"Scheduler: {query.name} not due - {reason}")
+        # A check sends the pending notifications itself
+        retries = queries_with_due_retries(exclude={query_id for query_id, _ in due})
 
     executor = _get_executor(app)
     for query_id, name in due:
@@ -80,7 +122,29 @@ def dispatch_due_queries(app) -> list:
             _in_flight.add(query_id)
         executor.submit(_run_query, app, query_id)
         started.append(query_id)
+    for query_id in retries:
+        with _lock:
+            if query_id in _in_flight:
+                continue
+            _in_flight.add(query_id)
+        executor.submit(_deliver_pending, app, query_id)
     return started
+
+
+def release_locks(app) -> int:
+    """
+    Unlocks the queries left locked by a check cut short (ErrorEngine stopped while it ran):
+    at startup nothing runs yet in this single process. Returns how many.
+    """
+    with app.app_context():
+        stuck = MonitoredQuery.query.filter(MonitoredQuery.locked_at.isnot(None)).all()
+        for query in stuck:
+            query.locked_at = None
+        db.session.commit()
+        if stuck:
+            logger.warning(f"Scheduler: unlocked {', '.join(q.name for q in stuck)}, "
+                           "left locked by a check cut short")
+    return len(stuck)
 
 
 def get_scheduler_status() -> dict:
@@ -129,6 +193,8 @@ def init_scheduler(app):
             except Exception as e:
                 logger.error(f"Scheduler: cleanup error: {e}")
 
+    # Otherwise those queries would wait about a quarter of an hour for their locks to expire
+    release_locks(app)
     scheduler.start()
     _get_executor(app)
     logger.info(

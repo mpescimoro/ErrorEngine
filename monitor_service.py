@@ -3,17 +3,22 @@ Main monitoring service.
 Runs the queries periodically, with conditional routing and reminders.
 """
 import logging
+import os
 from datetime import timedelta
 from flask import current_app
 from utils import get_utc_now, format_local, redact_secrets
 import time
 from collections import defaultdict
 from models import db, MonitoredQuery, ErrorRecord, QueryLog
-from data_sources import execute_query_source, test_query_source, get_query_fields
+from data_sources import execute_query_source, test_query_source
 from routing_service import apply_routing_rules
 from email_service import email_service
 
 logger = logging.getLogger(__name__)
+
+# Minutes before trying a notification again, after the first failed attempt, the second...
+# (the last one again beyond these)
+RETRY_WAITS = (1, 5, 15, 60)
 
 
 class MonitorService:
@@ -29,6 +34,11 @@ class MonitorService:
         """Initializes the Flask extension."""
         self.app = app
         app.extensions['monitor'] = self
+        if os.environ.get('NOTIFY_RETRY_HOURS'):
+            # Otherwise a setting of an older .env would be ignored without a word
+            logger.warning("NOTIFY_RETRY_HOURS is no longer used: a notification that cannot be delivered "
+                           "gets NOTIFY_ATTEMPTS attempts (5 by default), then it is shown as not delivered. "
+                           "Remove it from .env")
     
     def check_query(self, query: MonitoredQuery, force: bool = False) -> dict:
         """
@@ -67,29 +77,13 @@ class MonitorService:
                 result['error_message'] = 'Outside the configured time window'
                 return result
 
-            # Lock: one run at a time per query (the conditional UPDATE is atomic)
-            LOCK_TTL = self._lock_ttl()
-            now = get_utc_now()
-            lock_expired_before = now - LOCK_TTL
-            
-            updated = (
-                db.session.query(MonitoredQuery)
-                .filter(
-                    MonitoredQuery.id == query.id,
-                    db.or_(
-                        MonitoredQuery.locked_at == None,
-                        MonitoredQuery.locked_at < lock_expired_before
-                    )
-                )
-                .update(
-                    {MonitoredQuery.locked_at: now},
-                    synchronize_session=False
-                )
-            )
-            db.session.commit()
-            
-            if updated == 0:
-                # Lock already taken by another process
+            # A disabled connection stops its queries: skipped, not a failure of the source
+            if query.connection_disabled():
+                result['status'] = 'skipped'
+                result['error_message'] = f'The database connection "{query.db_connection.name}" is disabled'
+                return result
+
+            if not self._acquire_lock(query):
                 result['status'] = 'skipped'
                 result['error_message'] = 'Query already running in another process'
                 return result
@@ -98,9 +92,10 @@ class MonitorService:
             logger.info(f"Running query: {query.name} (source: {query.source_type})")
             columns, rows = execute_query_source(query)
             result['rows_returned'] = len(rows)
-            
+
             key_fields = query.get_key_fields_list()
-            
+            self._check_key_fields(key_fields, columns, rows)
+
             # Hash of each row: the identity of the error
             current_errors = {}
             for row in rows:
@@ -164,16 +159,17 @@ class MonitorService:
                     if h in continuing_hashes and existing_errors[h].notify_pending
                     and (existing_errors[h].notify_retry_at is None or existing_errors[h].notify_retry_at <= now)
                 ]
-                if pending:
-                    emails_sent, _ = self._notify_pending(query, pending, columns)
-                    result['emails_sent'] += emails_sent
+                with email_service.batch():
+                    if pending:
+                        emails_sent, _ = self._notify_pending(query, pending, columns)
+                        result['emails_sent'] += emails_sent
 
-                if query.reminder_enabled:
-                    reminder_emails, reminder_channels = self._process_reminders(
-                        query, columns, exclude_ids={e.id for e in pending}
-                    )
-                    result['reminders_sent'] = reminder_emails + reminder_channels
-                    result['emails_sent'] += reminder_emails
+                    if query.reminder_enabled:
+                        reminder_emails, reminder_channels = self._process_reminders(
+                            query, columns, exclude_ids={e.id for e in pending}
+                        )
+                        result['reminders_sent'] = reminder_emails + reminder_channels
+                        result['emails_sent'] += reminder_emails
             except Exception as e:
                 logger.exception(f"Error sending the notifications for {query.name}: {e}")
                 db.session.rollback()
@@ -240,14 +236,14 @@ class MonitorService:
         return result
     
     def _send_notifications(self, query: MonitoredQuery, errors: list, 
-                           columns: list, email_type: str = 'new_errors') -> tuple:
+                           columns: list, email_type: str = 'new_errors', error_ids: list = None) -> tuple:
         """
         Sends notifications applying conditional routing.
         
         Email: one per recipient (or one per error and recipient with
         'per_error' aggregation); with routing off, one to all recipients.
         Channels (Webhook, Telegram, Teams): a single delivery with all the errors,
-        even when the query has no email recipients.
+        even when the query has no email recipients. error_ids: the ids of the errors, in order.
 
         Returns (emails sent, channels reached, {position of the error: recipients reached}).
         """
@@ -285,7 +281,8 @@ class MonitorService:
                 )
                 if email_result.get('success'):
                     emails_sent += 1
-                    self._track_delivery(delivered, position, recipient_errors, recipients_list)
+                    self._track_delivery(delivered, position, recipient_errors,
+                                         email_result.get('recipients', recipients_list))
             else:
                 # One email per error (per_error)
                 for error in recipient_errors:
@@ -298,14 +295,17 @@ class MonitorService:
                     )
                     if email_result.get('success'):
                         emails_sent += 1
-                        self._track_delivery(delivered, position, [error], recipients_list)
+                        self._track_delivery(delivered, position, [error],
+                                             email_result.get('recipients', recipients_list))
         
         # Send to the notification channels (Webhook, Telegram, Teams): only once
         channels_sent = 0
         if query.notification_channels:
             try:
                 from notification_service import notification_service
-                channels_result = notification_service.send_to_all_channels(query, errors)
+                channels_result = notification_service.send_to_all_channels(
+                    query, errors, reminder=email_type == 'reminder', error_ids=error_ids
+                )
                 channels_sent = channels_result['success']
                 if channels_result['total']:
                     logger.info(
@@ -319,6 +319,24 @@ class MonitorService:
         notified_to = {i: sorted(dict.fromkeys(r), key=sort_key) for i, r in delivered.items()}
         return emails_sent, channels_sent, notified_to
     
+    @staticmethod
+    def _check_key_fields(key_fields: list, columns: list, rows: list):
+        """
+        Key fields missing from the results, or none at all, would give every row the same
+        identity and merge them into one error: a configuration error, reported as a failed run.
+        """
+        if not key_fields:
+            raise ValueError("No key fields: name the columns that tell one error from another")
+        if not rows:
+            return
+        available = {name.upper() for name in columns}
+        for row in rows:
+            available.update(name.upper() for name in row)
+        missing = [field for field in key_fields if field.upper() not in available]
+        if missing:
+            raise ValueError(f"Key fields not in the results: {', '.join(missing)} "
+                             f"(columns: {', '.join(columns)})")
+
     @staticmethod
     def _track_delivery(delivered: dict, position: dict, sent_errors: list, recipients: list):
         """Records which recipients received each error (by position)."""
@@ -356,7 +374,7 @@ class MonitorService:
         """
         Sends the notifications not yet delivered (new errors or deliveries that
         failed earlier), only to the recipients and channels still missing. Failed
-        ones are retried with growing waits, then given up after NOTIFY_RETRY_HOURS.
+        ones are tried again after the RETRY_WAITS, NOTIFY_ATTEMPTS times in all, then given up.
         Returns (emails sent, channel deliveries).
         """
         errors = [record.get_error_data() for record in records]
@@ -393,10 +411,6 @@ class MonitorService:
             for i, record in enumerate(records)
         ]
 
-        if not any(intended) and not channels:
-            logger.warning(f"Query {query.name}: no recipients for {len(errors)} errors"
-                           + (" (email is off)" if email_off else ""))
-
         delivered = defaultdict(list)           # error -> recipients reached now
         delivered_channels = defaultdict(list)  # error -> channels reached now
         refused_channels = defaultdict(list)    # error -> channels that refused it for good (4xx)
@@ -414,15 +428,21 @@ class MonitorService:
                 errors=[errors[i] for i in idxs],
                 columns=columns,
                 recipients_override=recipients_list,
-                email_type='new_errors'
+                email_type='new_errors',
+                quiet=True
             )
+            refused = email_result.get('refused') or {}
+            for i in idxs:
+                if email_result.get('success'):
+                    delivered[i].extend(email_result.get('recipients', recipients_list))
+                elif not refused:
+                    failures[i].append(f"{', '.join(recipients_list)}: "
+                                       f"{email_result.get('message', 'delivery failed')}")
+                # Whether the others got it or not, the server's reason for each address it refused
+                failures[i].extend(f"{address}: {reason}" for address, reason in refused.items())
             if email_result.get('success'):
                 emails_sent += 1
-                for i in idxs:
-                    delivered[i].extend(recipients_list)
             else:
-                for i in idxs:
-                    failures[i].append(f"{', '.join(recipients_list)}: {email_result.get('message', 'delivery failed')}")
                 # If the service does not answer, no point trying the other emails of this round
                 email_down = email_result.get('email_unavailable') is True
 
@@ -433,7 +453,8 @@ class MonitorService:
                 requested = channel_ids if channel_ids is not None else [c.id for c in channels]
                 try:
                     channels_result = notification_service.send_to_all_channels(
-                        query, [errors[i] for i in idxs], channel_ids=channel_ids
+                        query, [errors[i] for i in idxs], channel_ids=channel_ids,
+                        error_ids=[records[i].id for i in idxs]
                     )
                 except Exception as e:
                     logger.error(f"Notification channels error: {e}")
@@ -441,11 +462,6 @@ class MonitorService:
                         failures[i].append(f"channels: {redact_secrets(str(e))}")
                     continue
                 channels_sent += channels_result.get('success', 0)
-                if channels_result.get('total'):
-                    logger.info(
-                        f"Query {query.name}: notification sent to "
-                        f"{channels_result.get('success', 0)}/{channels_result['total']} channels"
-                    )
                 reached = self._channels_delivered(channels_result, requested)
                 for i in idxs:
                     delivered_channels[i].extend(cid for cid in reached if cid in missing_channels[i])
@@ -458,7 +474,9 @@ class MonitorService:
         # Record what was delivered and what is still missing
         sort_key = self._recipients_sort_key(query)
         now = get_utc_now()
-        retry_hours = current_app.config.get('NOTIFY_RETRY_HOURS', 24)
+        max_attempts = max(1, current_app.config.get('NOTIFY_ATTEMPTS', 5))
+        attempts = [(record.notify_attempts or 0) + 1 for record in records]
+        pending, given_up = {}, {}  # error -> recipients and channels still missing
         for i, record in enumerate(records):
             if delivered.get(i):
                 record.add_notified_to(sorted(dict.fromkeys(delivered[i]), key=sort_key), sort_key)
@@ -482,24 +500,21 @@ class MonitorService:
 
             if still_missing:
                 record.notify_attempts = (record.notify_attempts or 0) + 1
-                if record.first_seen_at and now - record.first_seen_at >= timedelta(hours=retry_hours):
-                    # Retried long enough: given up, shown as not delivered
+                if record.notify_attempts >= max_attempts:
+                    # Tried enough: given up, shown as not delivered
                     record.add_undeliverable(channels=[c.id for c in missing_channels_now], recipients=missing_now)
                     record.notify_pending = False
                     record.notify_retry_at = None
                     record.last_notify_error = (f"Not delivered after {record.notify_attempts} attempts: "
                                                 f"{reasons or ', '.join(still_missing)}")[:2000]
-                    logger.error(f"Query {query.name}: notification given up for {', '.join(still_missing)} "
-                                 f"after {record.notify_attempts} attempts")
+                    given_up[i] = still_missing
                 else:
-                    # Waits of 1, 2, 4... minutes, at most one hour (and at least the query interval)
+                    # The scheduler sends it again when the wait is over, not at the query's next check
+                    wait = RETRY_WAITS[min(record.notify_attempts, len(RETRY_WAITS)) - 1]
                     record.notify_pending = True
-                    record.notify_retry_at = now + timedelta(minutes=min(2 ** (record.notify_attempts - 1), 60))
+                    record.notify_retry_at = now + timedelta(minutes=wait)
                     record.last_notify_error = (reasons or f"Not yet delivered to: {', '.join(still_missing)}")[:2000]
-                    logger.warning(
-                        f"Query {query.name}: notification pending for {', '.join(still_missing)} "
-                        f"(attempt {record.notify_attempts}), will be retried"
-                    )
+                    pending[i] = still_missing
             else:
                 record.notify_pending = False
                 record.notify_retry_at = None
@@ -509,7 +524,55 @@ class MonitorService:
                     record.last_notify_error = None
 
         db.session.commit()
+
+        names = {c.id: c.name for c in channels}
+        self._log_attempt(
+            query, records, attempts,
+            reached=[r for i in delivered for r in delivered[i]]
+            + [names[c] for i in delivered_channels for c in delivered_channels[i]],
+            pending=pending, given_up=given_up,
+            refused=[names.get(c, str(c)) for i in refused_channels for c in refused_channels[i]],
+            reasons=[reason for i in sorted(failures) for reason in failures[i]],
+            nobody=not any(intended) and not channels, email_off=email_off,
+        )
         return emails_sent, channels_sent
+
+    @staticmethod
+    def _log_attempt(query: MonitoredQuery, records: list, attempts: list, reached: list, pending: dict,
+                     given_up: dict, refused: list, reasons: list, nobody: bool, email_off: bool):
+        """
+        One line for a delivery attempt, whatever the number of errors: what went out, what is
+        still pending and when it is tried again, what was given up, and why.
+        """
+        def names(items, limit=10, sep=', '):
+            items = list(dict.fromkeys(items))
+            more = f" and {len(items) - limit} more" if len(items) > limit else ''
+            return sep.join(str(item) for item in items[:limit]) + more
+
+        low, high = min(attempts), max(attempts)
+        parts = []
+        if nobody:
+            parts.append("no recipients" + (" (email is off)" if email_off else ""))
+        if reached:
+            parts.append(f"delivered to {names(reached)}")
+        if pending:
+            waits = [records[i].notify_retry_at - get_utc_now() for i in pending]
+            minutes = max(1, round(min(waits).total_seconds() / 60))
+            parts.append(f"{len(pending)} pending for {names(r for missing in pending.values() for r in missing)}, "
+                         f"next attempt in {minutes} min")
+        if given_up:
+            parts.append(f"{len(given_up)} given up for {names(r for missing in given_up.values() for r in missing)} "
+                         f"after {max(records[i].notify_attempts for i in given_up)} attempts")
+        if refused:
+            parts.append(f"refused for good by {names(refused)}")
+        if reasons:
+            # Reasons hold lists of recipients themselves: another separator
+            parts.append(f"why: {names((reason[:200] for reason in reasons), limit=5, sep=' / ')}")
+
+        level = logging.ERROR if given_up or refused else logging.WARNING if pending or nobody else logging.INFO
+        errors = f"{len(records)} error{'s' if len(records) != 1 else ''}"
+        attempt = f"attempt {high}" if low == high else f"attempts {low}-{high}"
+        logger.log(level, f"Query {query.name}: notifications for {errors}, {attempt}: {'; '.join(parts)}")
 
     @staticmethod
     def _plan_email_jobs(query: MonitoredQuery, routing_result: dict, position: dict, missing: list) -> list:
@@ -576,6 +639,58 @@ class MonitorService:
         cfg = current_app.config
         seconds = cfg.get('DB_CONNECT_TIMEOUT_SECONDS', 15) + cfg.get('DB_QUERY_TIMEOUT_SECONDS', 300) + 600
         return timedelta(seconds=max(300, seconds))
+
+    def _acquire_lock(self, query: MonitoredQuery) -> bool:
+        """
+        One check or delivery at a time per query, also across processes (the conditional
+        UPDATE is atomic). A lock older than the longest possible check is taken over.
+        """
+        now = get_utc_now()
+        updated = (
+            db.session.query(MonitoredQuery)
+            .filter(MonitoredQuery.id == query.id,
+                    db.or_(MonitoredQuery.locked_at.is_(None),
+                           MonitoredQuery.locked_at < now - self._lock_ttl()))
+            .update({MonitoredQuery.locked_at: now}, synchronize_session=False)
+        )
+        db.session.commit()
+        return updated > 0
+
+    def deliver_pending(self, query: MonitoredQuery) -> dict:
+        """
+        Sends again the notifications whose wait is over, without reading the source.
+        The scheduler calls it every minute: a failed notification of a daily query
+        does not wait for the next day. Returns {'status', 'emails_sent'}.
+        """
+        result = {'status': 'success', 'emails_sent': 0}
+        if not self._acquire_lock(query):
+            result['status'] = 'skipped'
+            return result
+        try:
+            now = get_utc_now()
+            records = (
+                ErrorRecord.query
+                .filter(ErrorRecord.query_id == query.id,
+                        ErrorRecord.resolved_at.is_(None),
+                        ErrorRecord.notify_pending.is_(True),
+                        db.or_(ErrorRecord.notify_retry_at.is_(None), ErrorRecord.notify_retry_at <= now))
+                .order_by(ErrorRecord.id)
+                .all()
+            )
+            if records:
+                # The columns of the rows as they were saved, in the query's order
+                columns = list(dict.fromkeys(key for record in records for key in record.get_error_data()))
+                with email_service.batch():
+                    result['emails_sent'], _ = self._notify_pending(query, records, columns)
+                query.total_emails_sent = (query.total_emails_sent or 0) + result['emails_sent']
+        except Exception as e:
+            logger.exception(f"Pending notifications of {query.name} not sent: {e}")
+            db.session.rollback()
+            result['status'] = 'error'
+        finally:
+            query.locked_at = None
+            db.session.commit()
+        return result
 
     @staticmethod
     def _failure_threshold(query: MonitoredQuery) -> int:
@@ -687,7 +802,8 @@ class MonitorService:
             return 0, 0
         
         emails_sent, channels_sent, notified_to = self._send_notifications(
-            query, errors_needing_reminder, columns, email_type='reminder'
+            query, errors_needing_reminder, columns, email_type='reminder',
+            error_ids=[error.id for error in error_records]
         )
         
         # Adds any new recipients (e.g. rules changed in the meantime)
@@ -814,12 +930,18 @@ class MonitorService:
         return test_query_source(query)
     
     def get_query_available_fields(self, query_id: int) -> list:
-        """Gets the fields available for a query (for routing configuration)."""
-        query = MonitoredQuery.query.get(query_id)
-        if not query:
+        """
+        Fields for the routing conditions, from the last error found. Opening the form must
+        not run the query: it can be slow and it reads production data (Test query in the
+        form suggests the fields too).
+        """
+        last = ErrorRecord.query.filter_by(query_id=query_id).order_by(ErrorRecord.id.desc()).first()
+        if last is None:
             return []
-        
-        return get_query_fields(query)
+        return [{'name': name,
+                 'type': 'number' if isinstance(value, (int, float)) and not isinstance(value, bool) else 'text',
+                 'sample': str(value)[:100] if value is not None else None}
+                for name, value in last.get_error_data().items()]
 
 
 monitor_service = MonitorService()

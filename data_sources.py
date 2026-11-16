@@ -5,7 +5,6 @@ Supports databases (through db_drivers) and HTTP/REST.
 import logging
 import requests
 from abc import ABC, abstractmethod
-from datetime import datetime
 from flask import current_app
 from utils import redact_secrets
 
@@ -31,11 +30,6 @@ class DataSource(ABC):
     @abstractmethod
     def test(self, config: dict) -> dict:
         """Tests the configuration; returns {'success', 'message', 'details'}."""
-        pass
-    
-    @abstractmethod
-    def get_fields(self, config: dict) -> list:
-        """Fields available, to help configure routing: [{'name', 'type', 'sample'}, ...]."""
         pass
 
 
@@ -139,35 +133,6 @@ class HttpDataSource(DataSource):
                 'success': False,
                 'message': redact_secrets(str(e))
             }
-    
-    def get_fields(self, config: dict) -> list:
-        try:
-            columns, rows = self.execute(config)
-            
-            if not rows:
-                return [{'name': col, 'type': 'text', 'sample': None} for col in columns]
-            
-            sample_row = rows[0]
-            fields = []
-            
-            for col in columns:
-                value = sample_row.get(col)
-                field_type = 'text'
-                if isinstance(value, (int, float)):
-                    field_type = 'number'
-                elif isinstance(value, datetime):
-                    field_type = 'date'
-                
-                fields.append({
-                    'name': col,
-                    'type': field_type,
-                    'sample': str(value)[:100] if value is not None else None
-                })
-            
-            return fields
-        except Exception as e:
-            logger.error(f"HTTP get_fields error: {e}")
-            return []
 
 
 # === FACTORY ===
@@ -190,98 +155,40 @@ class DataSourceFactory:
 
 # === HELPER FUNCTIONS ===
 
+def _connection(query):
+    from models import DatabaseConnection
+    if not query.db_connection_id:
+        raise ValueError("No database connection: choose one in the query form")
+    conn = DatabaseConnection.query.get(query.db_connection_id)
+    if not conn:
+        raise ValueError(f"Database connection {query.db_connection_id} not found")
+    return conn
+
+
 def execute_query_source(query) -> tuple:
-    """Runs the query on its source (database connection or HTTP); returns (columns, rows)."""
-    # With a database connection, use it
-    if query.db_connection_id:
-        from models import DatabaseConnection
-        conn = DatabaseConnection.query.get(query.db_connection_id)
-        if not conn:
-            raise ValueError(f"Database connection {query.db_connection_id} not found")
-        return conn.execute_query(query.sql_query)
-    
-    # Otherwise HTTP
+    """
+    Runs the query on its source; returns (columns, rows). The source type decides: an
+    HTTP query may still have the connection it had before being switched to HTTP.
+    """
     if query.source_type == 'http':
-        source = DataSourceFactory.get_source('http')
-        config = query.get_source_config()
-        return source.execute(config)
-    
-    raise ValueError(f"Invalid source configuration for query {query.id}")
+        return DataSourceFactory.get_source('http').execute(query.get_source_config())
+    return _connection(query).execute_query(query.sql_query)
 
 
 def test_query_source(query) -> dict:
     """Tests the source of a query; returns {'success', 'message', 'details'}."""
-    # With a database connection, test through it
-    if query.db_connection_id:
-        from models import DatabaseConnection
-        conn = DatabaseConnection.query.get(query.db_connection_id)
-        if not conn:
-            return {'success': False, 'message': 'Database connection not found'}
-        
-        try:
-            columns, rows = conn.execute_query(query.sql_query)
-            return {
-                'success': True,
-                'message': f'Valid query, {len(rows)} rows returned',
-                'details': {
-                    'columns': columns,
-                    'row_count': len(rows),
-                    'sample_rows': rows[:5]
-                }
-            }
-        except Exception as e:
-            return {'success': False, 'message': redact_secrets(str(e))}
-    
-    # Otherwise HTTP
     if query.source_type == 'http':
-        source = DataSourceFactory.get_source('http')
-        config = query.get_source_config()
-        return source.test(config)
-    
-    return {'success': False, 'message': 'No source configured'}
-
-
-def get_query_fields(query) -> list:
-    """Fields available for a query (see DataSource.get_fields)."""
-    # With a database connection, get the fields from it
-    if query.db_connection_id:
-        from models import DatabaseConnection
-        conn = DatabaseConnection.query.get(query.db_connection_id)
-        if not conn:
-            return []
-        
-        try:
-            columns, rows = conn.execute_query(query.sql_query)
-            
-            if not rows:
-                return [{'name': col, 'type': 'text', 'sample': None} for col in columns]
-            
-            sample_row = rows[0]
-            fields = []
-            
-            for col in columns:
-                value = sample_row.get(col)
-                field_type = 'text'
-                if isinstance(value, (int, float)):
-                    field_type = 'number'
-                elif isinstance(value, datetime):
-                    field_type = 'date'
-                
-                fields.append({
-                    'name': col,
-                    'type': field_type,
-                    'sample': str(value)[:100] if value is not None else None
-                })
-            
-            return fields
-        except Exception as e:
-            logger.error(f"Database get_fields error: {e}")
-            return []
-    
-    # Otherwise HTTP
-    if query.source_type == 'http':
-        source = DataSourceFactory.get_source('http')
-        config = query.get_source_config()
-        return source.get_fields(config)
-    
-    return []
+        return DataSourceFactory.get_source('http').test(query.get_source_config())
+    try:
+        columns, rows = _connection(query).execute_query(query.sql_query)
+    except Exception as e:
+        return {'success': False, 'message': redact_secrets(str(e))}
+    return {
+        'success': True,
+        'message': f'Valid query, {len(rows)} rows returned',
+        'details': {
+            'columns': columns,
+            'row_count': len(rows),
+            'sample_rows': rows[:5]
+        }
+    }

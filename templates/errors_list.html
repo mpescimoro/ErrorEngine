@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_delivery.html" import delivery_state %}
 {% set live_reload = true %}  {# reload the page when errors change #}
 
 {% block title %}Active errors - ErrorEngine{% endblock %}
@@ -24,6 +25,14 @@
             <option value="{{ q.id }}" {{ 'selected' if selected_query_id == q.id }}>{{ q.name }} ({{ error_counts.get(q.id, 0) }})</option>
             {% endfor %}
         </select>
+        {% if delivery_counts.pending or delivery_counts.failed or selected_delivery %}
+        <select name="delivery" class="form-control form-select" onchange="this.form.submit()" style="width: auto;"
+                aria-label="Filter by notification">
+            <option value="">All notifications</option>
+            <option value="pending" {{ 'selected' if selected_delivery == 'pending' }}>Delivery pending ({{ delivery_counts.pending }})</option>
+            <option value="failed" {{ 'selected' if selected_delivery == 'failed' }}>Not delivered ({{ delivery_counts.failed }})</option>
+        </select>
+        {% endif %}
     </form>
     {% endif %}
 </div>
@@ -117,16 +126,7 @@
                         {% elif not error.notify_pending and not error.undeliverable %}
                         <span class="text-muted" title="No email address recorded for this error">—</span>
                         {% endif %}
-                        {% if error.notify_pending %}
-                        <span class="badge badge-warning" title="{{ error.last_notify_error or 'Will be retried' }}">
-                            Delivery pending{% if error.notify_attempts %} · {{ error.notify_attempts }} {{ 'attempt' if error.notify_attempts == 1 else 'attempts' }}{% endif %}
-                        </span>
-                        {% endif %}
-                        {% if error.undeliverable %}
-                        <span class="badge badge-danger" title="{{ error.last_notify_error or 'Delivery given up' }}">
-                            Not delivered
-                        </span>
-                        {% endif %}
+                        {{ delivery_state(error, channel_names) }}
                     </td>
                     <td>
                         <span title="{{ error.first_seen_at|localtime('%d/%m/%Y %H:%M:%S') }}">

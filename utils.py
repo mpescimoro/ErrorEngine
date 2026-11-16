@@ -122,6 +122,11 @@ def format_local_now(fmt='%d/%m/%Y %H:%M:%S', app=None):
     return get_local_now().strftime(fmt)
 
 
+def utc_iso(utc_dt) -> str:
+    """Naive UTC datetime as ISO 8601 ending in Z (2026-11-13T17:00:00Z): it says it is UTC."""
+    return utc_dt.replace(microsecond=0).isoformat() + 'Z'
+
+
 # --- Secrets out of messages (error texts reach logs, pages and alerts) ---
 
 _URL_RE = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s'\"<>]+", re.I)

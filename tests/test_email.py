@@ -154,6 +154,24 @@ class TestSmtp:
             result = email_service.send_error_notification(query, [{'ID': 1}], ['ID'])
         assert result['success'] is False and result['email_unavailable'] is True
 
+    def test_every_address_refused(self, app):
+        import smtplib
+        from email_service import email_service
+        with patch('email_service.smtplib.SMTP_SSL') as smtp_ssl:
+            smtp_ssl.return_value.sendmail.side_effect = smtplib.SMTPRecipientsRefused(
+                {'bad@x.it': (550, b'5.1.1 User unknown')})
+            result = email_service.test_email('bad@x.it')
+        assert result == {'success': False, 'message': 'Refused by the mail server: bad@x.it: 550 5.1.1 User unknown'}
+
+    def test_service_email_says_who_was_refused(self, app, caplog):
+        from email_service import email_service
+        with patch('email_service.smtplib.SMTP_SSL') as smtp_ssl, caplog.at_level(logging.WARNING):
+            smtp_ssl.return_value.sendmail.return_value = {'bad@x.it': (550, b'5.1.1 User\n unknown')}
+            result = email_service.send_system_notification(['ops@x.it', 'bad@x.it'], 'S', 'T', ['line'])
+        assert result['success'] is True and result['recipients'] == ['ops@x.it']
+        assert EmailLog.query.one().error_message == 'Refused by the mail server: bad@x.it: 550 5.1.1 User unknown'
+        assert 'bad@x.it: 550 5.1.1 User unknown' in caplog.text
+
 
 class TestSmtpTls:
 
@@ -185,6 +203,86 @@ class TestSmtpTls:
     def test_public_servers_keep_the_default_checks(self, app):
         _, smtp_ssl = self.send_test(app, MAIL_SECURITY='ssl', MAIL_CA_FILE='')
         assert smtp_ssl.call_args.kwargs['context'].verify_flags == ssl.create_default_context().verify_flags
+
+
+
+# --- Subject ---
+
+class TestSubject:
+
+    def test_placeholders(self):
+        from email_service import format_subject
+        assert format_subject('{query_name}: {error_count} errors', query_name='Orders', error_count=3) == \
+            'Orders: 3 errors'
+        assert format_subject('{error_count:03d} new', query_name='Orders', error_count=3) == '003 new'
+
+    def test_a_typo_is_sent_as_written(self, app):
+        from email_service import email_service
+        query = make_query(email_subject='[ErrorEngine] {query}: {error_count} errors on {query_name} {')
+        with patch('email_service.EmailService._deliver') as deliver:
+            result = email_service.send_error_notification(query, [{'ID': 1}], ['ID'])
+        assert result['success']
+        assert deliver.call_args.args[1] == '[ErrorEngine] {query}: 1 errors on Orders {'
+
+    def test_empty_subject_is_the_default_one(self, app):
+        from email_service import email_service
+        query = make_query(email_subject='')
+        with patch('email_service.EmailService._deliver') as deliver:
+            email_service.send_error_notification(query, [{'ID': 1}], ['ID'])
+        assert deliver.call_args.args[1] == '[ErrorEngine] New errors: Orders'
+
+    def test_unknown_placeholders_listed(self):
+        from email_service import unknown_subject_placeholders
+        assert unknown_subject_placeholders('{query} {query_name} {error_count:d} {}') == ['{query}', '{}']
+        assert unknown_subject_placeholders(None) == []
+
+
+# --- One SMTP connection per check ---
+
+class TestOneConnectionPerCheck:
+
+    def test_one_connection_for_the_emails_of_a_check(self, app):
+        from monitor_service import monitor_service
+        query = make_query(routing_enabled=True, routing_aggregation='per_error',
+                           routing_default_recipients='a@x.it, b@x.it')
+        with patch('monitor_service.execute_query_source', return_value=(['ID'], [{'ID': 1}, {'ID': 2}])), \
+             patch('email_service.smtplib.SMTP_SSL') as smtp_ssl:
+            monitor_service.check_query(query, force=True)
+        server = smtp_ssl.return_value
+        assert server.sendmail.call_count == 4  # one email per error and recipient
+        assert smtp_ssl.call_count == 1 and server.login.call_count == 1 and server.quit.call_count == 1
+
+    def test_also_for_the_retries_between_checks(self, app):
+        from monitor_service import monitor_service
+        query = make_query(email_recipients='a@x.it', routing_enabled=True, routing_aggregation='per_error',
+                           routing_default_recipients='a@x.it')
+        with patch('monitor_service.execute_query_source', return_value=(['ID'], [{'ID': 1}, {'ID': 2}])), \
+             patch('email_service.smtplib.SMTP_SSL', side_effect=OSError('Connection refused')):
+            monitor_service.check_query(query, force=True)
+        for error in ErrorRecord.query.filter_by(query_id=query.id):
+            error.notify_retry_at = None
+        db.session.commit()
+        with patch('email_service.smtplib.SMTP_SSL') as smtp_ssl:
+            monitor_service.deliver_pending(query)
+        assert smtp_ssl.return_value.sendmail.call_count == 2 and smtp_ssl.call_count == 1
+
+    def test_a_dropped_connection_is_opened_again(self, app):
+        import smtplib
+        from email_service import email_service
+        with patch('email_service.smtplib.SMTP_SSL') as smtp_ssl:
+            smtp_ssl.return_value.sendmail.side_effect = [smtplib.SMTPServerDisconnected('gone'), None]
+            with email_service.batch():
+                first = email_service.test_email('a@x.it')
+                second = email_service.test_email('b@x.it')
+        assert not first['success'] and second['success']
+        assert smtp_ssl.call_count == 2
+
+    def test_outside_a_check_one_connection_per_email(self, app):
+        from email_service import email_service
+        with patch('email_service.smtplib.SMTP_SSL') as smtp_ssl:
+            email_service.test_email('a@x.it')
+            email_service.test_email('b@x.it')
+        assert smtp_ssl.call_count == 2 and smtp_ssl.return_value.quit.call_count == 2
 
 
 # --- Microsoft 365 through Microsoft Graph ---
@@ -462,3 +560,97 @@ class TestEmailTemplate:
         result, html = send_notification(make_query())
         assert result['success'] is True
         assert 'E-1' in html and '&lt;b&gt;bold&lt;/b&gt;' in html
+
+
+# --- Sample email from the query form ---
+
+def send_sample(client, **form):
+    """Sends the sample email with the given form values; returns (answer, _deliver mock)."""
+    from email_service import email_service
+    form.setdefault('recipients', 'me@x.it')
+    form.setdefault('name', 'Draft')
+    with patch.object(email_service, '_deliver') as deliver:
+        answer = client.post('/api/test/sample-email', json=form)
+    return answer, deliver
+
+
+class TestSampleEmail:
+    """The email of the query form, before saving: its subject, template and sample rows."""
+
+    def test_what_the_form_shows(self, app, client):
+        answer, deliver = send_sample(
+            client, email_subject='{query_name}: {error_count} rows',
+            email_template='<p>{{ query_name }}{% for e in errors %} {{ e.ID }}{% endfor %}</p>',
+            columns=['ID'], rows=[{'ID': 'R-1'}, {'ID': 'R-2'}])
+        result = answer.get_json()
+        assert result['success'] is True and 'Test query' in result['message']
+        recipients, subject, html, _ = deliver.call_args.args
+        assert recipients == ['me@x.it']
+        assert subject == '[Sample] Draft: 2 rows'
+        assert '<p>Draft R-1 R-2</p>' in html
+        assert EmailLog.query.count() == 0   # not a notification
+
+    def test_rows_from_the_latest_errors(self, app, client):
+        query = make_query()
+        record = ErrorRecord(query_id=query.id, error_hash='h1')
+        record.set_error_data({'ID': 'STORED-1'})
+        db.session.add(record)
+        db.session.commit()
+        answer, deliver = send_sample(client, query_id=query.id)
+        assert 'latest errors' in answer.get_json()['message']
+        assert 'STORED-1' in deliver.call_args.args[2]
+
+    def test_a_made_up_row_without_rows(self, app, client):
+        answer, deliver = send_sample(client, key_fields='ORDER_NO, ITEM')
+        assert 'made-up' in answer.get_json()['message']
+        html = deliver.call_args.args[2]
+        assert 'ORDER_NO' in html and 'ITEM' in html
+
+    def test_template_errors_reported_not_hidden(self, app, client):
+        answer, deliver = send_sample(client, email_template='<p>{% for e in errors %}</p>')
+        result = answer.get_json()
+        assert result['success'] is False and 'template' in result['message']
+        assert 'default template' in result['message']
+        assert not deliver.called
+
+    def test_missing_template_file_reported(self, app, client):
+        answer, deliver = send_sample(client, email_template='{no_such_template}')
+        result = answer.get_json()
+        assert result['success'] is False and 'no_such_template.html' in result['message']
+        assert not deliver.called
+
+    def test_unknown_placeholders_warned(self, app, client):
+        answer, deliver = send_sample(client, email_subject='Errors for {custmer}')
+        result = answer.get_json()
+        assert result['success'] is True and '{custmer}' in result['warning']
+        assert deliver.call_args.args[1] == '[Sample] Errors for {custmer}'
+
+    def test_refused_addresses_reported(self, app, client):
+        with patch('email_service.smtplib.SMTP_SSL') as smtp:
+            smtp.return_value.sendmail.return_value = {'bad@x.it': (550, b'5.1.1 User unknown')}
+            answer = client.post('/api/test/sample-email', json={'recipients': 'me@x.it, bad@x.it', 'name': 'Draft'})
+        result = answer.get_json()
+        assert result['success'] is True
+        assert 'sent to me@x.it' in result['message'] and 'bad@x.it' not in result['message']
+        assert 'bad@x.it: 550 5.1.1 User unknown' in result['warning']
+
+    def test_addresses_checked(self, app, client):
+        answer, deliver = send_sample(client, recipients='not-an-address')
+        assert answer.status_code == 400 and not deliver.called
+        answer, deliver = send_sample(client, recipients='')
+        assert answer.status_code == 400 and not deliver.called
+
+    def test_email_off(self, email_off, client):
+        from email_service import EMAIL_OFF_MESSAGE
+        answer, deliver = send_sample(client)
+        assert answer.get_json() == {'success': False, 'message': EMAIL_OFF_MESSAGE}
+        assert not deliver.called
+
+    def test_in_the_query_form(self, app, client):
+        query = make_query(email_recipients='ops@x.it, it@x.it')
+        html = client.get(f'/queries/{query.id}/edit').get_data(as_text=True)
+        assert 'Send sample email' in html
+        assert 'id="sampleEmailRecipients"' in html and 'value="ops@x.it, it@x.it"' in html
+        app.config['MAIL_SERVER'] = ''
+        html = client.get('/queries/new').get_data(as_text=True)
+        assert 'Send sample email' not in html and 'Email is off' in html

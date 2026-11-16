@@ -12,6 +12,8 @@ Set it per query in the **Email template** field:
 
 If a template cannot be used (missing file, syntax error), the email goes out with the default template.
 
+**Send sample email**, under the template in the query form, sends the email as the form is now, saved or not, with the rows of **Test query** or the latest errors of the query, to the addresses you type. A template that cannot be used is reported there instead.
+
 ## Variables
 
 Templates use [Jinja](https://jinja.palletsprojects.com/templates/) and see these variables:
@@ -43,4 +45,4 @@ Values are escaped automatically. Templates run in a sandbox: they cannot reach 
 
 ## Subject
 
-The **Email subject** field accepts `{query_name}` and `{error_count}`. Reminders get `[REMINDER]` in front.
+The **Email subject** field accepts `{query_name}` and `{error_count}`, also with a format such as `{error_count:03d}`. Anything else between braces is sent as written, and saving the query points it out. An empty subject is `[ErrorEngine] New errors: {query_name}`. Reminders get `[REMINDER]` in front, unless the subject already says REMINDER.

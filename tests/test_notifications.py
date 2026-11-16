@@ -3,6 +3,7 @@ Notification delivery tests: email per recipient, recording who received each
 error, channels sent only once and their messages, queries with channels only.
 """
 import json
+import re
 import pytest
 from datetime import timedelta
 from decimal import Decimal
@@ -49,6 +50,17 @@ ROUTING_HELPDESK = dict(
     rules=[('user.ped@x.it, helpdesk@x.it', [('TEAM', 'PED')]),
            ('user1.it@x.it, user2.it@x.it, helpdesk@x.it', [('TEAM', 'IT')])],
 )
+
+
+def make_old_error(query):
+    """An error notified 5 hours ago: a reminder is due."""
+    error = ErrorRecord(query_id=query.id, email_sent=True,
+                        error_hash=ErrorRecord.calculate_hash(ERRORS[0], query.get_key_fields_list()),
+                        email_sent_at=get_utc_now() - timedelta(hours=5))
+    error.set_error_data(ERRORS[0])
+    db.session.add(error)
+    db.session.commit()
+    return error
 
 
 @pytest.fixture
@@ -268,6 +280,115 @@ class TestChannels:
         assert result['success'] is True
         assert json.loads(request.call_args.kwargs['data'])['errors'] == [{'AMOUNT': '12.50'}]
 
+    def test_new_errors_reach_the_channels_with_their_ids(self, app, channel, send_email, send_channels):
+        from monitor_service import monitor_service
+        query = make_query(channel=channel, email_recipients='')
+        with patch('monitor_service.execute_query_source', return_value=(['ID', 'TEAM'], ERRORS[:2])):
+            monitor_service.check_query(query, force=True)
+        ids = [e.id for e in ErrorRecord.query.filter_by(query_id=query.id).order_by(ErrorRecord.id)]
+        assert send_channels.call_args.kwargs['error_ids'] == ids
+        assert not send_channels.call_args.kwargs.get('reminder')
+
+
+CHANNEL_CONFIGS = {
+    'webhook': {'url': 'https://example.invalid/hook'},
+    'telegram': {'bot_token': 'T', 'chat_id': '1'},
+    'teams': {'webhook_url': 'https://example.invalid/workflow'},
+}
+
+
+def received_by(channel_type, query, errors=ERRORS[:2], **kwargs):
+    """What the channel receives: the webhook JSON, the Telegram text or the Teams card."""
+    from notification_service import notification_service
+    channel = NotificationChannel(name=channel_type, channel_type=channel_type,
+                                  config=json.dumps(CHANNEL_CONFIGS[channel_type]))
+    db.session.add(channel)
+    db.session.commit()
+    with patch('notification_service.requests.request') as request, \
+         patch('notification_service.requests.post') as post:
+        request.return_value.status_code = 200
+        post.return_value.status_code = 200
+        post.return_value.json.return_value = {'ok': True}
+        assert notification_service.send_to_channel(channel, query, errors, **kwargs)['success'] is True
+    if channel_type == 'webhook':
+        return json.loads(request.call_args.kwargs['data'])
+    if channel_type == 'telegram':
+        return post.call_args.kwargs['json']['text']
+    return json.loads(post.call_args.kwargs['data'])
+
+
+class TestChannelMessages:
+    """Webhooks, Telegram and Teams tell reminders from new errors; webhooks carry the error ids."""
+
+    def test_webhook_new_errors(self, app):
+        payload = received_by('webhook', make_query(), error_ids=[7, 8])
+        assert payload['event'] == 'errors_detected'
+        assert payload['errors'] == ERRORS[:2] and payload['error_ids'] == [7, 8]
+        assert payload['errors_count'] == 2
+        # UTC, and it says so
+        assert re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ', payload['timestamp'])
+
+    def test_webhook_reminder(self, app):
+        payload = received_by('webhook', make_query(), reminder=True, error_ids=[7, 8])
+        assert payload['event'] == 'errors_reminder'
+        assert payload['error_ids'] == [7, 8]
+
+    def test_webhook_ids_follow_the_first_50_errors(self, app):
+        rows = [{'ID': i} for i in range(60)]
+        payload = received_by('webhook', make_query(), errors=rows, error_ids=list(range(100, 160)))
+        assert payload['errors_count'] == 60
+        assert len(payload['errors']) == len(payload['error_ids']) == 50
+        assert payload['error_ids'][-1] == 149
+
+    def test_telegram(self, app):
+        query = make_query()
+        new = received_by('telegram', query)
+        reminder = received_by('telegram', query, reminder=True)
+        assert new.splitlines()[0] != reminder.splitlines()[0]
+        assert 'reminder' in reminder.splitlines()[0].lower()
+        assert '<b>Time:</b>' in new and 'Data:' not in new
+
+    def test_teams(self, app):
+        query = make_query()
+        new = received_by('teams', query)['sections'][0]
+        reminder = received_by('teams', query, reminder=True)['sections'][0]
+        assert new['activitySubtitle'] != reminder['activitySubtitle']
+        assert 'reminder' in reminder['activitySubtitle'].lower()
+        assert [f['name'] for f in new['facts']][:2] == ['New errors', 'Time']
+
+    def test_webhook_failing_query_alert_in_utc(self, app):
+        from notification_service import notification_service
+        query = make_query()
+        query.notification_channels.append(NotificationChannel(
+            name='Hook', channel_type='webhook', config=json.dumps(CHANNEL_CONFIGS['webhook'])))
+        db.session.commit()
+        with patch('notification_service.requests.request') as request:
+            request.return_value.status_code = 200
+            notification_service.send_system_message(query, 'monitor_failed', 'Failing', ['Last error: x'])
+        payload = json.loads(request.call_args.kwargs['data'])
+        assert payload['event'] == 'monitor_failed'
+        assert re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ', payload['timestamp'])
+
+    def test_no_links_to_errorengine(self, app):
+        # With a single account, whoever receives the notifications usually cannot sign in
+        from email_service import email_service
+        query = make_query()
+        assert 'url' not in received_by('webhook', query)
+        assert 'http' not in received_by('telegram', query)
+        assert 'http' not in json.dumps(received_by('teams', query)['sections'])
+        with patch.object(email_service, '_deliver') as deliver:
+            email_service.send_error_notification(query, ERRORS[:1], ['ID', 'TEAM'], recipients_override=['a@x.it'])
+        assert 'href=' not in deliver.call_args.args[2]
+
+    def test_reminders_reach_the_channels_as_reminders(self, app, channel, send_email, send_channels):
+        from monitor_service import monitor_service
+        query = make_query(channel=channel, email_recipients='', reminder_enabled=True,
+                           reminder_interval_minutes=60, reminder_max_count=3)
+        error = make_old_error(query)
+        monitor_service._process_reminders(query, ['ID'])
+        assert send_channels.call_args.kwargs['reminder'] is True
+        assert send_channels.call_args.kwargs['error_ids'] == [error.id]
+
 
 class TestEmailFromTheScheduler:
     """Emails are created by the scheduler, outside a web request."""
@@ -292,21 +413,12 @@ class TestEmailFromTheScheduler:
 class TestReminders:
     """Reminders to channels only."""
 
-    def make_old_error(self, query):
-        error = ErrorRecord(query_id=query.id, email_sent=True,
-                            error_hash=ErrorRecord.calculate_hash(ERRORS[0], query.get_key_fields_list()),
-                            email_sent_at=get_utc_now() - timedelta(hours=5))
-        error.set_error_data(ERRORS[0])
-        db.session.add(error)
-        db.session.commit()
-        return error
-
     def test_channel_only_reminder_updates_the_counters(self, app, channel, send_email, send_channels):
         """Without updating the counters the reminder would go out at every check."""
         from monitor_service import monitor_service
         query = make_query(channel=channel, email_recipients='', reminder_enabled=True,
                            reminder_interval_minutes=60, reminder_max_count=3)
-        error = self.make_old_error(query)
+        error = make_old_error(query)
 
         assert monitor_service._process_reminders(query, ['ID']) == (0, 1)
         assert error.reminder_count == 1
@@ -321,10 +433,20 @@ class TestReminders:
         from monitor_service import monitor_service
         query = make_query(channel=channel, email_recipients='a@x.it', reminder_enabled=True,
                            reminder_interval_minutes=60, reminder_max_count=3)
-        self.make_old_error(query)
+        make_old_error(query)
         mock_execute.return_value = (['ID', 'TEAM'], [ERRORS[0]])
 
         result = monitor_service.check_query(query, force=True)
 
         assert result['reminders_sent'] == 2   # 1 email + 1 channel
         assert result['emails_sent'] == 1
+
+    def test_a_refused_recipient_is_not_counted_as_reminded(self, app):
+        from monitor_service import monitor_service
+        query = make_query(email_recipients='ops@x.it, bad@x.it', reminder_enabled=True,
+                           reminder_interval_minutes=60, reminder_max_count=3)
+        error = make_old_error(query)
+        with patch('email_service.smtplib.SMTP_SSL') as smtp:
+            smtp.return_value.sendmail.return_value = {'bad@x.it': (550, b'5.1.1 User unknown')}
+            monitor_service._process_reminders(query, ['ID'])
+        assert error.get_notified_to() == ['ops@x.it']

@@ -44,6 +44,16 @@ def file_app(tmp_path, monkeypatch):
         db.drop_all()
 
 
+@pytest.fixture
+def scheduler_pool():
+    """The scheduler module with a new thread pool, shut down at the end."""
+    import scheduler
+    scheduler._executor = None
+    scheduler._in_flight.clear()
+    yield scheduler
+    scheduler.shutdown(wait=True)
+
+
 @pytest.fixture(scope='function')
 def client(app):
     """Test client for HTTP requests."""

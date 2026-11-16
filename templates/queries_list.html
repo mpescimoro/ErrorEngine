@@ -50,13 +50,13 @@
                             {{ query.name }}
                         </a>
                         
-						{% if query.db_connection_id and query.db_connection %}
-						<span class="badge badge-primary">
-							<i class="bi bi-database"></i> {{ driver_labels.get(query.db_connection.db_type, query.db_connection.db_type|upper) }}
-						</span>
-						{% elif query.source_type == 'http' %}
+						{% if query.source_type == 'http' %}
 						<span class="badge badge-info">
 							<i class="bi bi-cloud"></i> HTTP
+						</span>
+						{% elif query.db_connection %}
+						<span class="badge badge-primary">
+							<i class="bi bi-database"></i> {{ driver_labels.get(query.db_connection.db_type, query.db_connection.db_type|upper) }}
 						</span>
 						{% else %}
 						<span class="badge badge-secondary">
@@ -65,7 +65,12 @@
 						{% endif %}
                         
                         {% if query.is_active %}
-                            {% if query.consecutive_failures %}
+                            {% if query.connection_disabled() %}
+                            <span class="status-indicator status-inactive" title="The database connection {{ query.db_connection.name }} is disabled: the query does not run">
+                                <span class="status-dot"></span>
+                                Connection disabled
+                            </span>
+                            {% elif query.consecutive_failures %}
                             <span class="status-indicator status-danger" title="{{ query.last_failure_message or '' }}">
                                 <span class="status-dot"></span>
                                 Failing

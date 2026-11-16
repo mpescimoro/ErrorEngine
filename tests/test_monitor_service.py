@@ -273,7 +273,7 @@ class TestCheckQueryStats:
         with app.app_context():
             from monitor_service import monitor_service
             
-            mock_execute.return_value = (['ID'], [{'ID': '001'}])
+            mock_execute.return_value = (['ID', 'CODE'], [{'ID': '001', 'CODE': 'E1'}])
             mock_email.send_error_notification.return_value = {'success': True}
             
             query = MonitoredQuery.query.get(sample_query.id)
@@ -327,3 +327,82 @@ class TestGetQueryStatus:
             
             status = monitor_service.get_query_status(99999)
             assert 'error' in status
+
+
+class TestKeyFields:
+    """Key fields that are not columns of the results: an error, not rows merged into one."""
+
+    def run(self, query, rows):
+        from monitor_service import monitor_service
+        with patch('monitor_service.execute_query_source', return_value=rows), \
+                patch('monitor_service.email_service.send_error_notification', return_value={'success': True}):
+            return monitor_service.check_query(query, force=True)
+
+    def test_missing_key_field_is_a_failed_run(self, app):
+        query = MonitoredQuery(name='Orders', sql_query='SELECT 1', key_fields='ID, CODE',
+                               email_recipients='ops@x.it')
+        db.session.add(query)
+        db.session.commit()
+        result = self.run(query, (['ID', 'MSG'], [{'ID': 1, 'MSG': 'a'}, {'ID': 2, 'MSG': 'b'}]))
+        assert result['status'] == 'error'
+        assert 'CODE' in result['error_message'] and 'ID, MSG' in result['error_message']
+        assert ErrorRecord.query.count() == 0 and query.consecutive_failures == 1
+
+    def test_names_compared_without_case(self, app):
+        query = MonitoredQuery(name='Orders', sql_query='SELECT 1', key_fields='id', email_recipients='ops@x.it')
+        db.session.add(query)
+        db.session.commit()
+        assert self.run(query, (['ID'], [{'ID': 1}, {'ID': 2}]))['new_errors'] == 2
+
+    def test_no_rows_nothing_to_check(self, app):
+        query = MonitoredQuery(name='API', source_type='http', key_fields='ID', email_recipients='ops@x.it')
+        db.session.add(query)
+        db.session.commit()
+        assert self.run(query, ([], []))['status'] == 'success'
+
+    def test_no_key_fields_at_all_is_a_failed_run_even_without_rows(self, app):
+        query = MonitoredQuery(name='Orders', sql_query='SELECT 1', key_fields=' , ', email_recipients='ops@x.it')
+        db.session.add(query)
+        db.session.commit()
+        result = self.run(query, (['ID'], []))
+        assert result['status'] == 'error' and 'No key fields' in result['error_message']
+
+
+class TestDisabledConnection:
+    """A disabled connection stops its queries: they are skipped, not failing."""
+
+    def make(self):
+        from models import DatabaseConnection
+        connection = DatabaseConnection(name='AS400 prod', db_type='sqlite', database=':memory:', is_active=False)
+        db.session.add(connection)
+        db.session.flush()
+        query = MonitoredQuery(name='Orders', sql_query='SELECT 1', key_fields='ID',
+                               db_connection_id=connection.id, email_recipients='ops@x.it')
+        db.session.add(query)
+        db.session.commit()
+        return query
+
+    def test_check_skipped(self, app):
+        from monitor_service import monitor_service
+        query = self.make()
+        with patch('monitor_service.execute_query_source') as source:
+            result = monitor_service.check_query(query, force=True)
+        assert not source.called and result['status'] == 'skipped'
+        assert 'AS400 prod' in result['error_message'] and 'disabled' in result['error_message']
+        assert not query.consecutive_failures
+
+    def test_not_started_by_the_scheduler(self, app, scheduler_pool):
+        query = self.make()
+        assert query.connection_disabled()
+        assert scheduler_pool.dispatch_due_queries(app) == []
+
+    def test_shown_in_the_queries_list(self, app, client):
+        self.make()
+        assert 'Connection disabled' in client.get('/queries').get_data(as_text=True)
+
+    def test_earlier_failures_do_not_count_while_it_is_disabled(self, app, client):
+        query = self.make()
+        query.consecutive_failures = 3
+        db.session.commit()
+        assert not query.is_failing()
+        assert client.get('/api/health').get_json()['checks']['queries_failing'] == 0

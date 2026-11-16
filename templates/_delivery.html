@@ -1,0 +1,15 @@
+{# Notification state of an error: still being retried, or given up (to whom, and why) #}
+{% macro delivery_state(error, channel_names) %}
+{% if error.notify_pending %}
+<span class="badge badge-warning" title="{{ error.last_notify_error or 'Will be retried' }}">
+    Delivery pending{% if error.notify_attempts %} · {{ error.notify_attempts }} {{ 'attempt' if error.notify_attempts == 1 else 'attempts' }}{% endif %}
+</span>
+{% endif %}
+{% if error.undeliverable %}
+<span class="badge badge-danger">Not delivered</span>
+<div class="text-danger" style="font-size: 0.8125rem;">to {{ error.undelivered_to(channel_names)|join(', ') }}</div>
+{% if error.last_notify_error %}
+<div class="text-muted truncate" style="font-size: 0.8125rem; max-width: 240px;" title="{{ error.last_notify_error }}">{{ error.last_notify_error }}</div>
+{% endif %}
+{% endif %}
+{% endmacro %}

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_delivery.html" import delivery_state %}
 
 {% block title %}{{ query.name }} - ErrorEngine{% endblock %}
 
@@ -18,7 +19,9 @@
         <h1 class="page-title mb-sm">
             {{ query.name }}
             {% if query.is_active %}
-                {% if query.consecutive_failures %}
+                {% if query.connection_disabled() %}
+                <span class="badge badge-secondary" title="The database connection {{ query.db_connection.name }} is disabled: the query does not run">Connection disabled</span>
+                {% elif query.consecutive_failures %}
                 <span class="badge badge-danger">Failing</span>
                 {% elif query.is_in_schedule() %}
                 <span class="badge badge-success">Active</span>
@@ -62,7 +65,7 @@
     </div>
 </div>
 
-{% if query.consecutive_failures %}
+{% if query.is_failing() %}
 <!-- Source failing -->
 <div class="alert alert-danger" role="alert">
     <i class="alert-icon bi bi-x-circle-fill"></i>
@@ -166,6 +169,11 @@
                     {% if active_error_count %}
                     <span class="badge badge-danger">{{ active_error_count }}</span>
                     {% endif %}
+                    {% if undelivered_count %}
+                    <a href="{{ url_for('main.errors_list', query_id=query.id, delivery='failed') }}" class="text-danger">
+                        {{ undelivered_count }} not delivered
+                    </a>
+                    {% endif %}
                 </div>
             </div>
             
@@ -175,6 +183,7 @@
                     <thead>
                         <tr>
                             <th>Data</th>
+                            <th>Notification</th>
                             <th>First seen</th>
                             <th>Occurrences</th>
                             <th class="text-right">Actions</th>
@@ -215,6 +224,15 @@
                                     </div>
                                     {% endif %}
                                 </div>
+                            </td>
+                            <td>
+                                {% if error.notify_pending or error.undeliverable %}
+                                {{ delivery_state(error, channel_names) }}
+                                {% elif error.email_sent %}
+                                <span class="text-muted">Sent</span>
+                                {% else %}
+                                <span class="text-muted">—</span>
+                                {% endif %}
                             </td>
                             <td>
                                 <span title="{{ error.first_seen_at|localtime('%d/%m/%Y %H:%M') }}">

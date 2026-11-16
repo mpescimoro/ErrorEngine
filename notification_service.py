@@ -5,7 +5,7 @@ import json
 import logging
 import requests
 from html import escape
-from utils import format_local_now, get_utc_now, redact_secrets
+from utils import format_local_now, get_utc_now, redact_secrets, utc_iso
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +20,12 @@ class NotificationService:
         self.app = app
         self.timeout = app.config.get('HTTP_TIMEOUT_SECONDS', 30)
     
-    def send_to_channel(self, channel, query, errors: list) -> dict:
-        """Sends a notification to a specific channel."""
+    def send_to_channel(self, channel, query, errors: list, reminder: bool = False,
+                        error_ids: list = None) -> dict:
+        """
+        Sends errors to a channel. reminder: errors already notified and still active;
+        error_ids: their ids in ErrorEngine, in the same order (sent to webhooks).
+        """
         if not channel.is_active:
             return {'success': False, 'message': 'Channel inactive'}
         
@@ -29,11 +33,11 @@ class NotificationService:
             config = channel.get_config()
             
             if channel.channel_type == 'webhook':
-                result = self._send_webhook(config, query, errors)
+                result = self._send_webhook(config, query, errors, reminder, error_ids)
             elif channel.channel_type == 'telegram':
-                result = self._send_telegram(config, query, errors)
+                result = self._send_telegram(config, query, errors, reminder)
             elif channel.channel_type == 'teams':
-                result = self._send_teams(config, query, errors)
+                result = self._send_teams(config, query, errors, reminder)
             else:
                 return {'success': False, 'message': f'Unsupported type: {channel.channel_type}'}
             
@@ -54,7 +58,8 @@ class NotificationService:
             logger.error(f"Error sending to {channel.name}: {e}")
             return {'success': False, 'message': redact_secrets(str(e))}
     
-    def send_to_all_channels(self, query, errors: list, channel_ids=None) -> dict:
+    def send_to_all_channels(self, query, errors: list, channel_ids=None, reminder: bool = False,
+                             error_ids: list = None) -> dict:
         """
         Sends to all the active channels of the query
         (only those in channel_ids, if given: used to retry the channels that failed).
@@ -66,7 +71,7 @@ class NotificationService:
             if channel_ids is not None and channel.id not in channel_ids:
                 continue
             if channel.is_active:
-                result = self.send_to_channel(channel, query, errors)
+                result = self.send_to_channel(channel, query, errors, reminder, error_ids)
                 result['channel_name'] = channel.name
                 result['channel_id'] = channel.id
                 results.append(result)
@@ -80,7 +85,8 @@ class NotificationService:
             'results': results
         }
     
-    def _send_webhook(self, config: dict, query, errors: list) -> dict:
+    def _send_webhook(self, config: dict, query, errors: list, reminder: bool = False,
+                      error_ids: list = None) -> dict:
         """Sends to a generic webhook."""
         url = config.get('url')
         if not url:
@@ -91,15 +97,17 @@ class NotificationService:
         headers.setdefault('Content-Type', 'application/json')
         
         payload = {
-            'event': 'errors_detected',
-            'timestamp': get_utc_now().isoformat(),
+            'event': 'errors_reminder' if reminder else 'errors_detected',
+            'timestamp': utc_iso(get_utc_now()),
             'query': {
                 'id': query.id,
                 'name': query.name,
                 'description': query.description
             },
             'errors_count': len(errors),
-            'errors': errors[:50]
+            'errors': errors[:50],
+            # Same order as errors: they identify an error across messages (null in a channel test)
+            'error_ids': (error_ids or [None] * len(errors))[:50],
         }
         return self._post_json(url, payload, headers, method)
 
@@ -125,7 +133,7 @@ class NotificationService:
         return {'success': False, 'permanent': permanent,
                 'message': f"HTTP {status}{' ' + reason if reason else ''}"}
     
-    def _send_telegram(self, config: dict, query, errors: list) -> dict:
+    def _send_telegram(self, config: dict, query, errors: list, reminder: bool = False) -> dict:
         """Sends a Telegram message."""
         bot_token = config.get('bot_token')
         chat_id = config.get('chat_id')
@@ -136,11 +144,11 @@ class NotificationService:
         # Format the message (parse_mode HTML: data must be converted to entities,
         # otherwise Telegram rejects messages containing <, > or &)
         lines = [
-            "<b>ErrorEngine</b>",
+            "<b>ErrorEngine: reminder</b>" if reminder else "<b>ErrorEngine</b>",
             "",
             f"<b>Query:</b> {escape(str(query.name))}",
-            f"<b>Errors:</b> {len(errors)}",
-            f"<b>Data:</b> {format_local_now('%d/%m/%Y %H:%M')}",
+            f"<b>{'Errors still active' if reminder else 'New errors'}:</b> {len(errors)}",
+            f"<b>Time:</b> {format_local_now('%d/%m/%Y %H:%M')}",
         ]
 
         if errors:
@@ -180,7 +188,7 @@ class NotificationService:
         except requests.RequestException as e:
             return {'success': False, 'message': redact_secrets(str(e))}
     
-    def _send_teams(self, config: dict, query, errors: list) -> dict:
+    def _send_teams(self, config: dict, query, errors: list, reminder: bool = False) -> dict:
         """Sends to Microsoft Teams through a webhook."""
         webhook_url = config.get('webhook_url')
         if not webhook_url:
@@ -188,8 +196,8 @@ class NotificationService:
         
         # MessageCard for Teams
         facts = [
-            {"name": "Errors", "value": str(len(errors))},
-            {"name": "Data", "value": format_local_now('%d/%m/%Y %H:%M')},
+            {"name": "Errors still active" if reminder else "New errors", "value": str(len(errors))},
+            {"name": "Time", "value": format_local_now('%d/%m/%Y %H:%M')},
         ]
         
         # Add the first errors as facts
@@ -203,10 +211,11 @@ class NotificationService:
             "@type": "MessageCard",
             "@context": "http://schema.org/extensions",
             "themeColor": "d63384",
-            "summary": f"ErrorEngine: {len(errors)} errors",
+            "summary": (f"ErrorEngine reminder: {len(errors)} errors still active" if reminder
+                        else f"ErrorEngine: {len(errors)} new errors"),
             "sections": [{
                 "activityTitle": f"{query.name}",
-                "activitySubtitle": "New errors detected",
+                "activitySubtitle": "Reminder: errors not resolved yet" if reminder else "New errors detected",
                 "facts": facts,
                 "markdown": True
             }]
@@ -246,7 +255,7 @@ class NotificationService:
                         headers.setdefault('Content-Type', 'application/json')
                         payload = {
                             'event': event,
-                            'timestamp': get_utc_now().isoformat(),
+                            'timestamp': utc_iso(get_utc_now()),
                             'query': {'id': query.id, 'name': query.name, 'description': query.description},
                             'title': title,
                             'message': '\n'.join(lines),

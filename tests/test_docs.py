@@ -16,6 +16,8 @@ CONFIGURATION = (ROOT / 'docs' / 'configuration.md').read_text(encoding='utf-8')
 NOT_DOCUMENTED = {'DATABASE_URL', 'FLASK_ENV', 'FLASK_DEBUG', 'PATH', 'EE_SECRET_MARKER'}
 # Only for scripts/check_ibmi.py, documented in docs/ibmi-driver.md
 IBMI_SCRIPT = {'IBMI_HOST', 'IBMI_USER', 'IBMI_PASSWORD', 'IBMI_LIBRARY'}
+# Read only to warn at startup that they are no longer used (the changelog says what replaces them)
+NO_LONGER_USED = {'NOTIFY_RETRY_HOURS'}
 
 
 def variables_read_by_the_code():
@@ -33,7 +35,7 @@ def test_every_setting_is_documented():
     documented = {name for pair in documented for name in pair if name}
     example_text = (ROOT / '.env.example').read_text(encoding='utf-8')
     example = set(re.findall(r'^#? ?([A-Z_]{3,})=', example_text, re.M))
-    code = variables_read_by_the_code() - NOT_DOCUMENTED - IBMI_SCRIPT
+    code = variables_read_by_the_code() - NOT_DOCUMENTED - IBMI_SCRIPT - NO_LONGER_USED
 
     assert code - documented == set(), 'read by the code, missing from docs/configuration.md'
     assert documented - code == set(), 'in docs/configuration.md, never read by the code'

@@ -137,6 +137,15 @@ class MonitoredQuery(db.Model):
     def set_source_config(self, config):
         """Sets the source configuration from a dict"""
         self.source_config = json.dumps(config, ensure_ascii=False)
+
+    def connection_disabled(self) -> bool:
+        """A database query whose connection is disabled: it does not run until the connection is enabled."""
+        return (self.source_type != 'http' and self.db_connection is not None
+                and not self.db_connection.is_active)
+
+    def is_failing(self) -> bool:
+        """It cannot read its source. Not while its connection is disabled: then it does not run."""
+        return bool(self.is_active and self.consecutive_failures and not self.connection_disabled())
     
     def _get_local_now(self):
         """Returns the local time in the configured time zone."""
@@ -458,7 +467,7 @@ class ErrorRecord(db.Model):
     last_notify_error = db.Column(db.Text)
     notify_retry_at = db.Column(db.DateTime)  # next attempt not before (waits that grow)
     # Given up: channels that refused it (4xx) and whatever was still missing after
-    # NOTIFY_RETRY_HOURS (JSON: {"channels": [ids], "recipients": [addresses]})
+    # the last attempt (JSON: {"channels": [ids], "recipients": [addresses]})
     undeliverable = db.Column(db.Text)
 
     # Reminder
@@ -510,6 +519,11 @@ class ErrorRecord(db.Model):
         """Channels and recipients the notification was given up for."""
         data = json.loads(self.undeliverable) if self.undeliverable else {}
         return {'channels': data.get('channels', []), 'recipients': data.get('recipients', [])}
+
+    def undelivered_to(self, channel_names: dict) -> list:
+        """Who the notification was given up for: the addresses, then the channels ({id: name})."""
+        given = self.get_undeliverable()
+        return given['recipients'] + [channel_names.get(c, f'deleted channel {c}') for c in given['channels']]
 
     def add_undeliverable(self, channels=(), recipients=()):
         """Gives up the notification towards these channels and recipients."""

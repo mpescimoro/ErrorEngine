@@ -1,6 +1,6 @@
 """
 Pages: dashboard order and counters, tag filter, query detail, deleting a query,
-empty values in the forms, Settings, statistics in local time.
+what a query form save keeps, empty values in the forms, Settings, statistics in local time.
 """
 import json
 import re
@@ -8,7 +8,8 @@ from datetime import timedelta
 from html.parser import HTMLParser
 from pathlib import Path
 
-from models import db, MonitoredQuery, ErrorRecord, EmailLog, DatabaseConnection, RoutingRule
+from models import (db, MonitoredQuery, ErrorRecord, EmailLog, DatabaseConnection, RoutingRule,
+                    NotificationChannel)
 from utils import get_utc_now, get_local_now, local_day_start_utc, format_local
 from version import __version__
 
@@ -190,6 +191,106 @@ def test_delete_query_with_email_history(app, client):
         event.remove(engine, 'connect', foreign_keys_on)
 
 
+# --- Query form: a save keeps what the form does not change ---
+
+def save_form(client, query, **changes):
+    """Submits the edit form as a browser would, with these changes; returns the page shown after."""
+    form = FormValues()
+    form.feed(client.get(f'/queries/{query.id}/edit').get_data(as_text=True))
+    form.values.update({name: value if isinstance(value, list) else [value] for name, value in changes.items()})
+    return client.post(f'/queries/{query.id}/edit', data=form.values, follow_redirects=True)
+
+
+class TestQueryFormSave:
+
+    def test_disabled_connection_and_channel_are_kept(self, app, client):
+        connection = DatabaseConnection(name='AS400 prod', db_type='sqlite', database=':memory:', is_active=False)
+        channel = NotificationChannel(name='Teams IT', channel_type='teams', config='{}', is_active=False)
+        db.session.add_all([connection, channel])
+        db.session.commit()
+        query = make_query('Orders', db_connection_id=connection.id)
+        query.notification_channels.append(channel)
+        db.session.commit()
+
+        html = client.get(f'/queries/{query.id}/edit').get_data(as_text=True)
+        assert 'AS400 prod (SQLite, disabled)' in html and 'Teams IT (disabled)' in html
+        save_form(client, query)
+        db.session.refresh(query)
+        assert query.db_connection_id == connection.id
+        assert [c.name for c in query.notification_channels] == ['Teams IT']
+
+    def test_routing_aggregation(self, app, client):
+        query = make_query('Orders', routing_aggregation='per_error')
+        save_form(client, query)
+        db.session.refresh(query)
+        assert query.routing_aggregation == 'per_error'
+        save_form(client, query, routing_aggregation='per_recipient')
+        db.session.refresh(query)
+        assert query.routing_aggregation == 'per_recipient'
+
+    def test_http_settings_the_form_does_not_show_are_kept(self, app, client):
+        query = make_query('API', source_type='http')
+        config = {'url': 'https://api.x.it/errors', 'method': 'GET', 'auth_type': 'api_key', 'auth_token': 'k',
+                  'api_key_name': 'X-Token', 'headers': {'Accept': 'application/json'}, 'response_path': 'items',
+                  'timeout': 10}
+        query.set_source_config(config)
+        db.session.commit()
+        html = client.get(f'/queries/{query.id}/edit').get_data(as_text=True)
+        assert 'X-Token' in html and 'application/json' in html
+        save_form(client, query)
+        db.session.refresh(query)
+        assert query.get_source_config() == config
+
+    def test_http_headers_must_be_a_json_object(self, app, client):
+        query = make_query('API', source_type='http')
+        query.set_source_config({'url': 'https://api.x.it/errors'})
+        db.session.commit()
+        html = save_form(client, query, source_headers='{not json').get_data(as_text=True)
+        assert 'Headers' in html and 'JSON' in html
+        db.session.refresh(query)
+        assert not query.get_source_config().get('headers')
+
+    def test_switching_to_http_leaves_the_connection(self, app, client):
+        connection = DatabaseConnection(name='ERP', db_type='sqlite', database=':memory:')
+        db.session.add(connection)
+        db.session.commit()
+        query = make_query('Orders', db_connection_id=connection.id)
+        save_form(client, query, source_type='http', source_url='https://api.x.it/errors')
+        db.session.refresh(query)
+        assert query.source_type == 'http' and query.db_connection_id is None
+
+    def test_unknown_subject_placeholders_are_pointed_out(self, app, client):
+        query = make_query('Orders')
+        html = save_form(client, query, email_subject='Errors in {query}').get_data(as_text=True)
+        assert '{query}' in html and 'sent as written' in html
+        db.session.refresh(query)
+        assert query.email_subject == 'Errors in {query}'
+
+
+def test_form_texts_say_what_happens(app, client):
+    query = make_query('Orders')
+    html = client.get(f'/queries/{query.id}/edit').get_data(as_text=True)
+    assert 'every error goes to the default recipients, or to nobody' in html   # routing without rules
+    assert 'never more often than the query runs' in html                       # reminders at the checks
+    assert 'Changing them closes the open errors' in html                       # key fields edited
+    assert 'Changing them' not in client.get('/queries/new').get_data(as_text=True)
+
+
+def test_routing_fields_come_from_the_last_errors_without_running_the_query(app, client):
+    query = make_query('Orders')
+    error = ErrorRecord(query_id=query.id, error_hash='h')
+    error.set_error_data({'ID': 7, 'TEAM': 'IT'})
+    db.session.add(error)
+    db.session.commit()
+    from unittest.mock import patch
+    with patch('data_sources.execute_query_source') as source, \
+            patch('db_drivers.base.DatabaseDriver.open') as connect:
+        fields = client.get(f'/api/queries/{query.id}/fields').get_json()['fields']
+    assert not source.called and not connect.called
+    assert [f['name'] for f in fields] == ['ID', 'TEAM']
+    assert fields[0]['type'] == 'number' and fields[1]['sample'] == 'IT'
+
+
 # --- Forms: an empty value must not come back as the text "None" ---
 
 class TestEmptyValues:
@@ -228,6 +329,7 @@ def test_settings_show_version_and_internal_database(app, client):
     html = client.get('/settings').get_data(as_text=True)
     assert f'v{__version__}' in html
     assert re.search(r'Internal database</td>\s*<td>\s*SQLite', html)
+    assert 'Every day at 03:00 (server time)' in html   # the clock of the server, not TIMEZONE
 
 
 # --- Statistics in local time ---
@@ -274,6 +376,15 @@ class TestSourceChecks:
         assert 'is_active: true,' not in js
         form = (ROOT / 'templates' / 'query_form.html').read_text(encoding='utf-8')
         assert 'id="ruleIsActive"' in form and 'max="1000"' in form
+
+    def test_run_now_and_resolve_say_what_happens(self):
+        js = (ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+        run = js[js.index('async run(queryId)'):]
+        run = run[:run.index('setTimeout')]
+        # The source was read, but the notifications did not all go out
+        assert 'if (result.error_message) toast.warning(result.error_message)' in run
+        resolve = js[js.index('async resolve(errorId)'):]
+        assert 'comes back' in resolve[:resolve.index('api.post')]
 
     def test_sql_warning_answers_before_closing(self):
         form = (ROOT / 'templates' / 'query_form.html').read_text(encoding='utf-8')

@@ -460,6 +460,8 @@ const queryManager = {
             
             if (result.status === 'success') {
                 toast.success(`Done: ${result.rows_returned} rows, ${result.new_errors} new errors`);
+                // The source was read, but the notifications did not all go out
+                if (result.error_message) toast.warning(result.error_message);
             } else if (result.status === 'skipped') {
                 toast.warning(result.error_message || 'Skipped: outside schedule');
             } else {
@@ -495,7 +497,8 @@ const errorManager = {
      * Resolve an error manually
      */
     async resolve(errorId) {
-        if (!confirm('Mark this error as resolved?')) return;
+        if (!confirm('Mark this error as resolved?\n\nIf the query still returns it, it comes back '
+                     + 'as a new error at the next check and is notified again.')) return;
         
         try {
             await api.post(`/api/errors/${errorId}/resolve`);
@@ -838,7 +841,27 @@ async function testSqlQuery() {
                     </div>
                 </div>
             `;
-            
+
+            // The routing conditions suggest these columns; the key fields must be among them
+            const columns = result.columns || [];
+            window.availableFields = columns;
+            window.lastTestResult = { columns, rows: result.sample_rows || [] };  // for the sample email
+            const known = columns.map(c => String(c).toUpperCase());
+            const keyInput = document.getElementById('key_fields');
+            const missing = (keyInput ? keyInput.value.split(',') : [])
+                .map(f => f.trim()).filter(f => f && !known.includes(f.toUpperCase()));
+            if (columns.length && missing.length) {
+                html += `
+                    <div class="alert alert-warning mt-md">
+                        <i class="alert-icon bi bi-exclamation-triangle-fill"></i>
+                        <div class="alert-content">
+                            Key fields not among the columns: ${escapeHtml(missing.join(', '))}.
+                            The checks fail until they match.
+                        </div>
+                    </div>
+                `;
+            }
+
             if (result.sample_rows && result.sample_rows.length > 0) {
                 html += '<div class="table-container mt-md"><table class="table"><thead><tr>';
                 result.columns.forEach(col => {
@@ -877,6 +900,53 @@ async function testSqlQuery() {
             </div>
         `;
     }
+}
+
+
+// --- Sample email from the query form ---
+
+async function sendSampleEmail() {
+    const input = document.getElementById('sampleEmailRecipients');
+    const box = document.getElementById('sampleEmailResult');
+    const btn = document.getElementById('sampleEmailBtn');
+    if (!input.value.trim()) {
+        toast.warning('Enter an email address');
+        return;
+    }
+    const form = document.getElementById('queryForm');
+    const field = name => (form.elements[name] ? form.elements[name].value : '');
+    const tested = window.lastTestResult || {};
+
+    btn.disabled = true;
+    let result;
+    try {
+        // The values in the form, saved or not
+        result = await api.post('/api/test/sample-email', {
+            recipients: input.value,
+            query_id: form.dataset.queryId || null,
+            name: field('name'),
+            description: field('description'),
+            key_fields: field('key_fields'),
+            email_subject: field('email_subject'),
+            email_template: field('email_template'),
+            columns: tested.columns || null,
+            rows: tested.rows || null
+        });
+    } catch (error) {
+        result = { success: false, message: error.message };
+    }
+    btn.disabled = false;
+
+    const notice = (type, icon, text) => `
+        <div class="alert alert-${type} mt-sm mb-0">
+            <i class="alert-icon bi ${icon}"></i>
+            <div class="alert-content">${escapeHtml(text)}</div>
+        </div>`;
+    box.innerHTML = result.success
+        ? notice('success', 'bi-check-circle-fill', result.message)
+            + (result.warning ? notice('warning', 'bi-exclamation-triangle-fill', result.warning) : '')
+        : notice('danger', 'bi-x-circle-fill', result.message);
+    box.classList.remove('hidden');
 }
 
 

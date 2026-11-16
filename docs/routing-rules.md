@@ -15,7 +15,7 @@ No rule matches              →  support@company.com
 Routing is in the query form (**Edit**), in **Conditional routing**: it appears after the query has been saved once.
 
 1. Turn on **Conditional routing**
-2. Set the **Default recipients** and what happens **When no rule matches**: send to the default recipients, or don't send
+2. Set the **Default recipients**, what happens **When no rule matches** (send to the default recipients, or don't send) and the **Emails**: one per recipient, with all their errors, or one per error
 3. **Add rule**: name, recipients, logic (all conditions or at least one), priority
 4. Add the conditions: field (a column of the query), operator, value; **Aa** makes the comparison case-sensitive
 5. **Save rule**
@@ -27,7 +27,7 @@ A rule can be paused by unticking **Rule active**. **Stop on match** skips the r
 - Rules are checked by priority, lowest number first
 - Every rule that matches adds its recipients, until a rule with **Stop on match**
 - A rule without conditions always matches
-- With routing on, the query's **Recipients** field is not used: emails go to the rules' recipients and to the default recipients
+- With routing on, errors no longer go to the query's **Recipients**: each one goes to the recipients of the rules it matches, and one that matches no rule goes to the default recipients, or to nobody
 - Routing applies to email only: notification channels receive every error
 
 ## Operators

@@ -1,12 +1,14 @@
 """
 Notifications retried until delivered: every recipient and every channel, with growing
-waits, given up after NOTIFY_RETRY_HOURS; a channel that refuses for good is not retried.
+waits, given up after NOTIFY_ATTEMPTS attempts; a channel that refuses for good is not retried.
 """
+import logging
+import re
 import sqlite3
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from models import db, MonitoredQuery, ErrorRecord, RoutingRule, RoutingCondition, NotificationChannel
+from models import db, MonitoredQuery, ErrorRecord, EmailLog, RoutingRule, RoutingCondition, NotificationChannel
 from utils import get_utc_now
 
 ROWS = (['ID', 'TEAM'], [{'ID': 1, 'TEAM': 'PED'}, {'ID': 2, 'TEAM': 'IT'}])
@@ -120,7 +122,7 @@ class TestRetriedNotifications:
         telegram, webhook = make_channel('Telegram', 'telegram'), make_channel('Webhook')
         query = make_query(email_recipients='ops@x.it', channels=[telegram, webhook])
 
-        def outcome(channel, query, errors):
+        def outcome(channel, *args, **kwargs):
             return {'success': channel.name == 'Telegram', 'message': 'HTTP 500'}
         with patch('notification_service.notification_service.send_to_channel', side_effect=outcome) as ch:
             _, send = run(query)
@@ -205,7 +207,7 @@ class TestDeliveries:
         assert error.get_undeliverable()['channels'] == [teams.id]
         assert 'HTTP 410' in error.last_notify_error
         html = client.get('/errors').get_data(as_text=True)
-        assert 'Not delivered' in html and 'Delivery pending' not in html
+        assert 'Not delivered</span>' in html and not re.search(r'badge-warning[^>]*>\s*Delivery pending', html)
 
     def test_waits_grow_between_attempts(self, app):
         query = make_query(email_recipients='ops@x.it')
@@ -216,17 +218,402 @@ class TestDeliveries:
         error.notify_retry_at = get_utc_now() - timedelta(seconds=1)
         db.session.commit()
         run_check(query, email_result={'success': False, 'message': 'SMTP down', 'email_unavailable': True})
-        assert error.notify_attempts == 2 and error.notify_retry_at - get_utc_now() > timedelta(seconds=100)
+        assert error.notify_attempts == 2
+        assert timedelta(minutes=4) < error.notify_retry_at - get_utc_now() <= timedelta(minutes=5)
 
-    def test_given_up_after_the_retry_hours(self, app, client):
+    def test_five_attempts_then_given_up(self, app, client):
+        query = make_query(email_recipients='ops@x.it')
+        down = {'success': False, 'message': 'SMTP down', 'email_unavailable': True}
+        run_check(query, email_result=down)
+        error = ErrorRecord.query.filter_by(query_id=query.id).one()
+        waits = []
+        for _ in range(4):
+            waits.append(round((error.notify_retry_at - get_utc_now()).total_seconds() / 60))
+            error.notify_retry_at = None   # the wait is over
+            db.session.commit()
+            run_check(query, email_result=down)
+        assert waits == [1, 5, 15, 60]
+        assert error.notify_pending is False and error.notify_attempts == 5
+        assert error.get_undeliverable()['recipients'] == ['ops@x.it']
+        assert error.last_notify_error.startswith('Not delivered after 5 attempts')
+        assert 'Not delivered' in client.get('/errors').get_data(as_text=True)
+
+    def test_one_attempt_means_no_retries(self, app):
+        app.config['NOTIFY_ATTEMPTS'] = 1
         query = make_query(email_recipients='ops@x.it')
         run_check(query, email_result={'success': False, 'message': 'SMTP down', 'email_unavailable': True})
         error = ErrorRecord.query.filter_by(query_id=query.id).one()
-        error.first_seen_at = get_utc_now() - timedelta(hours=25)
+        assert error.notify_pending is False and error.get_undeliverable()['recipients'] == ['ops@x.it']
+
+
+def deliver(query, email=None):
+    """The scheduler's delivery of the pending notifications: the source is not read again."""
+    from monitor_service import monitor_service
+    with patch('monitor_service.execute_query_source') as source, \
+         patch('monitor_service.email_service.send_error_notification',
+               **({'side_effect': email} if callable(email) else {'return_value': email or OK})) as send:
+        result = monitor_service.deliver_pending(query)
+    assert not source.called
+    return result, send
+
+
+class TestRetriesBetweenChecks:
+    """A failed notification does not wait for the query's next check."""
+
+    def test_daily_query_retried_by_the_scheduler(self, app):
+        import scheduler
+        query = make_query(email_recipients='ops@x.it', check_interval_minutes=1440)
+        run(query, email=DOWN)
+        assert scheduler.queries_with_due_retries() == []  # the first wait is not over
+        wait_for_retry(query)
+        assert query.should_run_now()[0] is False
+        assert scheduler.queries_with_due_retries() == [query.id]
+
+        result, send = deliver(query)
+        assert result['status'] == 'success' and result['emails_sent'] == 1
+        assert [e['ID'] for e in send.call_args.kwargs['errors']] == [1, 2]
+        assert send.call_args.kwargs['columns'] == ['ID', 'TEAM']
+        assert all(not e.notify_pending and e.email_sent for e in records(query).values())
+        assert scheduler.queries_with_due_retries() == []
+        assert query.total_emails_sent == 1
+
+    def test_still_failing_waits_longer(self, app):
+        query = make_query(email_recipients='ops@x.it', check_interval_minutes=1440)
+        run(query, email=DOWN)
+        wait_for_retry(query)
+        deliver(query, email=DOWN)
+        error = records(query)[1]
+        assert error.notify_pending and error.notify_attempts == 2
+        assert timedelta(minutes=4) < error.notify_retry_at - get_utc_now() <= timedelta(minutes=5)
+
+    def test_outside_the_time_window_too(self, app):
+        import scheduler
+        query = make_query(email_recipients='ops@x.it')
+        run(query, email=DOWN)
+        tomorrow = (get_utc_now() + timedelta(days=1)).isoweekday()
+        query.schedule_days = str(tomorrow)
+        db.session.commit()
+        wait_for_retry(query)
+        assert not query.is_in_schedule()
+        assert scheduler.queries_with_due_retries() == [query.id]
+
+    def test_not_for_inactive_queries_or_resolved_errors(self, app):
+        import scheduler
+        paused = make_query('Paused', email_recipients='ops@x.it')
+        gone = make_query('Gone', email_recipients='ops@x.it')
+        run(paused, email=DOWN)
+        run(gone, email=DOWN)
+        paused.is_active = False
+        for error in ErrorRecord.query.filter_by(query_id=gone.id):
+            error.resolved_at = get_utc_now()
+        db.session.commit()
+        wait_for_retry(paused)
+        wait_for_retry(gone)
+        assert scheduler.queries_with_due_retries() == []
+
+    def test_a_running_check_is_left_alone(self, app):
+        query = make_query(email_recipients='ops@x.it')
+        run(query, email=DOWN)
+        wait_for_retry(query)
+        query.locked_at = get_utc_now()
+        db.session.commit()
+        result, send = deliver(query)
+        assert result['status'] == 'skipped' and send.call_count == 0
+        assert db.session.get(MonitoredQuery, query.id).locked_at is not None
+
+    def test_the_lock_is_released(self, app):
+        query = make_query(email_recipients='ops@x.it')
+        run(query, email=DOWN)
+        wait_for_retry(query)
+        deliver(query)
+        db.session.expire_all()
+        assert db.session.get(MonitoredQuery, query.id).locked_at is None
+
+    def test_dispatch_sends_them_in_the_pool(self, file_app, scheduler_pool):
+        query = make_query(email_recipients='ops@x.it', check_interval_minutes=1440)
+        run(query, email=DOWN)
+        wait_for_retry(query)
+        with patch('monitor_service.email_service.send_error_notification', return_value=OK) as send:
+            assert scheduler_pool.dispatch_due_queries(file_app) == []  # no check is due
+            scheduler_pool.shutdown(wait=True)
+        assert send.call_count == 1
+        db.session.expire_all()
+        assert all(not e.notify_pending for e in records(query).values())
+
+
+def delivery_log(caplog):
+    """What the delivery wrote in the log: everything but the start and end lines of the check."""
+    return [r for r in caplog.records
+            if r.name in ('monitor_service', 'email_service', 'notification_service')
+            and r.levelno >= logging.INFO
+            and not r.getMessage().startswith('Running query') and ' done: ' not in r.getMessage()]
+
+
+FIFTY = (['ID'], [{'ID': i} for i in range(1, 51)])
+
+
+class TestOneLogLinePerAttempt:
+    """A delivery attempt writes one line: the errors, what went out, what is still pending and why."""
+
+    def check(self, query, caplog, smtp=None):
+        from monitor_service import monitor_service
+        caplog.clear()
+        with caplog.at_level(logging.INFO), \
+             patch('monitor_service.execute_query_source', return_value=FIFTY), \
+             patch('email_service.smtplib.SMTP_SSL', **(smtp or {})):
+            monitor_service.check_query(query, force=True)
+        return delivery_log(caplog)
+
+    def test_email_down_one_line_for_fifty_errors(self, app, caplog):
+        query = make_query(email_recipients='ops@x.it, it@x.it')
+        lines = self.check(query, caplog, smtp={'side_effect': OSError('Connection refused')})
+        assert len(lines) == 1 and lines[0].levelno == logging.WARNING
+        message = lines[0].getMessage()
+        assert 'Critical' in message and '50 errors' in message and 'attempt 1' in message
+        assert '50 pending for ops@x.it, it@x.it' in message and 'next attempt in 1 min' in message
+        assert 'Connection refused' in message
+
+    def test_delivered_at_the_next_attempt(self, app, caplog):
+        from monitor_service import monitor_service
+        query = make_query(email_recipients='ops@x.it')
+        self.check(query, caplog, smtp={'side_effect': OSError('Connection refused')})
+        wait_for_retry(query)
+        caplog.clear()
+        with caplog.at_level(logging.INFO), patch('email_service.smtplib.SMTP_SSL'):
+            monitor_service.deliver_pending(query)
+        lines = delivery_log(caplog)
+        assert len(lines) == 1 and lines[0].levelno == logging.INFO
+        message = lines[0].getMessage()
+        assert '50 errors' in message and 'attempt 2' in message and 'delivered to ops@x.it' in message
+        assert 'pending' not in message
+
+    def test_given_up(self, app, caplog):
+        app.config['NOTIFY_ATTEMPTS'] = 2
+        query = make_query(email_recipients='ops@x.it')
+        self.check(query, caplog, smtp={'side_effect': OSError('Connection refused')})
+        wait_for_retry(query)
+        lines = self.check(query, caplog, smtp={'side_effect': OSError('Connection refused')})
+        assert len(lines) == 1 and lines[0].levelno == logging.ERROR
+        message = lines[0].getMessage()
+        assert '50 given up for ops@x.it after 2 attempts' in message and 'Connection refused' in message
+
+    def test_email_delivered_channel_pending(self, app, caplog):
+        hook = make_channel('Hook')
+        query = make_query(email_recipients='ops@x.it', channels=[hook])
+        with patch('notification_service.notification_service.send_to_channel',
+                   return_value={'success': False, 'message': 'HTTP 503'}):
+            lines = self.check(query, caplog)
+        assert len(lines) == 1 and lines[0].levelno == logging.WARNING
+        message = lines[0].getMessage()
+        assert 'delivered to ops@x.it' in message and '50 pending for Hook' in message
+        assert 'Hook: HTTP 503' in message
+
+    def test_nobody_to_notify(self, app, caplog):
+        query = make_query(email_recipients='')
+        lines = self.check(query, caplog)
+        assert len(lines) == 1 and lines[0].levelno == logging.WARNING
+        assert 'no recipients' in lines[0].getMessage()
+
+
+class TestNotDelivered:
+    """After its last attempt an error that could not be notified stays active, and it shows."""
+
+    def given_up(self):
+        teams = make_channel('Teams IT', channel_type='teams')
+        query = make_query(email_recipients='ops@x.it', channels=[teams])
+        failing = {'success': False, 'message': 'HTTP 503 Service Unavailable'}
+        run_check(query, email_result={'success': False, 'message': 'Connection refused', 'email_unavailable': True},
+                  channel_result=failing)
+        error = ErrorRecord.query.filter_by(query_id=query.id).one()
+        error.notify_attempts = 4   # as if the first four had failed
         error.notify_retry_at = None
         db.session.commit()
-        run_check(query, email_result={'success': False, 'message': 'SMTP down', 'email_unavailable': True})
-        assert error.notify_pending is False
-        assert error.get_undeliverable()['recipients'] == ['ops@x.it']
-        assert error.last_notify_error.startswith('Not delivered after 2 attempts')
-        assert 'Not delivered' in client.get('/errors').get_data(as_text=True)
+        run_check(query, email_result={'success': False, 'message': 'Connection refused', 'email_unavailable': True},
+                  channel_result=failing)
+        return query, error
+
+    def test_stays_active_and_is_not_retried(self, app):
+        query, error = self.given_up()
+        assert error.resolved_at is None and error.undeliverable and not error.notify_pending
+        names = dict(db.session.query(NotificationChannel.id, NotificationChannel.name))
+        assert error.undelivered_to(names) == ['ops@x.it', 'Teams IT']
+        run_check(query)   # the row is still there: still active, not sent again
+        assert error.resolved_at is None and error.undeliverable and not error.email_sent
+
+    def test_the_cleanup_keeps_it(self, app):
+        from cleanup_service import cleanup_service
+        _, error = self.given_up()
+        cleanup_service.run_full_cleanup()
+        assert db.session.get(ErrorRecord, error.id) is not None
+
+    def test_errors_page_says_to_whom_and_why(self, app, client):
+        self.given_up()
+        html = client.get('/errors').get_data(as_text=True)
+        # Visible text, not only a tooltip
+        assert 'Not delivered</span>' in html
+        assert re.search(r'>\s*to ops@x\.it, Teams IT\s*<', html)
+        assert re.search(r'>\s*Not delivered after 5 attempts: [^<]*Connection refused', html)
+
+    def test_errors_page_filter(self, app, client):
+        query, _ = self.given_up()
+        other = make_query(name='Other', email_recipients='ops@x.it')
+        run_check(other)   # delivered
+        listed = re.compile(r'class="query-name">\s*Other\s*</a>')
+        failed = client.get('/errors?delivery=failed').get_data(as_text=True)
+        assert re.search(r'class="query-name">\s*Critical\s*</a>', failed) and not listed.search(failed)
+        assert listed.search(client.get('/errors').get_data(as_text=True))
+        assert 'Not delivered (1)' in failed
+
+    def test_query_page_and_dashboard(self, app, client):
+        query, _ = self.given_up()
+        detail = client.get(f'/queries/{query.id}').get_data(as_text=True)
+        assert 'Not delivered</span>' in detail and 'to ops@x.it, Teams IT' in detail
+        assert f'href="/errors?query_id={query.id}&amp;delivery=failed"' in detail
+        dashboard = client.get('/').get_data(as_text=True)
+        assert re.search(r'href="/errors\?delivery=failed"[^>]*>\s*1 not delivered', dashboard)
+
+
+START = datetime(2026, 11, 16, 9, 0, tzinfo=timezone.utc)
+
+
+def five_minute_query(minutes, errors_from, server_up_from, app, pool):
+    """
+    A query checked every 5 minutes, run by the real scheduler one tick per minute for
+    `minutes` minutes. errors_from: {error ID: minute it appears}; the mail server answers
+    from server_up_from on. Returns the events: (minute, 'check') and (minute, 'sent' or 'failed', IDs).
+    """
+    clock = {'now': START}
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock['now'].astimezone(tz) if tz else clock['now'].replace(tzinfo=None)
+
+    def minute():
+        return int((clock['now'] - START).total_seconds() // 60)
+
+    events = []
+
+    def source(query):
+        events.append((minute(), 'check'))
+        return ['ID'], [{'ID': i} for i, since in errors_from.items() if minute() >= since]
+
+    def send(**kwargs):
+        up = minute() >= server_up_from
+        events.append((minute(), 'sent' if up else 'failed', [e['ID'] for e in kwargs['errors']]))
+        return OK if up else DOWN
+
+    with patch('utils.datetime', Clock):
+        query = make_query(email_recipients='ops@x.it', check_interval_minutes=5)
+        with patch('monitor_service.execute_query_source', side_effect=source), \
+             patch('monitor_service.email_service.send_error_notification', side_effect=send):
+            for m in range(minutes):
+                clock['now'] = START + timedelta(minutes=m)
+                pool.dispatch_due_queries(app)
+                pool.shutdown(wait=True)   # the next tick finds this one finished
+    db.session.expire_all()
+    return query, events
+
+
+class TestQueryEveryFiveMinutes:
+    """
+    The checks every 5 minutes do not add attempts: an error waits for its own retry,
+    sent by the scheduler between the checks or by the check that falls on it.
+    """
+
+    def test_server_back_while_an_error_waits(self, file_app, scheduler_pool):
+        query, events = five_minute_query(22, errors_from={1: 0, 2: 10}, server_up_from=12,
+                                          app=file_app, pool=scheduler_pool)
+        assert events == [
+            (0, 'check'), (0, 'failed', [1]),     # 1 found, mail server down
+            (1, 'failed', [1]),                   # tried again between the checks: after 1, 5, 15 minutes...
+            (5, 'check'),                         # the wait of 1 is not over: the check does not send it
+            (6, 'failed', [1]),
+            (10, 'check'), (10, 'failed', [2]),   # 2 found: its own attempts
+            (11, 'failed', [2]),
+            (15, 'check'),
+            (16, 'sent', [2]),                    # server back at 12
+            (20, 'check'),
+            (21, 'sent', [1]),                    # 1 at the end of its wait of 15 minutes
+        ]
+        assert all(not e.notify_pending and e.email_sent for e in records(query).values())
+
+    def test_server_down_for_more_than_an_hour(self, file_app, scheduler_pool):
+        query, events = five_minute_query(100, errors_from={1: 0}, server_up_from=999,
+                                          app=file_app, pool=scheduler_pool)
+        assert [e[0] for e in events if e[1] == 'failed'] == [0, 1, 6, 21, 81]
+        assert [e[0] for e in events if e[1] == 'check'] == list(range(0, 100, 5))
+        error = records(query)[1]
+        assert not error.notify_pending and error.notify_attempts == 5
+        assert error.get_undeliverable()['recipients'] == ['ops@x.it'] and error.resolved_at is None
+
+
+REFUSED = {'bad@x.it': (550, b'5.1.1 User unknown')}
+
+
+class TestRefusedRecipients:
+    """A recipient the mail server refuses has not received the email: the server's reason, address by address."""
+
+    def check(self, query, refused):
+        from monitor_service import monitor_service
+        with patch('monitor_service.execute_query_source', return_value=(['ID'], [{'ID': 1}])), \
+             patch('email_service.smtplib.SMTP_SSL') as smtp:
+            smtp.return_value.sendmail.return_value = refused
+            monitor_service.check_query(query, force=True)
+
+    def test_tried_again_alone(self, app):
+        from monitor_service import monitor_service
+        query = make_query(email_recipients='ops@x.it, bad@x.it')
+        self.check(query, REFUSED)
+        error = records(query)[1]
+        assert error.get_notified_to() == ['ops@x.it'] and error.notify_pending
+        assert 'bad@x.it: 550 5.1.1 User unknown' in error.last_notify_error
+        wait_for_retry(query)
+        with patch('email_service.smtplib.SMTP_SSL') as smtp:
+            smtp.return_value.sendmail.return_value = {}
+            monitor_service.deliver_pending(query)
+        assert smtp.return_value.sendmail.call_args.args[1] == ['bad@x.it']
+        error = records(query)[1]
+        assert not error.notify_pending and set(error.get_notified_to()) == {'ops@x.it', 'bad@x.it'}
+
+    def test_refused_again_alone_reads_the_same(self, app):
+        import smtplib
+        from monitor_service import monitor_service
+        query = make_query(email_recipients='ops@x.it, bad@x.it')
+        self.check(query, REFUSED)
+        wait_for_retry(query)
+        with patch('email_service.smtplib.SMTP_SSL') as smtp:
+            # Alone, it is the whole email that is refused
+            smtp.return_value.sendmail.side_effect = smtplib.SMTPRecipientsRefused(REFUSED)
+            monitor_service.deliver_pending(query)
+        error = records(query)[1]
+        assert error.notify_pending and error.notify_attempts == 2
+        assert error.last_notify_error == 'bad@x.it: 550 5.1.1 User unknown'
+
+    def test_refused_every_time_ends_not_delivered(self, app):
+        app.config['NOTIFY_ATTEMPTS'] = 1
+        query = make_query(email_recipients='ops@x.it, bad@x.it')
+        self.check(query, REFUSED)
+        error = records(query)[1]
+        assert not error.notify_pending and error.get_notified_to() == ['ops@x.it']
+        assert error.get_undeliverable()['recipients'] == ['bad@x.it']
+
+    def test_email_log_says_who_was_refused(self, app):
+        query = make_query(email_recipients='ops@x.it, bad@x.it')
+        self.check(query, REFUSED)
+        log = EmailLog.query.one()
+        assert log.status == 'sent' and 'bad@x.it' in log.error_message
+
+
+class TestOldSetting:
+
+    def test_notify_retry_hours_warns_at_startup(self, caplog, monkeypatch):
+        from types import SimpleNamespace
+        from monitor_service import MonitorService
+        monkeypatch.delenv('NOTIFY_RETRY_HOURS', raising=False)
+        with caplog.at_level(logging.WARNING, logger='monitor_service'):
+            MonitorService().init_app(SimpleNamespace(config={}, extensions={}))
+            assert 'NOTIFY_RETRY_HOURS' not in caplog.text
+            monkeypatch.setenv('NOTIFY_RETRY_HOURS', '24')
+            MonitorService().init_app(SimpleNamespace(config={}, extensions={}))
+        assert 'NOTIFY_RETRY_HOURS is no longer used' in caplog.text

@@ -28,9 +28,9 @@ Settings live in `.env` in the project folder: copy `.env.example`, which has th
 | `DB_QUERY_TIMEOUT_SECONDS` | `300` | Maximum duration of a query |
 | `HTTP_TIMEOUT_SECONDS` | `30` | Maximum wait for HTTP sources, webhooks, Telegram and Teams |
 | `SCHEDULER_MAX_WORKERS` | `4` | Queries run in parallel |
-| `NOTIFY_RETRY_HOURS` | `24` | Hours a failed notification is retried, with longer and longer waits; then it is marked as not delivered |
+| `NOTIFY_ATTEMPTS` | `5` | Attempts to deliver a notification: the first, then after 1, 5, 15 and 60 minutes. Then the error stays active and shows **Not delivered**; `1`: no retries |
 | `MONITOR_FAILURE_THRESHOLD` | `3` | Alert after this many failed runs in a row (`0`: no alert) |
-| `ERRORENGINE_ADMIN_EMAILS` | — | Who gets that alert, comma-separated; if empty, the query's recipients |
+| `ERRORENGINE_ADMIN_EMAILS` | — | Who gets that alert, comma-separated; if empty, the query's recipients, with routing on also its default recipients |
 | `LOG_RETENTION_DAYS` | `30` | Days run logs are kept |
 | `EMAIL_LOG_RETENTION_DAYS` | `90` | Days email logs are kept |
 | `RESOLVED_ERRORS_RETENTION_DAYS` | `60` | Days resolved errors are kept |
@@ -44,7 +44,7 @@ ErrorEngine has a single user. Generate the hash of the password with the Python
 venv/bin/python -c "import getpass; from werkzeug.security import generate_password_hash as h; print(h(getpass.getpass('Password: ')))"
 ```
 
-`SECRET_KEY` must be a random value, for example from `venv/bin/python -c "import secrets; print(secrets.token_hex(32))"`. Until both are set, nobody can sign in, and the sign-in page says what is missing.
+`SECRET_KEY` must be a random value, for example from `venv/bin/python -c "import secrets; print(secrets.token_hex(32))"`. Without `SECRET_KEY`, ErrorEngine does not start, and the log says why. With the example key, or without the password hash, it checks the queries but nobody can sign in, and the sign-in page says what is missing.
 
 Scripts call the API with `Authorization: Bearer <ERRORENGINE_API_TOKEN>`. Only `/api/health` needs no login.
 
@@ -78,6 +78,8 @@ MAIL_DEFAULT_SENDER=alerts@yourcompany.com
 ```
 
 With these set, ErrorEngine sends through Graph from `MAIL_DEFAULT_SENDER` and does not use the SMTP settings. `Mail.Send` allows sending as any mailbox of the organization: limit the application to the sender mailbox in Exchange Online (RBAC for Applications). The secret expires: put a new one in `.env` before its expiry date.
+
+Graph takes the email without saying which addresses do not exist: those come back later as emails to `MAIL_DEFAULT_SENDER`, while ErrorEngine counts them as reached. Look in that mailbox now and then.
 
 ## Database drivers
 
@@ -114,7 +116,16 @@ Use read-only database users: ErrorEngine runs the query you write, and the form
 | Telegram | Bot token and chat ID |
 | Teams | URL of a Workflows webhook: in Teams open Workflows, template "Send webhook alerts to a channel", choose team and channel, save and copy the URL. Office 365 connectors stopped working in May 2026: replace their URLs |
 
-A webhook receives JSON: `event` (`errors_detected`, `monitor_failed`, `monitor_recovered`), `timestamp` (UTC), `query` (`id`, `name`, `description`) and, for errors, `errors_count` and `errors` (up to 50 rows); for the other events, `title` and `message`.
+A webhook receives JSON:
+
+| Field | Content |
+|-------|---------|
+| `event` | `errors_detected`, `errors_reminder` (errors already notified and still active), `monitor_failed`, `monitor_recovered` |
+| `timestamp` | When it was sent, in UTC: `2026-11-13T17:00:00Z` |
+| `query` | `id`, `name`, `description` |
+| `errors_count`, `errors` | For errors: how many, and the rows (up to 50) |
+| `error_ids` | For errors: the id of each of those rows, in the same order. An error keeps its id in reminders and retries, and [`POST /api/errors/{id}/resolve`](api-reference.md) takes it; one that is resolved and comes back gets a new id |
+| `title`, `message` | For `monitor_` events |
 
 Routing rules apply to email only: channels receive every error.
 

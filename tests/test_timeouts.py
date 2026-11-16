@@ -1,6 +1,7 @@
 """
 Timeouts of database sources, SMTP and HTTP; a stuck query does not hold up the others.
 """
+import logging
 import sqlite3
 import threading
 import time
@@ -9,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from models import db, MonitoredQuery, DatabaseConnection
+from utils import get_utc_now
 
 OK = {'success': True}
 
@@ -131,15 +133,7 @@ class TestTimeouts:
 
 class TestIsolatedScheduler:
 
-    @pytest.fixture
-    def pool(self):
-        import scheduler
-        scheduler._executor = None
-        scheduler._in_flight.clear()
-        yield scheduler
-        scheduler.shutdown(wait=True)
-
-    def test_a_stuck_query_does_not_stop_the_others(self, file_app, pool):
+    def test_a_stuck_query_does_not_stop_the_others(self, file_app, scheduler_pool):
         slow = make_query(name='Slow')
         fast = make_query(name='Fast')
         release = threading.Event()
@@ -153,7 +147,7 @@ class TestIsolatedScheduler:
 
         with patch.object(MonitoredQuery, 'should_run_now', return_value=(True, 'test')), \
              patch('monitor_service.monitor_service.check_query', side_effect=check):
-            started = pool.dispatch_due_queries(file_app)
+            started = scheduler_pool.dispatch_due_queries(file_app)
             assert sorted(started) == sorted([slow.id, fast.id])
             for _ in range(50):
                 if 'Fast' in finished:
@@ -162,9 +156,30 @@ class TestIsolatedScheduler:
             assert finished == ['Fast']
 
             # Next round: the slow one is still running and is not started twice
-            assert pool.dispatch_due_queries(file_app) == [fast.id]
-            assert pool.get_scheduler_status()['in_flight'] >= 1
+            assert scheduler_pool.dispatch_due_queries(file_app) == [fast.id]
+            assert scheduler_pool.get_scheduler_status()['in_flight'] >= 1
             release.set()
-            pool.shutdown(wait=True)
+            scheduler_pool.shutdown(wait=True)
         assert finished.count('Slow') == 1 and finished.count('Fast') == 2
-        assert pool.get_scheduler_status()['last_tick_at'] is not None
+        assert scheduler_pool.get_scheduler_status()['last_tick_at'] is not None
+
+
+class TestLocksAtStartup:
+    """A lock still there when ErrorEngine starts was left by a check cut short: nothing runs yet."""
+
+    def test_released(self, app, caplog):
+        import scheduler
+        stuck = make_query(name='Stuck', locked_at=get_utc_now())
+        make_query(name='Free')
+        with caplog.at_level(logging.WARNING, logger='scheduler'):
+            assert scheduler.release_locks(app) == 1
+        db.session.expire_all()
+        assert db.session.get(MonitoredQuery, stuck.id).locked_at is None
+        assert 'Stuck' in caplog.text and 'Free' not in caplog.text
+
+    def test_released_when_the_scheduler_starts(self, app, scheduler_pool):
+        with patch.object(scheduler_pool, 'scheduler') as aps, \
+             patch.object(scheduler_pool, 'release_locks') as release:
+            aps.running = False
+            scheduler_pool.init_scheduler(app)
+        assert release.call_args.args == (app,) and aps.start.called

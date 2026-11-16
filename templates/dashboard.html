@@ -44,7 +44,13 @@
                     <div class="stat-label">Active errors</div>
                     <div class="stat-value">{{ stats.total_active_errors }}</div>
                     <div class="mt-xs">
+                        {% if stats.undelivered_errors %}
+                        <a href="{{ url_for('main.errors_list', delivery='failed') }}" class="text-danger">
+                            {{ stats.undelivered_errors }} not delivered
+                        </a>
+                        {% else %}
                         <span class="text-muted">Unresolved</span>
+                        {% endif %}
                     </div>
                 </div>
                 <div class="stat-icon">
@@ -137,13 +143,13 @@
                         {% endif %}
                     </td>
                     <td>
-						{% if query.db_connection_id and query.db_connection %}
-						<span class="badge badge-primary">
-							<i class="bi bi-database"></i> {{ driver_labels.get(query.db_connection.db_type, query.db_connection.db_type|upper) }}
-						</span>
-						{% elif query.source_type == 'http' %}
+						{% if query.source_type == 'http' %}
 						<span class="badge badge-info">
 							<i class="bi bi-cloud"></i> HTTP
+						</span>
+						{% elif query.db_connection %}
+						<span class="badge badge-primary">
+							<i class="bi bi-database"></i> {{ driver_labels.get(query.db_connection.db_type, query.db_connection.db_type|upper) }}
 						</span>
 						{% else %}
 						<span class="badge badge-secondary">
@@ -153,7 +159,12 @@
 					</td>
                     <td>
                         {% if query.is_active %}
-                            {% if query.consecutive_failures %}
+                            {% if query.connection_disabled() %}
+                            <span class="status-indicator status-inactive" title="The database connection {{ query.db_connection.name }} is disabled: the query does not run">
+                                <span class="status-dot"></span>
+                                Connection disabled
+                            </span>
+                            {% elif query.consecutive_failures %}
                             <span class="status-indicator status-danger" title="{{ query.last_failure_message or '' }}">
                                 <span class="status-dot"></span>
                                 Failing
@@ -185,7 +196,7 @@
                         {% endif %}
                     </td>
                     <td>
-                        {% if query.is_active and query.consecutive_failures and query.failing_since %}
+                        {% if query.is_failing() and query.failing_since %}
                         <span class="text-danger" title="{{ query.last_failure_message or '' }}">
                             Failing since {{ query.failing_since|localtime('%d/%m/%y %H:%M') }}
                         </span>

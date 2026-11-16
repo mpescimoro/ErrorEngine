@@ -15,6 +15,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from urllib.parse import quote
 import requests
+from contextlib import contextmanager
 from flask import current_app
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 from datetime import datetime, timezone
@@ -30,6 +31,67 @@ TEMPLATE_NAME_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 EMAIL_OFF_MESSAGE = 'Email is off: set MAIL_SERVER, or the Microsoft 365 settings, in .env'
 SECURITY_LABELS = {'starttls': 'STARTTLS', 'ssl': 'SSL/TLS', 'none': 'no encryption'}
 
+DEFAULT_SUBJECT = '[ErrorEngine] New errors: {query_name}'
+SUBJECT_PLACEHOLDERS = ('query_name', 'error_count')
+_SUBJECT_FIELD_RE = re.compile(r'\{([^{}]*)\}')
+
+# The SMTP connection shared by the emails of a check (see EmailService.batch), per thread
+_batch = threading.local()
+
+
+def format_subject(subject: str, **values) -> str:
+    """
+    Replaces {query_name} and {error_count}, also with a format such as {error_count:03d}.
+    Anything else between braces is sent as written: a typo must not block the email.
+    """
+    def replace(match):
+        name, _, spec = match.group(1).partition(':')
+        if name not in values:
+            return match.group(0)
+        try:
+            return format(values[name], spec)
+        except (TypeError, ValueError):
+            return str(values[name])
+    return _SUBJECT_FIELD_RE.sub(replace, subject or '')
+
+
+def unknown_subject_placeholders(subject) -> list:
+    """The {...} of a subject that are not placeholders, so they would be sent as written."""
+    return [m.group(0) for m in _SUBJECT_FIELD_RE.finditer(subject or '')
+            if m.group(1).partition(':')[0] not in SUBJECT_PLACEHOLDERS]
+
+
+def subject_warning(subject):
+    """What to tell whoever writes a subject with {...} that are not placeholders; None if there are none."""
+    unknown = unknown_subject_placeholders(subject)
+    if not unknown:
+        return None
+    return (f"The email subject contains {', '.join(unknown)}: only {{query_name}} and {{error_count}} "
+            "are replaced, the rest is sent as written.")
+
+
+def refusals(refused: dict) -> dict:
+    """{address: '550 5.1.1 User unknown'} from what smtplib's sendmail returns for the refused ones."""
+    # A reply can span several lines: one line here, as it goes into the log
+    return {address: ' '.join(f"{code} {reply.decode(errors='replace')}".split())
+            for address, (code, reply) in (refused or {}).items()}
+
+
+def refusal_text(refused: dict):
+    """'Refused by the mail server: address: reason; ...', or None when nobody was refused."""
+    if not refused:
+        return None
+    return 'Refused by the mail server: ' + '; '.join(f"{a}: {reason}" for a, reason in refused.items())
+
+
+def notification_subject(query, error_count: int, email_type: str = 'new_errors') -> str:
+    """The query's subject (the default one when empty), with [REMINDER] in front of reminders."""
+    # An empty field means the default subject, the one the form shows as a hint
+    subject = query.email_subject or DEFAULT_SUBJECT
+    if email_type == 'reminder' and 'REMINDER' not in subject.upper():
+        subject = '[REMINDER] ' + subject
+    return format_subject(subject, query_name=query.name, error_count=error_count)
+
 
 class EmailUnavailable(Exception):
     """The email service does not answer or refuses the sign-in: no email can go out now."""
@@ -37,6 +99,14 @@ class EmailUnavailable(Exception):
 
 class EmailOff(Exception):
     """Neither an SMTP server nor Microsoft 365 is configured."""
+
+
+class RecipientsRefused(Exception):
+    """The SMTP server refused every address of the email; refused: {address: reason}."""
+
+    def __init__(self, refused: dict):
+        super().__init__(refusal_text(refused))
+        self.refused = refused
 
 
 def _localtime_filter(dt, fmt='%d/%m/%Y %H:%M'):
@@ -57,13 +127,18 @@ def render_email_template(template: str, **context) -> str:
     return _email_env.from_string(template).render(**context)
 
 
-def load_email_template(template_name=None):
-    """Content of templates/email/<template_name>.html (default.html when None)."""
+def load_email_template(template_name=None, strict=False):
+    """
+    Content of templates/email/<template_name>.html (default.html when None). A name that
+    cannot be used gives the default template, or raises ValueError with strict.
+    """
     if template_name is None:
         template_name = 'default'
 
     if not TEMPLATE_NAME_RE.match(template_name):
         # No paths: only files in templates/email
+        if strict:
+            raise ValueError(f"{{{template_name}}} is not a template name: letters, digits, - and _ only")
         logger.warning(f"Invalid email template name: {template_name!r}, using the default")
         template_name = 'default'
 
@@ -73,6 +148,8 @@ def load_email_template(template_name=None):
         with open(template_path, 'r', encoding='utf-8') as f:
             return f.read()
     except FileNotFoundError:
+        if strict:
+            raise ValueError(f"templates/email/{template_name}.html not found") from None
         logger.warning(f"Email template not found: {template_path}")
         if template_name != 'default':
             logger.info("Falling back to the default template")
@@ -96,7 +173,7 @@ def load_email_template(template_name=None):
 """
 
 
-def resolve_template(template_field):
+def resolve_template(template_field, strict=False):
     """
     Template of a query's email_template field: empty → default.html,
     {name} → templates/email/name.html, anything else is the HTML itself.
@@ -109,7 +186,7 @@ def resolve_template(template_field):
     if template_field.startswith('{') and template_field.endswith('}'):
         template_name = template_field[1:-1].strip()
         if template_name:
-            return load_email_template(template_name)
+            return load_email_template(template_name, strict)
         else:
             return load_email_template('default')
     
@@ -306,13 +383,17 @@ class EmailService:
         except Exception as e:
             if server is not None:
                 server.close()
-            logger.error(f"SMTP connection error: {e}")
+            # Whoever sends the email reports the error, with the rest of its outcome
+            logger.debug(f"SMTP connection error: {e}")
             raise EmailUnavailable(str(e)) from e
 
-    def _deliver(self, recipients: list, subject: str, html: str, text: str = None):
+    def _deliver(self, recipients: list, subject: str, html: str, text: str = None) -> dict:
         """
-        Sends one email with the configured method. Raises EmailOff, EmailUnavailable
-        (nothing can go out now) or another error for this email only.
+        Sends one email with the configured method. Raises EmailOff, EmailUnavailable (nothing
+        can go out now), RecipientsRefused (every address refused) or another error for this
+        email only. Returns the addresses the SMTP server refused while it took the others:
+        {address: reason}. Microsoft 365 does not say it here: its refusals come back later as
+        emails to the sender.
         """
         method = self.method()
         if method is None:
@@ -322,7 +403,7 @@ class EmailService:
             raise EmailUnavailable('MAIL_DEFAULT_SENDER is missing: the address the emails are sent from')
         if method == 'microsoft365':
             graph_mailer.send(current_app.config, sender, recipients, subject, html)
-            return
+            return {}
 
         message = MIMEMultipart('alternative')
         message['Subject'] = subject
@@ -331,23 +412,104 @@ class EmailService:
         if text:
             message.attach(MIMEText(text, 'plain'))
         message.attach(MIMEText(html, 'html'))
-        # Opens the connection, sends, and always closes it, even on errors
-        server = self._get_smtp_connection()
-        try:
-            server.sendmail(sender, recipients, message.as_string())
-        finally:
+
+        if not getattr(_batch, 'active', False):
+            # A single email: its own connection, always closed, even on errors
+            server = self._get_smtp_connection()
             try:
-                server.quit()
-            except Exception:
-                server.close()
+                return self._sendmail(server, sender, recipients, message)
+            finally:
+                self._close(server)
+
+        if _batch.server is None:
+            _batch.server = self._get_smtp_connection()
+        try:
+            return self._sendmail(_batch.server, sender, recipients, message)
+        except Exception:
+            # The connection may be broken: the next email of the check opens a new one
+            server, _batch.server = _batch.server, None
+            self._close(server)
+            raise
+
+    @staticmethod
+    def _sendmail(server, sender: str, recipients: list, message) -> dict:
+        """sendmail, with the refused addresses in words: returned when some got it, raised when none did."""
+        try:
+            return refusals(server.sendmail(sender, recipients, message.as_string()))
+        except smtplib.SMTPRecipientsRefused as e:
+            raise RecipientsRefused(refusals(e.recipients)) from None
+
+    @contextmanager
+    def batch(self):
+        """
+        One SMTP connection for the emails sent inside the block (a check sends one per
+        recipient, or per error): opened at the first email, closed at the end.
+        """
+        if getattr(_batch, 'active', False):
+            yield
+            return
+        _batch.active, _batch.server = True, None
+        try:
+            yield
+        finally:
+            server, _batch.server, _batch.active = _batch.server, None, False
+            if server is not None:
+                self._close(server)
+
+    @staticmethod
+    def _close(server):
+        try:
+            server.quit()
+        except Exception:
+            server.close()
     
+    def render_notification(self, query, errors: list, columns: list, email_type: str = 'new_errors',
+                            strict: bool = False) -> tuple:
+        """
+        HTML and plain text of a notification email. A custom template that cannot be used
+        gives way to the default one, so the notification still goes out; strict raises instead.
+        """
+        context = dict(
+            query_name=query.name,
+            query_description=query.description,
+            check_time=datetime.now(timezone.utc),
+            error_count=len(errors),
+            errors=errors,
+            columns=columns,
+            email_type=email_type
+        )
+        try:
+            html_content = render_email_template(resolve_template(query.email_template, strict), **context)
+        except Exception as template_error:
+            if strict:
+                raise
+            logger.warning(f"Email template not usable for {query.name} ({template_error}): using the default")
+            html_content = render_email_template(load_email_template('default'), **context)
+
+        error_type_text = 'Errors still active (REMINDER)' if email_type == 'reminder' else 'New errors'
+        plain_text = f"""
+{'[REMINDER] ' if email_type == 'reminder' else ''}Errors detected - {query.name}
+
+Query: {query.name}
+Description: {query.description or 'N/A'}
+Check time: {format_local_now()}
+{error_type_text}: {len(errors)}
+
+{'⚠️ This is a reminder - these errors have not been resolved yet.' if email_type == 'reminder' else ''}
+
+Open the dashboard to see the details.
+            """
+        return html_content, plain_text
+
     def send_error_notification(self, query, errors: list, columns: list,
                                 recipients_override: list = None,
-                                email_type: str = 'new_errors') -> dict:
+                                email_type: str = 'new_errors', quiet: bool = False) -> dict:
         """
         Notification email for these errors, to recipients_override or else the query's
-        recipients. email_type: 'new_errors' or 'reminder'.
-        Returns {'success', 'message', 'recipients'} (plus 'email_off' / 'email_unavailable').
+        recipients. email_type: 'new_errors' or 'reminder'. quiet: the caller writes the
+        outcome in the log, one line for all the emails of a delivery attempt.
+        Returns {'success', 'message', 'recipients', 'refused'} (plus 'email_off' / 'email_unavailable'):
+        'refused' {address: reason} are the addresses the server refused, 'recipients' when sent those who got it.
         """
         if recipients_override:
             recipients = recipients_override
@@ -371,58 +533,13 @@ class EmailService:
         if not self.is_enabled():
             # Not a failure to record: there is no way to send emails
             return {'success': False, 'message': EMAIL_OFF_MESSAGE, 'recipients': recipients, 'email_off': True}
-        
-        template = resolve_template(query.email_template)
-        
-        subject_template = query.email_subject
-        if email_type == 'reminder':
-            # REMINDER prefix if not already there
-            if 'REMINDER' not in subject_template.upper():
-                subject_template = '[REMINDER] ' + subject_template
-        
+
+        subject = notification_subject(query, len(errors), email_type)
+
         try:
-            context = dict(
-                query_name=query.name,
-                query_description=query.description,
-                check_time=datetime.now(timezone.utc),
-                error_count=len(errors),
-                errors=errors,
-                columns=columns,
-                email_type=email_type
-            )
-            try:
-                html_content = render_email_template(template, **context)
-            except Exception as template_error:
-                # A broken custom template must not stop the notification
-                logger.warning(
-                    f"Email template not usable for {query.name} ({template_error}): "
-                    f"using the default"
-                )
-                html_content = render_email_template(load_email_template('default'), **context)
-
-            subject = subject_template
-            if '{' in subject:
-                subject = subject.format(
-                    query_name=query.name,
-                    error_count=len(errors)
-                )
-            
-            # Plain-text version
-            error_type_text = 'Errors still active (REMINDER)' if email_type == 'reminder' else 'New errors'
-            plain_text = f"""
-{'[REMINDER] ' if email_type == 'reminder' else ''}Errors detected - {query.name}
-
-Query: {query.name}
-Description: {query.description or 'N/A'}
-Check time: {format_local_now()}
-{error_type_text}: {len(errors)}
-
-{'⚠️ This is a reminder - these errors have not been resolved yet.' if email_type == 'reminder' else ''}
-
-Open the dashboard to see the details.
-            """
-            
-            self._deliver(recipients, subject, html_content, plain_text)
+            html_content, plain_text = self.render_notification(query, errors, columns, email_type)
+            refused = self._deliver(recipients, subject, html_content, plain_text)
+            reached = [r for r in recipients if r not in refused]
 
             email_log = EmailLog(
                 query_id=query.id,
@@ -430,19 +547,22 @@ Open the dashboard to see the details.
                 subject=subject,
                 error_count=len(errors),
                 email_type=email_type,
-                status='sent'
+                status='sent',
+                error_message=refusal_text(refused)
             )
             db.session.add(email_log)
             db.session.commit()
             
-            logger.info(
-                f"Email {email_type} sent for {query.name} to {len(recipients)} recipients"
-            )
+            if not quiet:
+                logger.log(logging.WARNING if refused else logging.INFO,
+                           f"Email {email_type} sent for {query.name} to {len(reached)} recipients"
+                           + (f"; {refusal_text(refused)}" if refused else ""))
             
             return {
                 'success': True,
-                'message': f'Email sent to {len(recipients)} recipients',
-                'recipients': recipients
+                'message': f'Email sent to {len(reached)} recipients',
+                'recipients': reached,
+                'refused': refused
             }
             
         except Exception as e:
@@ -450,7 +570,7 @@ Open the dashboard to see the details.
             email_log = EmailLog(
                 query_id=query.id,
                 recipients=', '.join(recipients),
-                subject=query.email_subject,
+                subject=subject,
                 error_count=len(errors),
                 email_type=email_type,
                 status='failed',
@@ -459,15 +579,43 @@ Open the dashboard to see the details.
             db.session.add(email_log)
             db.session.commit()
             
-            logger.error(f"Error sending email for {query.name}: {message}")
+            if not quiet:
+                logger.error(f"Error sending email for {query.name}: {message}")
 
             return {
                 'success': False,
                 'message': message,
                 'recipients': recipients,
+                'refused': e.refused if isinstance(e, RecipientsRefused) else {},
                 # Email service unreachable: no point trying the other emails of this round
                 'email_unavailable': isinstance(e, EmailUnavailable)
             }
+
+    def send_sample(self, query, errors: list, columns: list, recipients: list) -> dict:
+        """
+        The notification email of a query as its form is now, with sample rows: "[Sample]" in
+        front of the subject, and not in the email log. A template that cannot be used is
+        reported instead of replaced. Returns {'success', 'message'}, plus 'warning'.
+        """
+        if not self.is_enabled():
+            return {'success': False, 'message': EMAIL_OFF_MESSAGE}
+        try:
+            html_content, plain_text = self.render_notification(query, errors, columns, strict=True)
+        except Exception as e:
+            message = (f"The email template cannot be used: {str(e).rstrip('.')}. "
+                       "Until it is fixed, the notifications go out with the default template.")
+            return {'success': False, 'message': message}
+        try:
+            refused = self._deliver(recipients, '[Sample] ' + notification_subject(query, len(errors)),
+                                    html_content, plain_text)
+        except Exception as e:
+            return {'success': False, 'message': redact_secrets(str(e))}
+        reached = [r for r in recipients if r not in refused]
+        result = {'success': True, 'message': f"Sample email sent to {', '.join(reached)}"}
+        warnings = [w for w in (refusal_text(refused), subject_warning(query.email_subject)) if w]
+        if warnings:
+            result['warning'] = ' '.join(w.rstrip('.') + '.' for w in warnings)
+        return result
 
     def send_system_notification(self, recipients: list, subject: str, title: str,
                                  lines: list, query=None, email_type: str = 'system') -> dict:
@@ -489,8 +637,12 @@ Open the dashboard to see the details.
             f'{escape(title)}</div><div style="padding:16px 18px;">{html_lines}</div></div>'
         )
         try:
-            self._deliver(recipients, subject, html_content, '\n\n'.join([title] + list(lines)))
-            status, error, result = 'sent', None, {'success': True, 'message': 'Sent', 'recipients': recipients}
+            refused = self._deliver(recipients, subject, html_content, '\n\n'.join([title] + list(lines)))
+            error = refusal_text(refused)
+            if error:
+                logger.warning(f"Service email '{subject}': {error}")
+            status = 'sent'
+            result = {'success': True, 'message': 'Sent', 'recipients': [r for r in recipients if r not in refused]}
         except Exception as e:
             error = redact_secrets(str(e))
             logger.error(f"Error sending service email '{subject}': {error}")
