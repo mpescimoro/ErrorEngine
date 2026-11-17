@@ -16,6 +16,7 @@ import socket
 import subprocess
 import sys
 import time
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -94,7 +95,8 @@ class TestTestQuery:
     def connection(self, app, tmp_path):
         import sqlite3
         path = tmp_path / 'source.db'
-        with sqlite3.connect(path) as c:
+        # The with of sqlite3 commits but does not close: closing() does
+        with closing(sqlite3.connect(path)) as c, c:
             c.execute('CREATE TABLE orders (id INTEGER)')
         conn = DatabaseConnection(name='Source', db_type='sqlite', database=str(path))
         db.session.add(conn)
@@ -103,7 +105,7 @@ class TestTestQuery:
 
     def tables(self, path):
         import sqlite3
-        with sqlite3.connect(path) as c:
+        with closing(sqlite3.connect(path)) as c:
             return [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")]
 
     def test_write_statement_refused_without_confirmation(self, app, client, connection):
@@ -212,13 +214,17 @@ class TestStartup:
         for name in ('MAIL_USE_TLS', 'NOTIFY_RETRY_HOURS'):
             monkeypatch.delenv(name, raising=False)
         with caplog.at_level(logging.WARNING, logger='app'):
-            create_app('testing')
+            app = create_app('testing')
+        with app.app_context():
+            db.engine.dispose()
         assert not any(w in caplog.text for w in warnings)
         monkeypatch.setattr(config.TestingConfig, 'TIMEZONE', 'Europe/Rom')
         monkeypatch.setenv('MAIL_USE_TLS', 'true')
         monkeypatch.setenv('NOTIFY_RETRY_HOURS', '24')
         with caplog.at_level(logging.WARNING, logger='app'):
-            create_app('testing')
+            app = create_app('testing')
+        with app.app_context():
+            db.engine.dispose()
         assert all(w in caplog.text for w in warnings)
 
     def test_a_number_setting_that_is_not_one_is_named(self, monkeypatch, caplog):
@@ -272,6 +278,7 @@ class TestStartup:
             health = http.client.HTTPConnection('127.0.0.1', port, timeout=60)
             health.request('GET', '/api/health')
             assert health.getresponse().status == 200
+            health.close()
             first.send_signal(signal.SIGTERM)
             assert first.wait(timeout=60) == 0
         finally:

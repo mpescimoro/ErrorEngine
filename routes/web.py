@@ -265,7 +265,7 @@ def query_create():
 @main_bp.route('/queries/<int:query_id>')
 def query_detail(query_id):
     """Query detail."""
-    query = MonitoredQuery.query.get_or_404(query_id)
+    query = db.get_or_404(MonitoredQuery, query_id)
 
     # Active errors: the real count, the 10 most recent on the page (the rest on the Errors page)
     active = ErrorRecord.query.filter_by(query_id=query_id, resolved_at=None)
@@ -293,7 +293,7 @@ def query_detail(query_id):
 @main_bp.route('/queries/<int:query_id>/edit', methods=['GET', 'POST'])
 def query_edit(query_id):
     """Edits an existing query."""
-    query = MonitoredQuery.query.get_or_404(query_id)
+    query = db.get_or_404(MonitoredQuery, query_id)
     
     if request.method == 'POST':
         try:
@@ -366,7 +366,7 @@ def query_edit(query_id):
 @main_bp.route('/queries/<int:query_id>/delete', methods=['POST'])
 def query_delete(query_id):
     """Deletes a query."""
-    query = MonitoredQuery.query.get_or_404(query_id)
+    query = db.get_or_404(MonitoredQuery, query_id)
     name = query.name
     
     try:
@@ -511,7 +511,7 @@ def connection_create():
 @main_bp.route('/connections/<int:conn_id>/edit', methods=['GET', 'POST'])
 def connection_edit(conn_id):
     """Edits an existing connection."""
-    conn = DatabaseConnection.query.get_or_404(conn_id)
+    conn = db.get_or_404(DatabaseConnection, conn_id)
     
     if request.method == 'POST':
         conn.name = request.form.get('name')
@@ -538,7 +538,7 @@ def connection_edit(conn_id):
 @main_bp.route('/connections/<int:conn_id>/delete', methods=['POST'])
 def connection_delete(conn_id):
     """Deletes a connection."""
-    conn = DatabaseConnection.query.get_or_404(conn_id)
+    conn = db.get_or_404(DatabaseConnection, conn_id)
     
     # Is it used by any query
     if conn.queries.count() > 0:
@@ -604,7 +604,7 @@ def channel_create():
 
 @main_bp.route('/channels/<int:channel_id>/edit', methods=['GET', 'POST'])
 def channel_edit(channel_id):
-    channel = NotificationChannel.query.get_or_404(channel_id)
+    channel = db.get_or_404(NotificationChannel, channel_id)
     
     if request.method == 'POST':
         channel.name = request.form.get('name')
@@ -635,7 +635,7 @@ def channel_edit(channel_id):
 
 @main_bp.route('/channels/<int:channel_id>/delete', methods=['POST'])
 def channel_delete(channel_id):
-    channel = NotificationChannel.query.get_or_404(channel_id)
+    channel = db.get_or_404(NotificationChannel, channel_id)
     if channel.queries:
         flash(f'Cannot delete: the channel is used by {len(channel.queries)} queries.', 'danger')
         return redirect(url_for('main.channels_list'))

@@ -11,7 +11,7 @@ class TestStopOnMatch:
     def test_stop_on_match_prevents_later_rules(self, app, sample_query):
         """With stop_on_match, later rules are not evaluated."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.routing_enabled = True
             query.routing_default_recipients = 'default@example.com'
             
@@ -44,7 +44,7 @@ class TestStopOnMatch:
     def test_without_stop_both_match(self, app, sample_query):
         """Without stop_on_match, both rules match."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.routing_enabled = True
             
             # Rule 1: NO stop_on_match
@@ -79,7 +79,7 @@ class TestConditionLogicOR:
     def test_or_any_condition_matches(self, app, sample_query):
         """With OR logic, one true condition is enough."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.routing_enabled = True
             
             rule = RoutingRule(
@@ -112,7 +112,7 @@ class TestConditionLogicOR:
     def test_or_no_condition_matches(self, app, sample_query):
         """With OR logic, if no condition is true, no match."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.routing_enabled = True
             query.routing_no_match_action = 'skip'
             
@@ -148,7 +148,7 @@ class TestConditionLogicAND:
     def test_and_all_conditions_must_match(self, app, sample_query):
         """With AND logic, all conditions must be true."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.routing_enabled = True
             query.routing_no_match_action = 'skip'
             
@@ -188,7 +188,7 @@ class TestNoMatchAction:
     def test_send_default_on_no_match(self, app, sample_query):
         """With send_default, errors without a match go to the default recipients."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.routing_enabled = True
             query.routing_default_recipients = 'fallback@example.com'
             query.routing_no_match_action = 'send_default'
@@ -219,7 +219,7 @@ class TestNoMatchAction:
     def test_skip_on_no_match(self, app, sample_query):
         """With skip, errors without a match are ignored."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.routing_enabled = True
             query.routing_default_recipients = 'fallback@example.com'
             query.routing_no_match_action = 'skip'
@@ -252,7 +252,7 @@ class TestPriorityOrder:
     def test_lower_priority_evaluated_first(self, app, sample_query):
         """Rules with a lower priority value are evaluated first."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.routing_enabled = True
             
             # Rule priority=10 (low priority, evaluated later)
@@ -286,7 +286,7 @@ class TestRoutingDisabled:
     def test_sends_to_all_recipients(self, app, sample_query):
         """With routing disabled, all errors go to all recipients."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.routing_enabled = False
             query.email_recipients = 'a@example.com, b@example.com'
             db.session.commit()
@@ -312,7 +312,7 @@ class TestInactiveRules:
     def test_inactive_rule_ignored(self, app, sample_query):
         """Rules with is_active=False are ignored."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.routing_enabled = True
             query.routing_no_match_action = 'skip'
             
@@ -336,7 +336,7 @@ class TestMixedRouting:
     def test_mixed_match_and_no_match(self, app, sample_query):
         """Some errors match a rule, the others go to the default."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.routing_enabled = True
             query.routing_default_recipients = 'default@example.com'
             query.routing_no_match_action = 'send_default'
@@ -374,7 +374,7 @@ class TestGetRoutingSummary:
     def test_summary_with_routing_disabled(self, app, sample_query):
         """Summary with routing disabled."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.routing_enabled = False
             query.email_recipients = 'test@example.com'
             db.session.commit()
@@ -389,7 +389,7 @@ class TestGetRoutingSummary:
     def test_summary_counts_unmatched(self, app, sample_query):
         """The summary counts the errors without a match correctly."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.routing_enabled = True
             query.routing_no_match_action = 'skip'
             

@@ -5,6 +5,7 @@ waits, given up after NOTIFY_ATTEMPTS attempts; a channel that refuses for good 
 import logging
 import re
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -163,7 +164,8 @@ class TestRetriedNotifications:
         seen = {}
 
         def count_from_outside(**kwargs):
-            with sqlite3.connect(db.engine.url.database, timeout=1) as other:
+            # The with of sqlite3 commits but does not close: closing() does
+            with closing(sqlite3.connect(db.engine.url.database, timeout=1)) as other, other:
                 seen['rows'] = other.execute('SELECT COUNT(*) FROM error_records').fetchone()[0]
                 # and the DB accepts writes from others while sending
                 other.execute('UPDATE monitored_queries SET description = ? WHERE id = ?', ('x', query.id))

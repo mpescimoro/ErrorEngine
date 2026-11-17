@@ -5,7 +5,7 @@ from routing_service import (
     apply_routing_rules, evaluate_condition, get_field_value, get_operators_list,
     OPERATORS
 )
-from models import MonitoredQuery, RoutingCondition
+from models import db, MonitoredQuery, RoutingCondition
 
 
 class TestGetFieldValue:
@@ -144,7 +144,7 @@ class TestApplyRoutingRules:
     def test_routing_with_rules(self, app, sample_query_with_routing, sample_error_data):
         """Routing test with active rules."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query_with_routing.id)
+            query = db.session.get(MonitoredQuery, sample_query_with_routing.id)
             
             result = apply_routing_rules(query, sample_error_data)
             

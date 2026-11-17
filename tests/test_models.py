@@ -3,7 +3,8 @@ Model tests: scheduling, hash, needs_reminder, serialization.
 """
 import hashlib
 from datetime import datetime, time, timedelta
-from models import MonitoredQuery, ErrorRecord
+from models import db, MonitoredQuery, ErrorRecord
+from utils import get_utc_now
 
 
 class TestErrorHash:
@@ -90,17 +91,17 @@ class TestNeedsReminder:
     def test_reminder_disabled(self, app, sample_query):
         """With reminders disabled, returns False."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.reminder_enabled = False
             
             e = ErrorRecord(query_id=query.id, error_hash='test', email_sent=True,
-                            email_sent_at=datetime.utcnow() - timedelta(hours=5))
+                            email_sent_at=get_utc_now() - timedelta(hours=5))
             assert e.needs_reminder(query) is False
     
     def test_email_not_sent_yet(self, app, sample_query):
         """If the first email was not sent, no reminder."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.reminder_enabled = True
             
             e = ErrorRecord(query_id=query.id, error_hash='test', email_sent=False)
@@ -109,49 +110,49 @@ class TestNeedsReminder:
     def test_already_resolved(self, app, sample_query):
         """A resolved error does not get reminders."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.reminder_enabled = True
             
             e = ErrorRecord(query_id=query.id, error_hash='test', email_sent=True,
-                            email_sent_at=datetime.utcnow() - timedelta(hours=5),
-                            resolved_at=datetime.utcnow())
+                            email_sent_at=get_utc_now() - timedelta(hours=5),
+                            resolved_at=get_utc_now())
             assert e.needs_reminder(query) is False
     
     def test_max_reminders_reached(self, app, sample_query):
         """Does not exceed the maximum number of reminders."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.reminder_enabled = True
             query.reminder_max_count = 3
             
             e = ErrorRecord(query_id=query.id, error_hash='test', email_sent=True,
-                            email_sent_at=datetime.utcnow() - timedelta(hours=5),
+                            email_sent_at=get_utc_now() - timedelta(hours=5),
                             reminder_count=3)
             assert e.needs_reminder(query) is False
     
     def test_reminder_needed(self, app, sample_query):
         """Reminder needed when the conditions are met."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.reminder_enabled = True
             query.reminder_interval_minutes = 60
             query.reminder_max_count = 5
             
             e = ErrorRecord(query_id=query.id, error_hash='test', email_sent=True,
-                            email_sent_at=datetime.utcnow() - timedelta(hours=2),
+                            email_sent_at=get_utc_now() - timedelta(hours=2),
                             reminder_count=0)
             assert e.needs_reminder(query) is True
     
     def test_reminder_too_soon(self, app, sample_query):
         """No reminder if the interval has not passed."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.reminder_enabled = True
             query.reminder_interval_minutes = 60
             query.reminder_max_count = 5
             
             e = ErrorRecord(query_id=query.id, error_hash='test', email_sent=True,
-                            email_sent_at=datetime.utcnow() - timedelta(minutes=10),
+                            email_sent_at=get_utc_now() - timedelta(minutes=10),
                             reminder_count=0)
             assert e.needs_reminder(query) is False
 
@@ -162,7 +163,7 @@ class TestIsInSchedule:
     def test_no_schedule_always_in(self, app, sample_query):
         """Without restrictions, always in schedule."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.schedule_start_time = None
             query.schedule_end_time = None
             query.schedule_days = ''
@@ -174,7 +175,7 @@ class TestIsInSchedule:
     def test_within_time_window(self, app, sample_query):
         """Inside the time window returns True."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.schedule_start_time = time(8, 0)
             query.schedule_end_time = time(18, 0)
             query.schedule_days = ''
@@ -185,7 +186,7 @@ class TestIsInSchedule:
     def test_before_start_time(self, app, sample_query):
         """Before the start time returns False."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.schedule_start_time = time(8, 0)
             query.schedule_end_time = time(18, 0)
             query.schedule_days = ''
@@ -196,7 +197,7 @@ class TestIsInSchedule:
     def test_after_end_time(self, app, sample_query):
         """After the end time returns False."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.schedule_start_time = time(8, 0)
             query.schedule_end_time = time(18, 0)
             query.schedule_days = ''
@@ -207,7 +208,7 @@ class TestIsInSchedule:
     def test_wrong_day(self, app, sample_query):
         """A day not allowed returns False."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.schedule_days = '1,2,3,4,5'  # Mon-Fri only
             query.schedule_start_time = None
             query.schedule_end_time = None
@@ -219,7 +220,7 @@ class TestIsInSchedule:
     def test_allowed_day(self, app, sample_query):
         """An allowed day returns True."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.schedule_days = '1,2,3,4,5'  # Mon-Fri only
             query.schedule_start_time = None
             query.schedule_end_time = None
@@ -235,7 +236,7 @@ class TestShouldRunNow:
     def test_first_execution(self, app, sample_query):
         """First run: always runs if in schedule."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.last_check_at = None
             query.schedule_start_time = None
             query.schedule_end_time = None
@@ -249,7 +250,7 @@ class TestShouldRunNow:
     def test_out_of_schedule_no_run(self, app, sample_query):
         """Outside the time window: do not run."""
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.schedule_start_time = time(8, 0)
             query.schedule_end_time = time(18, 0)
             
@@ -263,18 +264,18 @@ class TestKeyFieldsList:
     
     def test_single_field(self, app, sample_query):
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.key_fields = 'ID'
             assert query.get_key_fields_list() == ['ID']
     
     def test_multiple_fields(self, app, sample_query):
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.key_fields = 'ID, CODE, STATUS'
             assert query.get_key_fields_list() == ['ID', 'CODE', 'STATUS']
     
     def test_strips_whitespace(self, app, sample_query):
         with app.app_context():
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.key_fields = '  ID  ,  CODE  '
             assert query.get_key_fields_list() == ['ID', 'CODE']

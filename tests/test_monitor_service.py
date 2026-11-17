@@ -24,7 +24,7 @@ class TestCheckQueryNewErrors:
             )
             mock_email.send_error_notification.return_value = {'success': True}
             
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             result = monitor_service.check_query(query, force=True)
             
             assert result['status'] == 'success'
@@ -44,7 +44,7 @@ class TestCheckQueryNewErrors:
             
             mock_execute.return_value = (['ID', 'CODE'], [])
             
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             result = monitor_service.check_query(query, force=True)
             
             assert result['status'] == 'success'
@@ -66,7 +66,7 @@ class TestCheckQueryDeduplication:
             mock_execute.return_value = (['ID', 'CODE', 'MESSAGE'], rows)
             mock_email.send_error_notification.return_value = {'success': True}
             
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             
             # First run: finds 1 new error
             r1 = monitor_service.check_query(query, force=True)
@@ -92,7 +92,7 @@ class TestCheckQueryDeduplication:
             mock_execute.return_value = (['ID', 'CODE', 'MESSAGE'], rows)
             mock_email.send_error_notification.return_value = {'success': True}
             
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             
             # First run
             monitor_service.check_query(query, force=True)
@@ -118,7 +118,7 @@ class TestCheckQueryResolution:
             
             mock_email.send_error_notification.return_value = {'success': True}
             
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             
             # First run: 2 errors
             mock_execute.return_value = (
@@ -156,7 +156,7 @@ class TestCheckQueryResolution:
             
             mock_email.send_error_notification.return_value = {'success': True}
             
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             
             # Before: 2 errors
             mock_execute.return_value = (
@@ -185,7 +185,7 @@ class TestCheckQuerySchedule:
             from monitor_service import monitor_service
             from datetime import time
             
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.schedule_start_time = time(8, 0)
             query.schedule_end_time = time(10, 0)
             db.session.commit()
@@ -208,7 +208,7 @@ class TestCheckQuerySchedule:
             from monitor_service import monitor_service
             from datetime import time
             
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             query.schedule_start_time = time(8, 0)
             query.schedule_end_time = time(10, 0)
             db.session.commit()
@@ -232,7 +232,7 @@ class TestCheckQueryErrorHandling:
             
             mock_execute.side_effect = Exception("Connection refused")
             
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             result = monitor_service.check_query(query, force=True)
             
             assert result['status'] == 'error'
@@ -255,7 +255,7 @@ class TestCheckQueryStats:
             )
             mock_email.send_error_notification.return_value = {'success': True}
             
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             assert query.last_check_at is None
             assert query.total_errors_found == 0
             
@@ -276,7 +276,7 @@ class TestCheckQueryStats:
             mock_execute.return_value = (['ID', 'CODE'], [{'ID': '001', 'CODE': 'E1'}])
             mock_email.send_error_notification.return_value = {'success': True}
             
-            query = MonitoredQuery.query.get(sample_query.id)
+            query = db.session.get(MonitoredQuery, sample_query.id)
             monitor_service.check_query(query, force=True)
             
             log = QueryLog.query.filter_by(query_id=query.id).first()

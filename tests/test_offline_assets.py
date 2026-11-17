@@ -27,4 +27,5 @@ def test_fonts_and_icons_reachable_without_login(app, client):
     for path in ('/static/vendor/fonts/fonts.css', '/static/vendor/fonts/dm-sans-latin-400-normal.woff2',
                  '/static/vendor/bootstrap-icons/bootstrap-icons.min.css',
                  '/static/vendor/bootstrap-icons/fonts/bootstrap-icons.woff2'):
-        assert client.get(path).status_code == 200, path
+        with client.get(path) as response:
+            assert response.status_code == 200, path

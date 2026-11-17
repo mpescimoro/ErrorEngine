@@ -45,7 +45,7 @@ def api_queries_list():
 @api_bp.route('/queries/<int:query_id>/run', methods=['POST'])
 def api_run_query(query_id):
     """API: Runs a query right away (ignores the time window)."""
-    query = MonitoredQuery.query.get_or_404(query_id)
+    query = db.get_or_404(MonitoredQuery, query_id)
     result = monitor_service.check_query(query, force=True)
     return jsonify(result)
 
@@ -53,7 +53,7 @@ def api_run_query(query_id):
 @api_bp.route('/queries/<int:query_id>/test', methods=['POST'])
 def api_test_query(query_id):
     """API: Tests a query without saving the results."""
-    query = MonitoredQuery.query.get_or_404(query_id)
+    query = db.get_or_404(MonitoredQuery, query_id)
     result = test_query_source(query)
     return jsonify(result)
 
@@ -61,7 +61,7 @@ def api_test_query(query_id):
 @api_bp.route('/queries/<int:query_id>/toggle', methods=['POST'])
 def api_toggle_query(query_id):
     """API: Activates/deactivates a query."""
-    query = MonitoredQuery.query.get_or_404(query_id)
+    query = db.get_or_404(MonitoredQuery, query_id)
     query.is_active = not query.is_active
     db.session.commit()
     
@@ -74,7 +74,7 @@ def api_toggle_query(query_id):
 @api_bp.route('/queries/<int:query_id>/status', methods=['GET'])
 def api_query_status(query_id):
     """API: Current state of a query."""
-    MonitoredQuery.query.get_or_404(query_id)
+    db.get_or_404(MonitoredQuery, query_id)
     status = monitor_service.get_query_status(query_id)
     return jsonify(status)
 
@@ -91,7 +91,7 @@ def api_query_fields(query_id):
 @api_bp.route('/queries/<int:query_id>/routing/rules', methods=['GET'])
 def api_get_routing_rules(query_id):
     """API: List of the routing rules of a query."""
-    query = MonitoredQuery.query.get_or_404(query_id)
+    query = db.get_or_404(MonitoredQuery, query_id)
     
     rules = []
     for rule in query.routing_rules:
@@ -124,7 +124,7 @@ def api_get_routing_rules(query_id):
 @api_bp.route('/queries/<int:query_id>/routing/rules', methods=['POST'])
 def api_create_routing_rule(query_id):
     """API: Creates a new routing rule."""
-    MonitoredQuery.query.get_or_404(query_id)   # 404 if the query does not exist
+    db.get_or_404(MonitoredQuery, query_id)   # 404 if the query does not exist
     data = request.get_json()
     
     is_valid, error = validate_routing_rule(data)
@@ -226,7 +226,7 @@ def api_delete_routing_rule(query_id, rule_id):
 @api_bp.route('/queries/<int:query_id>/routing/test', methods=['POST'])
 def api_test_routing(query_id):
     """API: Recipients the routing rules choose for the errors sent, or for the active ones."""
-    query = MonitoredQuery.query.get_or_404(query_id)
+    query = db.get_or_404(MonitoredQuery, query_id)
     data = request.get_json(silent=True) if request.get_data() else {}
     test_errors = data.get('errors', []) if isinstance(data, dict) else None
     if not (isinstance(test_errors, list) and all(isinstance(error, dict) for error in test_errors)):
@@ -280,7 +280,7 @@ def api_errors_summary():
 @api_bp.route('/errors/<int:error_id>/resolve', methods=['POST'])
 def api_resolve_error(error_id):
     """API: Marks an error as resolved manually."""
-    error = ErrorRecord.query.get_or_404(error_id)
+    error = db.get_or_404(ErrorRecord, error_id)
     # Already resolved: it keeps its time, which the cleanup of resolved errors counts from
     if error.resolved_at is None:
         error.resolved_at = get_utc_now()
@@ -313,7 +313,7 @@ def api_connections_list():
 @api_bp.route('/connections/<int:conn_id>/test', methods=['POST'])
 def api_connection_test(conn_id):
     """API: Tests a saved connection."""
-    conn = DatabaseConnection.query.get_or_404(conn_id)
+    conn = db.get_or_404(DatabaseConnection, conn_id)
     result = conn.test_connection()
     return jsonify(result)
 
@@ -344,7 +344,7 @@ def api_connection_test_new():
 @api_bp.route('/connections/<int:conn_id>/test-query', methods=['POST'])
 def api_connection_test_query(conn_id):
     """API: Tests a query on a specific connection."""
-    conn = DatabaseConnection.query.get_or_404(conn_id)
+    conn = db.get_or_404(DatabaseConnection, conn_id)
     data = request.get_json() or {}
     sql = data.get('sql')
     
@@ -386,7 +386,7 @@ def api_channels_list():
 
 @api_bp.route('/channels/<int:channel_id>/test', methods=['POST'])
 def api_channel_test(channel_id):
-    channel = NotificationChannel.query.get_or_404(channel_id)
+    channel = db.get_or_404(NotificationChannel, channel_id)
     result = notification_service.test_channel(channel)
     return jsonify(result)
 
@@ -512,7 +512,7 @@ def api_stats_by_query():
     if not query_id:
         return jsonify({'error': 'query_id required'}), 400
     
-    query = MonitoredQuery.query.get_or_404(query_id)
+    query = db.get_or_404(MonitoredQuery, query_id)
     start_date = get_utc_now() - timedelta(days=days)
     
     total_errors = ErrorRecord.query.filter(

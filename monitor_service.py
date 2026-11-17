@@ -840,7 +840,7 @@ class MonitorService:
     
     def get_query_status(self, query_id: int) -> dict:
         """Gets the current state of a query."""
-        query = MonitoredQuery.query.get(query_id)
+        query = db.session.get(MonitoredQuery, query_id)
         if not query:
             return {'error': 'Query not found'}
         

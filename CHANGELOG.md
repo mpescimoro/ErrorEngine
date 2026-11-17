@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+**Changed**
+- Deprecated SQLAlchemy calls replaced; the tests now fail on any warning, those of Python 3.13 about connections left open included
+
 ## 2.4.2
 
 **Added**

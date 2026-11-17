@@ -58,7 +58,8 @@ class TestProtection:
         assert client.get('/api/health').status_code == 200
 
     def test_static_files_are_public(self, client):
-        assert client.get('/static/css/app.css').status_code == 200
+        with client.get('/static/css/app.css') as response:
+            assert response.status_code == 200
 
     def test_login_page_is_public(self, client):
         response = client.get('/login')

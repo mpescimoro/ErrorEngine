@@ -25,6 +25,7 @@ def app():
         yield app
         db.session.remove()
         db.drop_all()
+        db.engine.dispose()
 
 
 @pytest.fixture
@@ -42,6 +43,7 @@ def file_app(tmp_path, monkeypatch):
         yield app
         db.session.remove()
         db.drop_all()
+        db.engine.dispose()
 
 
 @pytest.fixture
@@ -88,7 +90,7 @@ def sample_query_with_routing(app, sample_query):
     """Creates a query with routing rules."""
     with app.app_context():
         # Reload the query in the current context
-        query = MonitoredQuery.query.get(sample_query.id)
+        query = db.session.get(MonitoredQuery, sample_query.id)
         query.routing_enabled = True
         query.routing_default_recipients = 'default@example.com'
         

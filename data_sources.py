@@ -159,10 +159,10 @@ class DataSourceFactory:
 # === HELPER FUNCTIONS ===
 
 def _connection(query):
-    from models import DatabaseConnection
+    from models import db, DatabaseConnection
     if not query.db_connection_id:
         raise ValueError("No database connection: choose one in the query form")
-    conn = DatabaseConnection.query.get(query.db_connection_id)
+    conn = db.session.get(DatabaseConnection, query.db_connection_id)
     if not conn:
         raise ValueError(f"Database connection {query.db_connection_id} not found")
     return conn
