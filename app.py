@@ -3,6 +3,7 @@ Application Factory - ErrorEngine Monitoring System
 """
 import os
 import logging
+import mimetypes
 from zoneinfo import ZoneInfo
 from flask import Flask
 from config import config, retired_settings_warnings
@@ -77,6 +78,22 @@ def create_app(config_name=None):
     # Login: protects pages and APIs
     from auth import init_auth
     init_auth(app)
+
+    # Python takes file types from the Windows registry, which can say text/plain for .js and .css:
+    # with nosniff the browser would then refuse the scripts and the styles
+    mimetypes.add_type('text/javascript', '.js')
+    mimetypes.add_type('text/css', '.css')
+
+    @app.after_request
+    def security_headers(response):
+        """No frames of other pages (clickjacking), no guessing file types, no page address to other sites."""
+        response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        response.headers.setdefault('X-Frame-Options', 'DENY')
+        response.headers.setdefault('Content-Security-Policy', "frame-ancestors 'none'")
+        response.headers.setdefault('Referrer-Policy', 'same-origin')
+        if app.config.get('HTTPS'):
+            response.headers.setdefault('Strict-Transport-Security', 'max-age=31536000')
+        return response
 
     # Create the database tables (and add new columns to existing ones)
     with app.app_context():

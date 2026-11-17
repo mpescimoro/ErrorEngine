@@ -20,7 +20,9 @@ Optional settings (in .env):
     ERRORENGINE_HOST     default 0.0.0.0 (all interfaces)
     ERRORENGINE_PORT     default 5000
     ERRORENGINE_THREADS  default 4: requests handled at the same time
+    ERRORENGINE_TRUSTED_PROXY  address of the reverse proxy, if there is one
 """
+import ipaddress
 import logging
 import os
 import signal
@@ -80,6 +82,15 @@ def main():
     host = os.environ.get('ERRORENGINE_HOST') or '0.0.0.0'
     port = whole_number('ERRORENGINE_PORT', 5000, between=(1, 65535))
     threads = max(1, whole_number('ERRORENGINE_THREADS', 4))
+    proxy = (os.environ.get('ERRORENGINE_TRUSTED_PROXY') or '').strip()
+    if proxy not in ('', '*'):
+        try:
+            # Waitress compares it as text with the address of the peer: ::1, not 0:0:0:0:0:0:0:1
+            proxy = str(ipaddress.ip_address(proxy))
+        except ValueError:
+            logger.critical(f"ERRORENGINE_TRUSTED_PROXY={proxy} in .env is not an IP address: correct it, "
+                            "or remove it if there is no reverse proxy")
+            sys.exit(1)
 
     # The port first, our own: a second copy stops here, before it unlocks the first one's queries.
     # Waitress would ask for SO_REUSEADDR, which on Windows lets a second program take a port in use
@@ -94,10 +105,17 @@ def main():
     logging.getLogger('apscheduler').setLevel(logging.WARNING)
 
     app = create_app('production')
-    server = create_server(app, sockets=[sock], threads=threads)
+    # From the reverse proxy alone, the client address, host and https of the requests it forwards;
+    # the same headers from anyone else are dropped
+    from_proxy = {'trusted_proxy': proxy,
+                  'trusted_proxy_headers': 'x-forwarded-for x-forwarded-host x-forwarded-proto'} if proxy else {}
+    # ident='': the responses do not name the web server
+    server = create_server(app, sockets=[sock], threads=threads, ident='', **from_proxy)
     # kill, systemctl stop and docker stop send SIGTERM: the same orderly stop as Ctrl+C
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     logger.info(f"Web server: up to {threads} requests at a time")
+    if proxy:
+        logger.info(f"Trusted reverse proxy: {proxy}")
     try:
         server.print_listen('Serving on http://{}:{}')
         server.run()

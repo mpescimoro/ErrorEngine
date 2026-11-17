@@ -137,9 +137,11 @@ def _check_csrf():
     if request.path.startswith('/api/'):
         return jsonify({'error': 'csrf', 'message': 'The page is out of date: reload it and try again'}), 403
     flash('The page was out of date and has been reloaded: try again', 'warning')
-    # Back to the page with the form, if it is a page of ErrorEngine; otherwise the dashboard
+    # Back to the page with the form, if it is a page of ErrorEngine; otherwise the dashboard.
+    # Behind a proxy that changes the host, the browser itself can say the form was ours
     back = urlsplit(request.referrer or '')
-    page = back.path + (f'?{back.query}' if back.query else '') if back.netloc == request.host else ''
+    ours = back.netloc == request.host or request.headers.get('Sec-Fetch-Site') == 'same-origin'
+    page = back.path + (f'?{back.query}' if back.query else '') if ours else ''
     return redirect(_safe_next(page))
 
 

@@ -25,7 +25,7 @@ def variables_read_by_the_code():
         if any(part in ('tests', 'venv', '.venv') for part in path.relative_to(ROOT).parts):
             continue
         source = path.read_text(encoding='utf-8')
-        found |= set(re.findall(r"(?:environ\.get|getenv|environ\[|whole_number)\(?\s*['\"]([A-Z_]{3,})['\"]",
+        found |= set(re.findall(r"(?:environ\.get|getenv|environ\[|whole_number|flag)\(?\s*['\"]([A-Z_]{3,})['\"]",
                                 source))
     return found
 

@@ -14,6 +14,8 @@ Settings live in `.env` in the project folder: copy `.env.example`, which has th
 | `ERRORENGINE_HOST` | `0.0.0.0` | Address the server listens on |
 | `ERRORENGINE_PORT` | `5000` | Port the server listens on |
 | `ERRORENGINE_THREADS` | `4` | Requests the server handles at the same time: raise it if pages wait while **Run now** or **Test query** run slow queries |
+| `ERRORENGINE_HTTPS` | `false` | `true` when users open ErrorEngine with `https://`, through a reverse proxy: the session cookie travels only over HTTPS, and browsers are told to use HTTPS only (HSTS). With `true`, the sign-in no longer works from `http://` addresses, `localhost` excepted |
+| `ERRORENGINE_TRUSTED_PROXY` | — | Address of the reverse proxy, e.g. `127.0.0.1`. From it alone, the client address, the host and `https` come from the `X-Forwarded-For`, `X-Forwarded-Host` and `X-Forwarded-Proto` headers; from anyone else they are dropped. `*` trusts every address: only if nothing but the proxy can reach ErrorEngine |
 | `TIMEZONE` | `UTC` | Time zone of dates, schedules and statistics, e.g. `Europe/Rome`. A name that does not exist means UTC, and the log says so at startup |
 | `MAIL_SERVER` | — | SMTP server. Empty: email is off and notifications go only to the channels, see [Email](#email) |
 | `MAIL_SECURITY` | `starttls` | `starttls`, `ssl` (the default on port 465) or `none`, only for a relay without login on the internal network |
@@ -108,7 +110,15 @@ Use read-only database users: ErrorEngine runs the query you write, and the form
 - **Log:** `logs/errorengine.log` (a new file every 10 MB, the last 5 kept), and the console when there is one. **Settings** shows where it is and how much space it takes.
 - **Windows service or scheduled task:** run `C:\path\to\ErrorEngine\venv\Scripts\python.exe C:\path\to\ErrorEngine\serve.py` with full paths; it moves to its own folder and reads `.env` by itself.
 - **Stopping:** Ctrl+C, or SIGTERM on Linux (`kill`, `systemctl stop`, `docker stop`): the queries still running finish first. A second copy started on the same port stops at once, without touching the first one, and the log says why.
-- **Network access:** put it behind a reverse proxy with HTTPS (IIS, nginx) if users reach it from other computers.
+- **Network access:** put it behind a reverse proxy with HTTPS (IIS, nginx) if users reach it from other computers, then set `ERRORENGINE_HTTPS=true` and `ERRORENGINE_TRUSTED_PROXY` to the address of the proxy. The proxy must send the original address, host and protocol; with nginx:
+
+  ```nginx
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-Host $host;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  ```
+
+  Browsers remember HSTS for a year. To go back to `http://`, first set `ERRORENGINE_HTTPS=false` and have the proxy send `Strict-Transport-Security: max-age=0` over HTTPS for a while: the browsers that do not come by in the meantime keep requiring HTTPS until the year is over.
 - **External monitoring:** `GET /api/health` answers 200 (`healthy`, or `degraded` when some queries cannot read their source) or 503 when the internal database or the scheduler is not working.
 
 ## Notification channels
@@ -146,3 +156,4 @@ Every day at 03:00 (server time) ErrorEngine deletes the run logs, email logs an
 - Database passwords, tokens and channel URLs are stored in plain text in the internal database (encryption is planned for v2.5): protect the `instance/` folder and `.env`.
 - Use read-only database users.
 - The forms and the requests of the pages that change something carry a CSRF token: a page of another site, or of the same host on another port, cannot use the session of whoever is signed in.
+- The responses tell the browser not to show ErrorEngine in a frame of another page, not to guess the type of a file and not to give the page address to other sites; with `ERRORENGINE_HTTPS`, to use HTTPS only.

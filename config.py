@@ -38,6 +38,21 @@ def whole_number(name: str, default: int, between: tuple = None) -> int:
     raise SystemExit(1)
 
 
+def flag(name: str) -> bool:
+    """
+    true or false from .env, false when the setting is empty. Anything else stops ErrorEngine
+    with a line that names the setting, as whole_number does.
+    """
+    text = (os.environ.get(name) or '').strip()
+    if text.lower() in ('', 'false'):
+        return False
+    if text.lower() == 'true':
+        return True
+    logger.critical(f"{name}={text} in .env is not true or false: "
+                    "correct it, or remove it for the default (false)")
+    raise SystemExit(1)
+
+
 def _mail_security():
     """starttls, ssl or none; without MAIL_SECURITY, ssl on port 465 and starttls on the others."""
     value = (os.environ.get('MAIL_SECURITY') or '').strip().lower()
@@ -94,6 +109,9 @@ class Config:
     PERMANENT_SESSION_LIFETIME = timedelta(hours=whole_number('ERRORENGINE_SESSION_HOURS', 12))
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = 'Lax'
+    # Users open ErrorEngine with https://, through a reverse proxy: the cookie only over HTTPS, and HSTS
+    HTTPS = flag('ERRORENGINE_HTTPS')
+    SESSION_COOKIE_SECURE = HTTPS
     
     # Internal database (SQLite unless DATABASE_URL is set)
     SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or 'sqlite:///errorengine.db'

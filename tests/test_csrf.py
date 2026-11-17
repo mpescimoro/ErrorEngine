@@ -74,6 +74,10 @@ def test_the_token_of_the_page_is_accepted_and_not_from_another_site(csrf_app, c
     # A form sends it as a field
     response = client.post(f'/queries/{sample_query.id}/delete', data={'csrf_token': token})
     assert response.status_code == 302 and MonitoredQuery.query.count() == 0
+    # Refused, a form goes back to its page. Behind a proxy that changes the host, the browser says it was ours
+    form = {'Referer': 'https://errorengine.example.com/queries'}
+    assert client.post('/queries/1/delete', headers=form).location == '/'
+    assert client.post('/queries/1/delete', headers={**form, 'Sec-Fetch-Site': 'same-origin'}).location == '/queries'
 
 
 def test_scripts_with_the_api_token_do_not_need_it(csrf_app, client, sample_query):
