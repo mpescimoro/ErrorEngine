@@ -6,11 +6,11 @@ Settings live in `.env` in the project folder: copy `.env.example`, which has th
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `SECRET_KEY` | — | **Required.** Random string that signs the session cookie |
+| `SECRET_KEY` | — | **Required.** Random string of at least 32 characters that signs the session cookie |
 | `ERRORENGINE_PASSWORD_HASH` | — | **Required.** Hash of the password, see [Sign-in](#sign-in) |
 | `ERRORENGINE_USER` | `admin` | User name |
 | `ERRORENGINE_SESSION_HOURS` | `12` | Hours of inactivity before the session expires |
-| `ERRORENGINE_API_TOKEN` | — | Token for scripts that call the [API](api-reference.md) |
+| `ERRORENGINE_API_TOKEN` | — | Token of at least 32 characters for scripts that call the [API](api-reference.md) |
 | `ERRORENGINE_HOST` | `0.0.0.0` | Address the server listens on |
 | `ERRORENGINE_PORT` | `5000` | Port the server listens on |
 | `ERRORENGINE_THREADS` | `4` | Requests the server handles at the same time: raise it if pages wait while **Run now** or **Test query** run slow queries |
@@ -50,9 +50,11 @@ ErrorEngine has a single user. Generate the hash of the password with the Python
 venv/bin/python -c "import getpass; from werkzeug.security import generate_password_hash as h; print(h(getpass.getpass('Password: ')))"
 ```
 
-`SECRET_KEY` must be a random value, for example from `venv/bin/python -c "import secrets; print(secrets.token_hex(32))"`. Without `SECRET_KEY`, ErrorEngine does not start, and the log says why. With the example key, or without the password hash, it checks the queries but nobody can sign in, and the sign-in page says what is missing.
+`SECRET_KEY` must be a random value of at least 32 characters, for example from `venv/bin/python -c "import secrets; print(secrets.token_hex(32))"`, which gives 64. Without `SECRET_KEY`, ErrorEngine does not start, and the log says why. With the example key, a shorter one, or without the password hash, it checks the queries but nobody can sign in, and the sign-in page says what is missing.
 
-Scripts call the API with `Authorization: Bearer <ERRORENGINE_API_TOKEN>`. Only `/api/health` needs no login.
+After 5 wrong passwords in a row from the same address, that address waits a minute before the next try. Behind a reverse proxy, set `ERRORENGINE_TRUSTED_PROXY`: otherwise every attempt seems to come from the proxy, and the wait applies to everyone.
+
+Scripts call the API with `Authorization: Bearer <ERRORENGINE_API_TOKEN>`, a token of at least 32 characters, generated as `SECRET_KEY`: a shorter one is refused, and the log says so at startup. Only `/api/health` needs no login.
 
 ## Email
 

@@ -21,7 +21,9 @@ Scripts with the API token do not need it.
 import hashlib
 import hmac
 import logging
+import math
 import secrets
+import threading
 import time
 from urllib.parse import urlsplit
 
@@ -39,6 +41,15 @@ auth_bp = Blueprint('auth', __name__)
 PUBLIC_ENDPOINTS = {'auth.login', 'static', 'api.api_health'}
 # Methods of the requests that change something: they need the CSRF token
 UNSAFE_METHODS = {'POST', 'PUT', 'PATCH', 'DELETE'}
+# SECRET_KEY and the API token: shorter ones are too easy to guess
+MIN_KEY_LENGTH = 32
+# After LOGIN_ATTEMPTS wrong passwords, an address waits LOGIN_BLOCK_SECONDS before the next try; failures
+# older than LOGIN_FORGET_SECONDS no longer count. Short waits: without ERRORENGINE_TRUSTED_PROXY every
+# attempt seems to come from the reverse proxy, the administrator's included
+LOGIN_ATTEMPTS = 5
+LOGIN_BLOCK_SECONDS = 60
+LOGIN_FORGET_SECONDS = 15 * 60
+_failed_logins_lock = threading.Lock()
 
 
 def init_auth(app):
@@ -47,6 +58,8 @@ def init_auth(app):
     app.before_request(_require_login)
     app.before_request(_check_csrf)
     app.jinja_env.globals['csrf_token'] = csrf_token
+    # Wrong passwords by address: (how many in a row, time of the last one). In memory, a single process
+    app.extensions['failed_logins'] = {}
 
     @app.context_processor
     def inject_current_user():
@@ -59,6 +72,10 @@ def init_auth(app):
         if problem:
             logger.warning(f"Login not configured. {problem} "
                            "Until it is fixed, nobody can open the interface.")
+    token = app.config.get('API_TOKEN')
+    if token and len(token) < MIN_KEY_LENGTH:
+        logger.warning(f"ERRORENGINE_API_TOKEN is shorter than {MIN_KEY_LENGTH} characters: scripts that use it "
+                       "are refused. Generate a longer one, as for SECRET_KEY")
 
 
 def _configuration_problem(config) -> str:
@@ -67,6 +84,8 @@ def _configuration_problem(config) -> str:
         return "ERRORENGINE_PASSWORD_HASH is missing from the server's .env file."
     if not config.get('SECRET_KEY') or config.get('SECRET_KEY') in INSECURE_SECRET_KEYS:
         return "The SECRET_KEY in the server's .env file is missing or is the example one."
+    if len(config['SECRET_KEY']) < MIN_KEY_LENGTH:
+        return f"The SECRET_KEY in the server's .env file is shorter than {MIN_KEY_LENGTH} characters."
     return ''
 
 
@@ -84,7 +103,7 @@ def _is_logged_in() -> bool:
 
 def _valid_api_token() -> bool:
     token = current_app.config.get('API_TOKEN')
-    if not token:
+    if not token or len(token) < MIN_KEY_LENGTH:
         return False
     scheme, _, value = request.headers.get('Authorization', '').partition(' ')
     return scheme.lower() == 'bearer' and hmac.compare_digest(value.strip().encode(), token.encode())
@@ -145,6 +164,30 @@ def _check_csrf():
     return redirect(_safe_next(page))
 
 
+def _client_address() -> str:
+    """The address of the client, without the port some proxies add to an IPv6 one ([2001:db8::1]:51234)."""
+    address = request.remote_addr or ''
+    return address[1:address.index(']')] if address.startswith('[') and ']' in address else address
+
+
+def _login_attempt(failed: dict, address: str) -> tuple:
+    """
+    (seconds the address must still wait, number of this try in a row). When it may try, the try is
+    counted here, before the password is checked: tries that arrive together cannot all pass before
+    the first one fails.
+    """
+    now = time.monotonic()
+    with _failed_logins_lock:
+        for other, (_, last) in list(failed.items()):
+            if now - last > LOGIN_FORGET_SECONDS:
+                del failed[other]
+        count, last = failed.get(address, (0, now))
+        if count >= LOGIN_ATTEMPTS and now < last + LOGIN_BLOCK_SECONDS:
+            return math.ceil(last + LOGIN_BLOCK_SECONDS - now), count
+        failed[address] = (count + 1, now)
+    return 0, count + 1
+
+
 def _safe_next(target) -> str:
     """After login, only go back to pages of this site."""
     if (target and target.startswith('/') and not target.startswith('//')
@@ -161,32 +204,45 @@ def login():
     if not problem and _is_logged_in():
         return redirect(next_url)
 
-    error = None
+    error, status = None, 200
     if request.method == 'POST' and not problem:
-        cfg = current_app.config
-        username = request.form.get('username', '').strip()
-        password = request.form.get('password', '')
-        try:
-            password_ok = check_password_hash(cfg['LOGIN_PASSWORD_HASH'], password)
-        except ValueError:
-            logger.error("ERRORENGINE_PASSWORD_HASH is not valid: generate it again")
-            password_ok = False
-        user_ok = hmac.compare_digest(username.encode(), cfg['LOGIN_USERNAME'].encode())
+        failed, address = current_app.extensions['failed_logins'], _client_address()
+        wait, attempt = _login_attempt(failed, address)
+        if wait:
+            # The password is not even checked while the address waits
+            error = (f"Too many wrong passwords from this address: try again in {wait} "
+                     f"{'second' if wait == 1 else 'seconds'}.")
+            status = 429
+        else:
+            cfg = current_app.config
+            username = request.form.get('username', '').strip()
+            password = request.form.get('password', '')
+            try:
+                password_ok = check_password_hash(cfg['LOGIN_PASSWORD_HASH'], password)
+            except ValueError:
+                logger.error("ERRORENGINE_PASSWORD_HASH is not valid: generate it again")
+                password_ok = False
+            user_ok = hmac.compare_digest(username.encode(), cfg['LOGIN_USERNAME'].encode())
 
-        if user_ok and password_ok:
-            session.clear()
-            session.permanent = True
-            session['user'] = username
-            session['auth'] = _credentials_fingerprint()
-            logger.info(f"Login: {username} from {request.remote_addr}")
-            return redirect(next_url)
+            if user_ok and password_ok:
+                with _failed_logins_lock:
+                    failed.pop(address, None)
+                session.clear()
+                session.permanent = True
+                session['user'] = username
+                session['auth'] = _credentials_fingerprint()
+                logger.info(f"Login: {username} from {request.remote_addr}")
+                return redirect(next_url)
 
-        logger.warning(f"Failed login for '{username}' from {request.remote_addr}")
-        time.sleep(1)  # slows down bursts of attempts
-        error = 'Wrong username or password.'
+            logger.warning(f"Failed login for '{username}' from {request.remote_addr}")
+            # Logged by the try that starts the wait, not by every one checked together with it
+            if attempt >= LOGIN_ATTEMPTS:
+                logger.warning(f"Sign-in from {address} paused for {LOGIN_BLOCK_SECONDS} s "
+                               f"after {attempt} wrong passwords in a row")
+            error = 'Wrong username or password.'
 
     return render_template('login.html', error=error, problem=problem, next_url=next_url,
-                           username=request.form.get('username', ''))
+                           username=request.form.get('username', '')), status
 
 
 @auth_bp.route('/logout', methods=['POST'])

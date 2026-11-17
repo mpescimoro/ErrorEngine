@@ -3,25 +3,31 @@ Login tests (auth.py): protected pages and APIs, login/logout, token for scripts
 """
 import pytest
 from pathlib import Path
-from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 from flask import Config
 from werkzeug.security import generate_password_hash
 from config import config, DEFAULT_SECRET_KEY, INSECURE_SECRET_KEYS
 
 
+# The API token of the tests: 32 characters at least, as the real ones
+TOKEN = 'token-for-scripts-' + 'x' * 22
+
+
+# Login enabled: user admin, password secret
+LOGIN = dict(
+    LOGIN_DISABLED=False,
+    LOGIN_USERNAME='admin',
+    LOGIN_PASSWORD_HASH=generate_password_hash('secret', method='pbkdf2:sha256:1000'),
+    SECRET_KEY='test-key-' + 'k' * 23,
+    API_TOKEN='',
+)
+
+
 @pytest.fixture
 def auth_app(app):
     """Test app with login enabled (user admin / password secret)."""
-    app.config.update(
-        LOGIN_DISABLED=False,
-        LOGIN_USERNAME='admin',
-        LOGIN_PASSWORD_HASH=generate_password_hash('secret', method='pbkdf2:sha256:1000'),
-        SECRET_KEY='test-key',
-        API_TOKEN='',
-    )
-    with patch('auth.time.sleep'):  # no wait after a wrong login
-        yield app
+    app.config.update(LOGIN)
+    return app
 
 
 @pytest.fixture
@@ -116,6 +122,58 @@ class TestLogin:
         auth_app.config['LOGIN_PASSWORD_HASH'] = generate_password_hash('new', method='pbkdf2:sha256:1000')
         assert client.get('/').status_code == 302
 
+    def test_wrong_passwords_make_the_address_wait_without_holding_a_thread(self, client, auth_app, monkeypatch):
+        import time
+        import auth
+        monkeypatch.setattr(auth, 'LOGIN_BLOCK_SECONDS', 0.3)
+        start = time.monotonic()
+        for _ in range(auth.LOGIN_ATTEMPTS):
+            assert login(client, password='wrong').status_code == 200
+        assert time.monotonic() - start < 2.5      # no second of wait inside the request any more
+        blocked = login(client)                    # the right password, but too soon
+        assert blocked.status_code == 429 and 'Too many wrong passwords' in blocked.get_data(as_text=True)
+        assert client.get('/').status_code == 302
+        # Another address is not blocked; a port added by a proxy does not make another address
+        right, wrong = {'username': 'admin', 'password': 'secret'}, {'username': 'admin', 'password': 'wrong'}
+        assert auth_app.test_client().post('/login', data=right,
+                                           environ_base={'REMOTE_ADDR': '10.0.0.2'}).status_code == 302
+        ipv6 = auth_app.test_client()
+        for port in range(auth.LOGIN_ATTEMPTS):
+            ipv6.post('/login', data=wrong, environ_base={'REMOTE_ADDR': f'[2001:db8::1]:{50000 + port}'})
+        assert ipv6.post('/login', data=right,
+                         environ_base={'REMOTE_ADDR': '[2001:db8::1]:50099'}).status_code == 429
+        # Once the wait is over, the right password gets in
+        time.sleep(0.35)
+        assert login(client).status_code == 302 and client.get('/').status_code == 200
+
+    def test_tries_that_arrive_together_are_counted_before_the_password_is_checked(self, file_app, monkeypatch,
+                                                                                    caplog):
+        import threading
+        import time
+        import auth
+        # On a file: the pages read the database, and the in-memory one is no place for threads
+        file_app.config.update(LOGIN)
+        checked, real_check = [], auth.check_password_hash
+
+        def slow_check(hashed, password):
+            checked.append(password)
+            time.sleep(0.1)          # as scrypt: long enough for the other tries to arrive
+            return real_check(hashed, password)
+        monkeypatch.setattr(auth, 'check_password_hash', slow_check)
+        together, codes = threading.Barrier(12), []
+
+        def try_wrong():
+            client = file_app.test_client()
+            together.wait()
+            codes.append(login(client, password='wrong').status_code)
+        threads = [threading.Thread(target=try_wrong) for _ in range(12)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert len(checked) == auth.LOGIN_ATTEMPTS and sorted(codes) == [200] * 5 + [429] * 7
+        assert caplog.text.count('paused for') == 1
+
 
 class TestConfiguration:
     def test_without_hash_nobody_gets_in(self, client, auth_app):
@@ -135,9 +193,9 @@ class TestConfiguration:
         for key in (DEFAULT_SECRET_KEY, 'chiave-segreta-da-cambiare-in-produzione', placeholder):
             assert key in INSECURE_SECRET_KEYS, key
 
-    @pytest.mark.parametrize('key', sorted(INSECURE_SECRET_KEYS))
-    def test_public_secret_key_blocks_login(self, client, auth_app, key):
-        """With the default key or the .env.example one, the cookie could be forged."""
+    @pytest.mark.parametrize('key', sorted(INSECURE_SECRET_KEYS) + ['k' * 31])
+    def test_public_or_short_secret_key_blocks_login(self, client, auth_app, key):
+        """With the default key, the .env.example one or a short one, the cookie could be forged."""
         auth_app.config['SECRET_KEY'] = key
         assert 'SECRET_KEY' in client.get('/login').get_data(as_text=True)
         login(client)
@@ -157,18 +215,30 @@ class TestConfiguration:
 
 class TestTokenApi:
     def test_valid_token(self, client, auth_app):
-        auth_app.config['API_TOKEN'] = 'token-script'
-        headers = {'Authorization': 'Bearer token-script'}
+        auth_app.config['API_TOKEN'] = TOKEN
+        headers = {'Authorization': f'Bearer {TOKEN}'}
         assert client.get('/api/queries', headers=headers).status_code == 200
 
+    def test_short_token_refused_and_named_at_startup(self, client, auth_app, monkeypatch, caplog):
+        import config
+        from app import create_app
+        from models import db
+        auth_app.config['API_TOKEN'] = 'x' * 31
+        assert client.get('/api/queries', headers={'Authorization': 'Bearer ' + 'x' * 31}).status_code == 401
+        monkeypatch.setattr(config.TestingConfig, 'API_TOKEN', 'x' * 31)
+        app = create_app('testing')
+        with app.app_context():
+            db.engine.dispose()
+        assert 'ERRORENGINE_API_TOKEN is shorter than 32 characters' in caplog.text
+
     def test_wrong_token(self, client, auth_app):
-        auth_app.config['API_TOKEN'] = 'token-script'
+        auth_app.config['API_TOKEN'] = TOKEN
         headers = {'Authorization': 'Bearer other'}
         assert client.get('/api/queries', headers=headers).status_code == 401
 
     def test_token_does_not_open_pages(self, client, auth_app):
-        auth_app.config['API_TOKEN'] = 'token-script'
-        headers = {'Authorization': 'Bearer token-script'}
+        auth_app.config['API_TOKEN'] = TOKEN
+        headers = {'Authorization': f'Bearer {TOKEN}'}
         assert client.get('/', headers=headers).status_code == 302
 
     def test_token_not_configured(self, client):
@@ -176,8 +246,8 @@ class TestTokenApi:
         assert client.get('/api/queries', headers=headers).status_code == 401
 
     def test_public_health_check_shows_only_the_state(self, client, auth_app):
-        auth_app.config['API_TOKEN'] = 'token-script'
+        auth_app.config['API_TOKEN'] = TOKEN
         public = client.get('/api/health').get_json()
         assert 'version' not in public and set(public['checks']) == {'database', 'scheduler'}
-        detailed = client.get('/api/health', headers={'Authorization': 'Bearer token-script'}).get_json()
+        detailed = client.get('/api/health', headers={'Authorization': f'Bearer {TOKEN}'}).get_json()
         assert 'version' in detailed and 'queries_failing' in detailed['checks']
