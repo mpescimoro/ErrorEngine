@@ -21,6 +21,7 @@
 </div>
 
 <form method="POST" id="queryForm" data-validate data-query-id="{{ query.id if query else '' }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="grid" style="grid-template-columns: 2fr 1fr; gap: var(--space-xl); align-items: start;">
         
         <!-- Main Column -->

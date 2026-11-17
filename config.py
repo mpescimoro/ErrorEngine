@@ -89,6 +89,7 @@ class Config:
     LOGIN_PASSWORD_HASH = os.environ.get('ERRORENGINE_PASSWORD_HASH', '')
     API_TOKEN = os.environ.get('ERRORENGINE_API_TOKEN', '')  # optional, for scripts
     LOGIN_DISABLED = False
+    CSRF_DISABLED = False
     # The session expires after N hours of inactivity
     PERMANENT_SESSION_LIFETIME = timedelta(hours=whole_number('ERRORENGINE_SESSION_HOURS', 12))
     SESSION_COOKIE_HTTPONLY = True
@@ -183,6 +184,8 @@ class TestingConfig(Config):
 
     # Login disabled in tests (tests/test_auth.py turns it back on)
     LOGIN_DISABLED = True
+    # The CSRF check too (tests/test_csrf.py turns it back on)
+    CSRF_DISABLED = True
 
     # Email mock
     MAIL_SERVER = 'localhost'

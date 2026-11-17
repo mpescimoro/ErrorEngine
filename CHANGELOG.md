@@ -5,6 +5,9 @@
 **Changed**
 - Deprecated SQLAlchemy calls replaced; the tests now fail on any warning, those of Python 3.13 about connections left open included
 
+**Fixed**
+- Cross-site request forgery (CSRF): a page of another site, or of the same host on another port, could make a signed-in browser change or delete queries, connections, channels and logs. The forms and the requests of the pages that change something now carry a token of the session, checked by the server; a request the browser marks as coming from another site is refused even with it. Scripts with the API token are unchanged
+
 ## 2.4.2
 
 **Added**

@@ -56,7 +56,9 @@ const api = {
             method,
             headers: {
                 'Content-Type': 'application/json',
-                'Accept': 'application/json'
+                'Accept': 'application/json',
+                // Without it, the server refuses the requests that change something (CSRF)
+                'X-CSRF-Token': document.querySelector('meta[name="csrf-token"]')?.content || ''
             }
         };
         

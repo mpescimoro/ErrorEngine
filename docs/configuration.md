@@ -145,3 +145,4 @@ Every day at 03:00 (server time) ErrorEngine deletes the run logs, email logs an
 - Keep ErrorEngine on the internal network or behind a VPN, with HTTPS.
 - Database passwords, tokens and channel URLs are stored in plain text in the internal database (encryption is planned for v2.5): protect the `instance/` folder and `.env`.
 - Use read-only database users.
+- The forms and the requests of the pages that change something carry a CSRF token: a page of another site, or of the same host on another port, cannot use the session of whoever is signed in.

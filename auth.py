@@ -13,14 +13,19 @@ and /api/health (for external checks). Until the password hash and a SECRET_KEY
 other than the example one are set, nobody can open the interface; the scheduler
 keeps running. Without any SECRET_KEY, serve.py does not start at all.
 Changing the password or the username ends the open sessions.
+
+The forms and the requests of the pages that change something carry a token of the
+session (CSRF), checked here: another site cannot make a signed-in browser send them.
+Scripts with the API token do not need it.
 """
 import hashlib
 import hmac
 import logging
+import secrets
 import time
 from urllib.parse import urlsplit
 
-from flask import (Blueprint, current_app, has_request_context, jsonify, redirect,
+from flask import (Blueprint, current_app, flash, has_request_context, jsonify, redirect,
                    render_template, request, session, url_for)
 from werkzeug.security import check_password_hash
 
@@ -32,12 +37,16 @@ auth_bp = Blueprint('auth', __name__)
 
 # Endpoints reachable without login
 PUBLIC_ENDPOINTS = {'auth.login', 'static', 'api.api_health'}
+# Methods of the requests that change something: they need the CSRF token
+UNSAFE_METHODS = {'POST', 'PUT', 'PATCH', 'DELETE'}
 
 
 def init_auth(app):
-    """Registers login/logout and the check on every request."""
+    """Registers login/logout and the checks on every request."""
     app.register_blueprint(auth_bp)
     app.before_request(_require_login)
+    app.before_request(_check_csrf)
+    app.jinja_env.globals['csrf_token'] = csrf_token
 
     @app.context_processor
     def inject_current_user():
@@ -100,6 +109,38 @@ def _require_login():
             return None
         return jsonify({'error': 'unauthorized', 'message': 'Login required'}), 401
     return redirect(url_for('auth.login', next=request.full_path.rstrip('?')))
+
+
+def csrf_token() -> str:
+    """The CSRF token of this browser session, for the forms and for app.js (meta tag in base.html)."""
+    if 'csrf_token' not in session:
+        session['csrf_token'] = secrets.token_urlsafe(32)
+    return session['csrf_token']
+
+
+def _check_csrf():
+    """
+    before_request, after the login: a request that changes something must carry the token of
+    the session. Scripts with the API token are not a browser with a cookie to borrow.
+    """
+    if (request.method not in UNSAFE_METHODS or current_app.config.get('CSRF_DISABLED')
+            or _valid_api_token()):
+        return None
+    sent = request.form.get('csrf_token') or request.headers.get('X-CSRF-Token') or ''
+    expected = session.get('csrf_token', '')
+    # Where the request comes from, as the browser says (over HTTPS and on localhost only)
+    elsewhere = request.headers.get('Sec-Fetch-Site', 'same-origin') not in ('same-origin', 'none')
+    if expected and not elsewhere and hmac.compare_digest(sent.encode(), expected.encode()):
+        return None
+    logger.warning(f"Refused {request.method} {request.path} from {request.remote_addr}: "
+                   "CSRF token missing or wrong")
+    if request.path.startswith('/api/'):
+        return jsonify({'error': 'csrf', 'message': 'The page is out of date: reload it and try again'}), 403
+    flash('The page was out of date and has been reloaded: try again', 'warning')
+    # Back to the page with the form, if it is a page of ErrorEngine; otherwise the dashboard
+    back = urlsplit(request.referrer or '')
+    page = back.path + (f'?{back.query}' if back.query else '') if back.netloc == request.host else ''
+    return redirect(_safe_next(page))
 
 
 def _safe_next(target) -> str:

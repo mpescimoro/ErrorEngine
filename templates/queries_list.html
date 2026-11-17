@@ -153,6 +153,7 @@
                         <form method="POST" action="{{ url_for('main.query_delete', query_id=query.id) }}" 
                               style="display: inline;"
                               data-confirm="Delete query {{ query.name }}? This cannot be undone.">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <button type="submit" 
                                     class="btn btn-ghost btn-icon text-danger"
                                     title="Delete"
