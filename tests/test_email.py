@@ -7,6 +7,7 @@ import email
 import json
 import logging
 import os
+import re
 import ssl
 import subprocess
 import sys
@@ -61,6 +62,25 @@ class TestSettings:
         assert config_from_env(MAIL_SECURITY='none', MAIL_PORT='2525')['MAIL_PORT'] == 2525
         # MAIL_USE_TLS of older versions is no longer read: without MAIL_SECURITY the port decides
         assert config_from_env(MAIL_USE_TLS='false', MAIL_PORT='587')['MAIL_SECURITY'] == 'starttls'
+
+    def test_mail_use_tls_left_in_env_says_how_to_keep_the_encryption(self, monkeypatch):
+        import config
+        # Until 2.4.1, without MAIL_SECURITY: MAIL_USE_TLS=true STARTTLS, any other value SSL, whatever the port
+        before = {('false', ''): ('ssl', 465), ('false', '587'): ('ssl', 587), ('false', '465'): ('ssl', 465),
+                  ('true', ''): ('starttls', 587), ('TRUE', '465'): ('starttls', 465), ('true', '25'): ('starttls', 25)}
+        monkeypatch.delenv('MAIL_SECURITY', raising=False)
+        for (use_tls, port), was in before.items():
+            monkeypatch.setenv('MAIL_USE_TLS', use_tls)
+            monkeypatch.setenv('MAIL_PORT', port)
+            [warning] = [w for w in config.retired_settings_warnings() if w.startswith('MAIL_USE_TLS')]
+            now = config_from_env(MAIL_USE_TLS=use_tls, MAIL_PORT=port)
+            # It says whether email goes out as before, and the MAIL_SECURITY that keeps it so
+            assert ('until now' in warning) == ((now['MAIL_SECURITY'], now['MAIL_PORT']) != was), warning
+            kept = config_from_env(MAIL_SECURITY=re.search(r'MAIL_SECURITY=(\w+)', warning)[1], MAIL_PORT=port)
+            assert (kept['MAIL_SECURITY'], kept['MAIL_PORT']) == was
+        # With MAIL_SECURITY set, MAIL_USE_TLS was not read before either
+        monkeypatch.setenv('MAIL_SECURITY', 'ssl')
+        assert 'MAIL_SECURITY decides, as before' in ' '.join(config.retired_settings_warnings())
 
     def test_sender_defaults_to_the_user_name(self):
         assert config_from_env(MAIL_USERNAME='alerts@x.it')['MAIL_DEFAULT_SENDER'] == 'alerts@x.it'

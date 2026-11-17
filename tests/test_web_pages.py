@@ -380,15 +380,24 @@ class TestStatisticsLocalTime:
 
 
 class TestStatisticsOfOneQuery:
-    """Errors over time of one query: chosen on the page, or opened from the query page."""
+    """The numbers and the chart of one query: chosen on the page, or opened from the query page."""
 
-    def test_timeline_of_one_query(self, app, client):
+    def test_numbers_of_one_query(self, app, client):
         orders, stock = make_query('Orders'), make_query('Stock')
         add_errors(orders, 2)
         add_errors(stock, 3)
+        add_errors(stock, 1, first_seen=get_utc_now() - timedelta(hours=30), resolved=True)
         one = client.get(f'/api/stats/timeline?days=7&query_id={orders.id}').get_json()
         every = client.get('/api/stats/timeline?days=7').get_json()
-        assert sum(day['count'] for day in one) == 2 and sum(day['count'] for day in every) == 5
+        assert sum(day['count'] for day in one) == 2 and sum(day['count'] for day in every) == 6
+        orders_numbers = client.get(f'/api/stats/overview?days=7&query_id={orders.id}').get_json()
+        assert (orders_numbers['errors_today'], orders_numbers['errors_week'], orders_numbers['errors_active']) == (2, 2, 2)
+        assert orders_numbers['avg_resolution_hours'] == 0
+        assert [q['name'] for q in orders_numbers['top_queries']] == ['Orders']
+        stock_numbers = client.get(f'/api/stats/overview?days=7&query_id={stock.id}').get_json()
+        assert (stock_numbers['errors_week'], stock_numbers['errors_active']) == (4, 3)
+        assert stock_numbers['avg_resolution_hours'] > 0
+        assert client.get('/api/stats/overview?days=7').get_json()['errors_week'] == 6
 
     def test_the_page_opens_on_the_query_asked_and_the_query_page_asks(self, app, client):
         orders, stock = make_query('Orders'), make_query('Stock')

@@ -5,7 +5,7 @@ import os
 import logging
 from zoneinfo import ZoneInfo
 from flask import Flask
-from config import config, RETIRED_SETTINGS
+from config import config, retired_settings_warnings
 
 # Logging setup
 logging.basicConfig(
@@ -31,9 +31,8 @@ def create_app(config_name=None):
         # Otherwise dates and schedules would be in UTC without a word
         logger.warning(f"TIMEZONE={app.config['TIMEZONE']!r} is not a time zone (e.g. Europe/Rome): "
                        "dates and schedules use UTC")
-    for name, instead in RETIRED_SETTINGS.items():
-        if os.environ.get(name):
-            logger.warning(f"{name} is no longer used: {instead}. Remove it from .env")
+    for warning in retired_settings_warnings():
+        logger.warning(warning)
 
     # SQLite: with the scheduler running in parallel, several threads write to the internal DB,
     # so wait up to 30 s for the lock instead of failing after 5

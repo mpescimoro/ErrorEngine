@@ -38,7 +38,7 @@ It closes the error by hand. If the query still returns that row, at the next ch
 
 ### ErrorEngine does not start
 
-Look at the console or at `logs/errorengine.log`: without `SECRET_KEY` in `.env` it stops right away and says so. See [Configuration](configuration.md#sign-in).
+Look at the console or at `logs/errorengine.log`: it stops right away and says why. Without `SECRET_KEY` in `.env`, see [Configuration](configuration.md#sign-in). When the port is taken, ErrorEngine is often already running, as a service or a scheduled task; otherwise `ERRORENGINE_PORT` chooses another port.
 
 ### Nobody can sign in
 

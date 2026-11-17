@@ -36,7 +36,9 @@ Settings live in `.env` in the project folder: copy `.env.example`, which has th
 | `RESOLVED_ERRORS_RETENTION_DAYS` | `60` | Days resolved errors are kept |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR` |
 
-Settings of older versions are no longer read: `MAIL_USE_TLS` (now `MAIL_SECURITY`) and `NOTIFY_RETRY_HOURS` (now `NOTIFY_ATTEMPTS`). If they are still in `.env`, the log says so at startup: remove them.
+A setting that takes a number but holds something else stops ErrorEngine at startup, and the log names it.
+
+Settings of older versions are no longer read: `MAIL_USE_TLS` (now `MAIL_SECURITY`) and `NOTIFY_RETRY_HOURS` (now `NOTIFY_ATTEMPTS`). If they are still in `.env`, the log says so at startup. `MAIL_USE_TLS=true` meant STARTTLS and `false` SSL, whatever the port: the log names the `MAIL_SECURITY` that keeps it so, and says whether email goes out differently until it is set (`false` without `MAIL_PORT` or with a port other than 465, `true` with port 465).
 
 ## Sign-in
 
@@ -105,6 +107,7 @@ Use read-only database users: ErrorEngine runs the query you write, and the form
 
 - **Log:** `logs/errorengine.log` (a new file every 10 MB, the last 5 kept), and the console when there is one. **Settings** shows where it is and how much space it takes.
 - **Windows service or scheduled task:** run `C:\path\to\ErrorEngine\venv\Scripts\python.exe C:\path\to\ErrorEngine\serve.py` with full paths; it moves to its own folder and reads `.env` by itself.
+- **Stopping:** Ctrl+C, or SIGTERM on Linux (`kill`, `systemctl stop`, `docker stop`): the queries still running finish first. A second copy started on the same port stops at once, without touching the first one, and the log says why.
 - **Network access:** put it behind a reverse proxy with HTTPS (IIS, nginx) if users reach it from other computers.
 - **External monitoring:** `GET /api/health` answers 200 (`healthy`, or `degraded` when some queries cannot read their source) or 503 when the internal database or the scheduler is not working.
 

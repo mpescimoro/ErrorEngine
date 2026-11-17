@@ -4,7 +4,7 @@ Tests for the API routes.
 import json
 from datetime import timedelta
 
-from models import db, ErrorRecord
+from models import db, ErrorRecord, MonitoredQuery
 from utils import get_utc_now
 from version import __version__
 
@@ -240,6 +240,36 @@ class TestTestEndpoints:
         data = json.loads(response.data)
         assert data['success'] is False
     
+    def test_test_reads_the_source_of_a_query_and_records_nothing(self, client, sample_query, sample_connection):
+        query = db.session.get(MonitoredQuery, sample_query.id)
+        query.db_connection_id = sample_connection.id
+        query.sql_query = "SELECT 1 AS ID, 'late' AS STATUS"
+        db.session.commit()
+        data = client.post(f'/api/queries/{query.id}/test').get_json()
+        assert data['success'] is True
+        assert data['details'] == {'columns': ['ID', 'STATUS'], 'row_count': 1,
+                                   'sample_rows': [{'ID': '1', 'STATUS': 'late'}]}
+        assert ErrorRecord.query.count() == 0
+
+    def test_routing_test_with_the_errors_sent_or_the_active_ones(self, client, sample_query_with_routing):
+        url = f'/api/queries/{sample_query_with_routing.id}/routing/test'
+        sent = [{'SEVERITY': 'CRITICAL'}, {'SEVERITY': 'WARNING'}, {'SEVERITY': 'INFO'}]
+        summary = client.post(url, json={'errors': sent}).get_json()['summary']
+        assert summary['recipients'] == {'critical@example.com': 1, 'warning@example.com': 1,
+                                         'default@example.com': 1}
+        assert summary['total_errors'] == 3 and summary['unmatched'] == 0   # no match: the default recipients
+        # Without a body: the active errors of the query
+        assert client.post(url).get_json()['message'] == 'No errors to test'
+        db.session.add(ErrorRecord(query_id=sample_query_with_routing.id, error_hash='h1',
+                                   error_data='{"SEVERITY": "critical"}'))
+        db.session.commit()
+        assert client.post(url).get_json()['summary']['recipients'] == {'critical@example.com': 1}
+        # Anything else is refused with the shape expected, not a server error
+        for body in ({'errors': 'CRITICAL'}, {'errors': ['CRITICAL']}, sent):
+            response = client.post(url, json=body)
+            assert response.status_code == 400 and '{"errors": [' in response.get_json()['message']
+        assert client.post(url, data='errors=CRITICAL').status_code == 400
+
     def test_test_query_missing_sql(self, client, sample_connection):
         """Test query on a connection without SQL."""
         response = client.post(

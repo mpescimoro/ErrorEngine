@@ -225,11 +225,14 @@ def api_delete_routing_rule(query_id, rule_id):
 
 @api_bp.route('/queries/<int:query_id>/routing/test', methods=['POST'])
 def api_test_routing(query_id):
-    """API: Tests the routing with sample data."""
+    """API: Recipients the routing rules choose for the errors sent, or for the active ones."""
     query = MonitoredQuery.query.get_or_404(query_id)
-    data = request.get_json()
-    
-    test_errors = data.get('errors', [])
+    data = request.get_json(silent=True) if request.get_data() else {}
+    test_errors = data.get('errors', []) if isinstance(data, dict) else None
+    if not (isinstance(test_errors, list) and all(isinstance(error, dict) for error in test_errors)):
+        return jsonify({'success': False, 'message': 'The body is JSON: {"errors": [{"FIELD": "value", ...}, ...]}, '
+                                                     'or nothing for the active errors of the query'}), 400
+
     if not test_errors:
         # Use the current real errors
         test_errors = [e.get_error_data() for e in 
@@ -245,7 +248,7 @@ def api_test_routing(query_id):
     summary = get_routing_summary(query, test_errors)
     routing_result = apply_routing_rules(query, test_errors)
     
-    # Format the result for the UI
+    # A count per recipient; with routing off, the recipients of the query together
     formatted_result = {}
     for recipient, errors in routing_result.items():
         key = recipient if isinstance(recipient, str) else ', '.join(recipient)
@@ -392,10 +395,17 @@ def api_channel_test(channel_id):
 
 @api_bp.route('/stats/overview', methods=['GET'])
 def api_stats_overview():
-    """General statistics."""
+    """General statistics; ?query_id= for one query."""
     from sqlalchemy import func
     
     days = request.args.get('days', 7, type=int)
+    query_id = request.args.get('query_id', type=int)
+
+    def errors(*conditions):
+        """The errors that meet the conditions, of the query asked for or of all of them."""
+        found = ErrorRecord.query.filter(*conditions)
+        return found.filter(ErrorRecord.query_id == query_id) if query_id else found
+
     now = get_utc_now()
     today_start = local_day_start_utc()   # local midnight, not UTC
     period_start = now - timedelta(days=days)
@@ -403,20 +413,14 @@ def api_stats_overview():
     month_ago = now - timedelta(days=30)
     
     # Errors today
-    errors_today = ErrorRecord.query.filter(
-        ErrorRecord.first_seen_at >= today_start
-    ).count()
+    errors_today = errors(ErrorRecord.first_seen_at >= today_start).count()
     
     # Errors in the selected period
-    errors_period = ErrorRecord.query.filter(
-        ErrorRecord.first_seen_at >= period_start
-    ).count()
+    errors_period = errors(ErrorRecord.first_seen_at >= period_start).count()
     
     # Errors in the previous period (for the trend)
-    errors_prev_period = ErrorRecord.query.filter(
-        ErrorRecord.first_seen_at >= prev_period_start,
-        ErrorRecord.first_seen_at < period_start
-    ).count()
+    errors_prev_period = errors(ErrorRecord.first_seen_at >= prev_period_start,
+                                ErrorRecord.first_seen_at < period_start).count()
     
     # Trend
     if errors_prev_period > 0:
@@ -425,15 +429,10 @@ def api_stats_overview():
         trend_percent = 100 if errors_period > 0 else 0
     
     # Active (unresolved) errors
-    errors_active = ErrorRecord.query.filter(
-        ErrorRecord.resolved_at == None
-    ).count()
+    errors_active = errors(ErrorRecord.resolved_at.is_(None)).count()
     
     # Average resolution time (last 30 days)
-    resolved_errors = ErrorRecord.query.filter(
-        ErrorRecord.resolved_at != None,
-        ErrorRecord.resolved_at >= month_ago
-    ).all()
+    resolved_errors = errors(ErrorRecord.resolved_at.isnot(None), ErrorRecord.resolved_at >= month_ago).all()
     
     avg_resolution_hours = 0
     if resolved_errors:
@@ -449,7 +448,8 @@ def api_stats_overview():
         MonitoredQuery.name,
         func.count(ErrorRecord.id).label('error_count')
     ).join(ErrorRecord).filter(
-        ErrorRecord.first_seen_at >= period_start
+        ErrorRecord.first_seen_at >= period_start,
+        *([MonitoredQuery.id == query_id] if query_id else [])
     ).group_by(MonitoredQuery.id).order_by(
         func.count(ErrorRecord.id).desc()
     ).limit(5).all()

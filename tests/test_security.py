@@ -1,15 +1,21 @@
 """
 Security: escaped names and messages, write statements in Test query, secrets kept out of
-messages and logs, no scheduler REST API, the production server in the start scripts.
+messages and logs, no scheduler REST API, the production server (start scripts, settings
+checked at startup, one copy per port, orderly stop).
 """
 import ast
+import http.client
 import io
 import json
 import logging
+import os
 import re
 import shutil
+import signal
+import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -215,14 +221,64 @@ class TestStartup:
             create_app('testing')
         assert all(w in caplog.text for w in warnings)
 
-    def test_server_threads_from_env(self):
-        # serve.py reads .env when imported: a process of its own, and the value set after the import
-        code = ('import os, serve\n'
-                'for value in ("", "12", "0"):\n'
-                '    os.environ["ERRORENGINE_THREADS"] = value\n'
-                '    print(serve.server_threads())')
-        out = subprocess.run([sys.executable, '-c', code], cwd=ROOT, capture_output=True, text=True, timeout=60)
-        assert out.stdout.split()[-3:] == ['4', '12', '1'], out.stderr
+    def test_a_number_setting_that_is_not_one_is_named(self, monkeypatch, caplog):
+        from config import whole_number
+        for value, expected in (('', 4), (' 12 ', 12), ('0', 0)):
+            monkeypatch.setenv('ERRORENGINE_THREADS', value)
+            assert whole_number('ERRORENGINE_THREADS', 4) == expected
+        for value, between in (('abc', None), ('2.5', None), ('0', (1, 65535)), ('65536', (1, 65535))):
+            monkeypatch.setenv('ERRORENGINE_PORT', value)
+            caplog.clear()
+            with pytest.raises(SystemExit) as stop:
+                whole_number('ERRORENGINE_PORT', 5000, between)
+            assert stop.value.code == 1
+            assert f'ERRORENGINE_PORT={value} in .env is not a whole number' in caplog.text
+
+    @pytest.mark.skipif(sys.platform == 'win32', reason='SIGTERM: Windows ends a process without a signal')
+    def test_the_server_takes_its_port_before_the_scheduler_and_stops_in_order(self, tmp_path):
+        # A copy of the project: serve.py writes its log next to itself and reads the .env there
+        project = tmp_path / 'ErrorEngine'
+        shutil.copytree(ROOT, project, ignore=shutil.ignore_patterns(
+            '.git', 'venv', '.venv', 'logs', 'instance', 'lib', 'docs', 'tests', '__pycache__', '*.db', '.env'))
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            port = probe.getsockname()[1]
+        env = {'PATH': os.environ.get('PATH', ''), 'SECRET_KEY': 's' * 32, 'ERRORENGINE_HOST': '127.0.0.1',
+               'ERRORENGINE_PORT': str(port), 'DATABASE_URL': f"sqlite:///{(tmp_path / 'ee.db').as_posix()}"}
+        serve = [sys.executable, str(project / 'serve.py')]
+
+        def refused(**settings):
+            out = subprocess.run(serve, env=dict(env, **settings), capture_output=True, text=True, timeout=60)
+            assert out.returncode == 1, out.stderr
+            # Stopped before the database and the scheduler, the locks of the first copy included
+            assert 'Database' not in out.stderr and 'Scheduler' not in out.stderr, out.stderr
+            assert 'Traceback' not in out.stderr, out.stderr
+            return out.stderr
+
+        assert 'ERRORENGINE_THREADS=abc in .env' in refused(ERRORENGINE_THREADS='abc')
+        assert 'MAIL_PORT=2.5 in .env' in refused(MAIL_PORT='2.5')
+
+        first = subprocess.Popen(serve, env=env, stderr=subprocess.DEVNULL)
+        try:
+            deadline = time.monotonic() + 60
+            while True:
+                try:
+                    socket.create_connection(('127.0.0.1', port), timeout=1).close()
+                    break
+                except OSError:
+                    assert first.poll() is None and time.monotonic() < deadline
+                    time.sleep(0.1)
+            assert 'Is ErrorEngine already running?' in refused()
+            health = http.client.HTTPConnection('127.0.0.1', port, timeout=60)
+            health.request('GET', '/api/health')
+            assert health.getresponse().status == 200
+            first.send_signal(signal.SIGTERM)
+            assert first.wait(timeout=60) == 0
+        finally:
+            first.kill()
+        log = (project / 'logs' / 'errorengine.log').read_text(encoding='utf-8')
+        assert log.count('Scheduler started') == 1 and log.count('ErrorEngine stopped') == 1, log
+        assert 'unexpected error' not in log
 
     def test_waitress_on_every_platform_and_no_gunicorn(self):
         lines = [l.strip() for l in (ROOT / 'requirements.txt').read_text(encoding='utf-8').splitlines()

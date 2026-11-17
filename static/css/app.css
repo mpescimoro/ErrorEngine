@@ -341,17 +341,6 @@ h4 { font-size: 1.125rem; }
     color: var(--color-primary);
 }
 
-/* A menu in a card header no taller than the title: cards side by side keep their lines aligned */
-.card-header .form-select {
-    width: auto;
-    max-width: 50%;
-    padding-top: 0.125rem;
-    padding-bottom: 0.125rem;
-    margin: -0.25rem 0;
-    font-size: 0.875rem;
-    font-weight: normal;
-}
-
 .card-body {
     padding: var(--space-lg);
 }
@@ -847,14 +836,22 @@ textarea.form-control {
     background: var(--color-border-light);
 }
 
-/* Rows that choose what another part of the page shows, e.g. the query in the statistics chart */
+/* Rows that choose what another part of the page shows, e.g. the query of the statistics */
 .table tbody tr.row-selectable {
     cursor: pointer;
 }
 
-.table tbody tr.row-selected,
-.table tbody tr.row-selected:hover {
-    background: var(--color-primary-subtle);
+/* The chosen row: an accent on its edge and on its name, not a band of colour */
+.table tbody tr.row-selected td {
+    background: var(--color-bg);
+}
+
+.table tbody tr.row-selected td:first-child {
+    box-shadow: inset 3px 0 0 var(--color-primary);
+}
+
+.table tbody tr.row-selected .query-name {
+    color: var(--color-primary-dark);
 }
 
 .table tbody tr:last-child td {

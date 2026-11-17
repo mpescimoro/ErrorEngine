@@ -9,12 +9,22 @@
         <i class="bi bi-graph-up"></i>
         Statistics
     </h1>
-    <select id="periodFilter" class="form-control form-select" style="width: auto;" onchange="statsPage.reload()">
-        <option value="7">Last 7 days</option>
-        <option value="14" selected>Last 14 days</option>
-        <option value="30">Last 30 days</option>
-        <option value="90">Last 90 days</option>
-    </select>
+    <div class="flex items-center gap-sm">
+        <select id="queryFilter" class="form-control form-select" style="width: auto;" aria-label="Query"
+                onchange="statsPage.selectQuery(this.value)">
+            <option value="">All queries</option>
+            {% for q in queries %}
+            <option value="{{ q.id }}" {{ 'selected' if q.id == selected_query_id }}>{{ q.name }}</option>
+            {% endfor %}
+        </select>
+        <select id="periodFilter" class="form-control form-select" style="width: auto;" aria-label="Period"
+                onchange="statsPage.reload()">
+            <option value="7">Last 7 days</option>
+            <option value="14" selected>Last 14 days</option>
+            <option value="30">Last 30 days</option>
+            <option value="90">Last 90 days</option>
+        </select>
+    </div>
 </div>
 
 <!-- Overview Stat Cards -->
@@ -96,13 +106,6 @@
                 <i class="bi bi-bar-chart"></i>
                 Errors over time
             </div>
-            <select id="queryFilter" class="form-control form-select" aria-label="Query shown in the chart"
-                    onchange="statsPage.selectQuery(this.value)">
-                <option value="">All queries</option>
-                {% for q in queries %}
-                <option value="{{ q.id }}" {{ 'selected' if q.id == selected_query_id }}>{{ q.name }}</option>
-                {% endfor %}
-            </select>
         </div>
         <div class="card-body">
             <div id="timelineChart" style="height: 280px;">
@@ -138,7 +141,7 @@
             <i class="bi bi-table"></i>
             Details by query
         </div>
-        <span class="text-muted" style="font-size: 0.8125rem; font-weight: normal;">Click a query to see it in the chart</span>
+        <span class="text-muted" style="font-size: 0.8125rem; font-weight: normal;">Click a query to see only its numbers</span>
     </div>
     <div id="queryDetails">
         <div class="flex items-center justify-center p-lg">
@@ -151,6 +154,11 @@
 {% block extra_js %}
 <script>
 var statsPage = {
+    // The latest request of each kind: a later choice can be answered before an earlier one
+    overviewRequest: 0,
+    timelineRequest: 0,
+    detailsRequest: 0,
+
     init: function() {
         this.reload();
     },
@@ -162,7 +170,7 @@ var statsPage = {
         this.loadQueryDetails(days);
     },
 
-    // The query shown in the chart, '' for all of them
+    // The query the cards and the chart show, '' for all of them
     selectedQuery: function() {
         return document.getElementById('queryFilter').value;
     },
@@ -178,8 +186,10 @@ var statsPage = {
         }
         history.replaceState(null, '', url);
         this.markSelectedRow();
-        this.loadTimeline(document.getElementById('periodFilter').value);
-        document.getElementById('timelineChart').scrollIntoView({block: 'nearest', behavior: 'smooth'});
+        var days = document.getElementById('periodFilter').value;
+        this.loadOverview(days);
+        this.loadTimeline(days);
+        document.getElementById('statToday').closest('.grid').scrollIntoView({block: 'nearest', behavior: 'smooth'});
     },
 
     markSelectedRow: function() {
@@ -191,7 +201,10 @@ var statsPage = {
 
     loadOverview: function(days) {
         var self = this;
-        api.get('/api/stats/overview?days=' + days).then(function(data) {
+        var request = ++this.overviewRequest;
+        var queryId = this.selectedQuery();
+        api.get('/api/stats/overview?days=' + days + (queryId ? '&query_id=' + queryId : '')).then(function(data) {
+            if (request !== self.overviewRequest) return;
             document.getElementById('statToday').textContent = data.errors_today;
             document.getElementById('statPeriod').textContent = data.errors_week;
             document.getElementById('statActive').textContent = data.errors_active;
@@ -207,9 +220,6 @@ var statsPage = {
             } else {
                 trendEl.innerHTML = '<span class="text-muted">= unchanged</span>';
             }
-
-            // Top queries
-            self.renderTopQueries(data.top_queries);
         }).catch(function(error) {
             console.error('Error loading overview:', error);
         });
@@ -248,8 +258,11 @@ var statsPage = {
         var container = document.getElementById('timelineChart');
         if (!container) return;
 
+        var self = this;
+        var request = ++this.timelineRequest;
         var queryId = this.selectedQuery();
         api.get('/api/stats/timeline?days=' + days + (queryId ? '&query_id=' + queryId : '')).then(function(data) {
+            if (request !== self.timelineRequest) return;
             if (data.length === 0 || data.every(function(d) { return d.count === 0; })) {
                 container.innerHTML = '<div class="empty-state" style="height: 100%; display: flex; align-items: center; justify-content: center;">' +
                     '<div><div class="empty-state-icon" style="font-size: 2rem;"><i class="bi bi-bar-chart"></i></div>' +
@@ -313,9 +326,15 @@ var statsPage = {
 
     loadQueryDetails: function(days) {
         var self = this;
+        var request = ++this.detailsRequest;
         var container = document.getElementById('queryDetails');
 
         api.get('/api/stats/all-queries?days=' + days).then(function(data) {
+            if (request !== self.detailsRequest) return;
+            // Sorted by errors: its first five are the top queries, of all of them whatever is selected
+            self.renderTopQueries(data.slice(0, 5).map(function(q) {
+                return {id: q.id, name: q.name, count: q.error_count};
+            }));
             if (data.length === 0) {
                 container.innerHTML = '<div class="card-body"><div class="empty-state" style="padding: var(--space-lg);">' +
                     '<div class="empty-state-icon" style="font-size: 2rem;"><i class="bi bi-inbox"></i></div>' +

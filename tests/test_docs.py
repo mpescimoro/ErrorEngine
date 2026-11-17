@@ -25,7 +25,8 @@ def variables_read_by_the_code():
         if any(part in ('tests', 'venv', '.venv') for part in path.relative_to(ROOT).parts):
             continue
         source = path.read_text(encoding='utf-8')
-        found |= set(re.findall(r"(?:environ\.get|getenv|environ\[)\(?\s*['\"]([A-Z_]{3,})['\"]", source))
+        found |= set(re.findall(r"(?:environ\.get|getenv|environ\[|whole_number)\(?\s*['\"]([A-Z_]{3,})['\"]",
+                                source))
     return found
 
 
@@ -34,7 +35,8 @@ def test_every_setting_is_documented():
     documented = {name for pair in documented for name in pair if name}
     example_text = (ROOT / '.env.example').read_text(encoding='utf-8')
     example = set(re.findall(r'^#? ?([A-Z_]{3,})=', example_text, re.M))
-    code = variables_read_by_the_code() - NOT_DOCUMENTED - IBMI_SCRIPT
+    # Settings of older versions are read only to warn that they are no longer used
+    code = variables_read_by_the_code() - NOT_DOCUMENTED - IBMI_SCRIPT - set(RETIRED_SETTINGS)
 
     assert code - documented == set(), 'read by the code, missing from docs/configuration.md'
     assert documented - code == set(), 'in docs/configuration.md, never read by the code'

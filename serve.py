@@ -13,6 +13,9 @@ exactly once. Give the full path to this file when starting it from another fold
 Logs: printed to the console (when there is one) and written to logs\errorengine.log,
 rotated at 10 MB with 5 old files kept.
 
+Ctrl+C, or SIGTERM (kill, systemctl stop, docker stop), stops it once the queries still
+running have finished.
+
 Optional settings (in .env):
     ERRORENGINE_HOST     default 0.0.0.0 (all interfaces)
     ERRORENGINE_PORT     default 5000
@@ -20,6 +23,8 @@ Optional settings (in .env):
 """
 import logging
 import os
+import signal
+import socket
 import sys
 from logging.handlers import RotatingFileHandler
 
@@ -61,13 +66,9 @@ load_dotenv(os.path.join(BASE_DIR, '.env'), encoding='utf-8-sig')
 _level = os.environ.get('LOG_LEVEL', 'INFO').strip().upper()
 logging.getLogger().setLevel(_level if _level in ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL') else 'INFO')
 
-from waitress import serve
+from waitress import create_server
 from app import create_app
-
-
-def server_threads() -> int:
-    """Requests Waitress handles at the same time: ERRORENGINE_THREADS, else 4 as Waitress does."""
-    return max(1, int(os.environ.get('ERRORENGINE_THREADS') or 4))
+from config import whole_number
 
 
 def main():
@@ -76,17 +77,30 @@ def main():
         logger.critical('SECRET_KEY is missing: add it to .env (required in production).')
         sys.exit(1)
 
+    host = os.environ.get('ERRORENGINE_HOST') or '0.0.0.0'
+    port = whole_number('ERRORENGINE_PORT', 5000, between=(1, 65535))
+    threads = max(1, whole_number('ERRORENGINE_THREADS', 4))
+
+    # The port first, our own: a second copy stops here, before it unlocks the first one's queries.
+    # Waitress would ask for SO_REUSEADDR, which on Windows lets a second program take a port in use
+    try:
+        sock = socket.create_server((host, port), family=socket.AF_INET6 if ':' in host else socket.AF_INET)
+    except OSError as e:
+        logger.critical(f"Cannot listen: {e.strerror or e}. Is ErrorEngine already running? "
+                        "Otherwise check ERRORENGINE_HOST and ERRORENGINE_PORT in .env")
+        sys.exit(1)
+
     # APScheduler logs every run of the 1-minute job at INFO: keep only warnings and errors.
     logging.getLogger('apscheduler').setLevel(logging.WARNING)
 
     app = create_app('production')
-
-    host = os.environ.get('ERRORENGINE_HOST', '0.0.0.0')
-    port = int(os.environ.get('ERRORENGINE_PORT', '5000'))
-    threads = server_threads()
+    server = create_server(app, sockets=[sock], threads=threads)
+    # kill, systemctl stop and docker stop send SIGTERM: the same orderly stop as Ctrl+C
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     logger.info(f"Web server: up to {threads} requests at a time")
     try:
-        serve(app, host=host, port=port, threads=threads)
+        server.print_listen('Serving on http://{}:{}')
+        server.run()
     finally:
         # On a clean stop, let the queries still running finish (bounded by their
         # timeouts) and release their locks.

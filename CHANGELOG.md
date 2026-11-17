@@ -1,15 +1,22 @@
 # Changelog
 
-## Unreleased
+## 2.4.2
 
 **Added**
-- Statistics: **Errors over time** of one query, chosen in the menu above the chart or with a click on its row in **Details by query**; **Full statistics** on the query page opens on that query. `/api/stats/timeline` takes `query_id`
+- Statistics of one query: chosen in the menu at the top or with a click on its row in **Details by query**, the cards and **Errors over time** show only that query, while **Top queries** and the table keep all of them; **Full statistics** on the query page opens on that query. `/api/stats/overview` and `/api/stats/timeline` take `query_id`
+- In the API reference: `POST /api/queries/{id}/test`, which reads the source of a query without recording errors, and `POST /api/queries/{id}/routing/test`, the recipients the routing rules choose for the active errors or for the ones sent
 
 **Changed**
-- `MAIL_USE_TLS` is no longer read: `MAIL_SECURITY` replaced it in 2.3.0. Still in `.env`, it gets a warning at startup, as `NOTIFY_RETRY_HOURS` does
+- `MAIL_USE_TLS` is no longer read: `MAIL_SECURITY` replaced it in 2.3.0. With `MAIL_USE_TLS=false` and no `MAIL_PORT` or a port other than 465, or `true` with port 465, email now goes out with the other encryption: the warning at startup says so and names the `MAIL_SECURITY` that keeps it as it was. `NOTIFY_RETRY_HOURS` gets a warning too
 - API: `/api/tags` and `/api/routing/operators` removed, no page called them. The tags of the queries and the operators of the routing rules work as before
 - Unused code removed: two date functions of the page scripts, a fallback for Python versions older than the supported ones
 - Tests that repeated the same setup merged, duplicates removed
+
+**Fixed**
+- A second copy of ErrorEngine started on the same port unlocked the queries the first one was running and started a second scheduler. Now it takes the port before anything else: it stops at once, and the log asks whether ErrorEngine is already running
+- SIGTERM (`kill`, `systemctl stop`, `docker stop`) ended ErrorEngine on the spot: now it stops as with Ctrl+C, after the queries still running
+- A setting that takes a number but held something else stopped ErrorEngine with a Python traceback, `ERRORENGINE_THREADS` and `ERRORENGINE_PORT` only after the scheduler had started: now it stops before starting anything, with a line that names the setting
+- `POST /api/queries/{id}/routing/test` failed without a body, or with errors in another shape: now without a body it uses the active errors, and another shape gets the one expected
 
 ## 2.4.1
 
