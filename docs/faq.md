@@ -42,7 +42,11 @@ Look at the console or at `logs/errorengine.log`: it stops right away and says w
 
 ### Nobody can sign in
 
-The sign-in page says what is missing: `ERRORENGINE_PASSWORD_HASH`, or a `SECRET_KEY` that is not the example one. See [Configuration](configuration.md#sign-in) and restart ErrorEngine.
+The sign-in page says what is wrong:
+
+- `ERRORENGINE_PASSWORD_HASH` is missing, or `SECRET_KEY` is the example one or shorter than 32 characters: until it is fixed, scripts with the API token are refused too. See [Configuration](configuration.md#sign-in) and restart ErrorEngine.
+- After 5 wrong passwords in a row from the same address, that address waits a minute. Behind a reverse proxy without `ERRORENGINE_TRUSTED_PROXY`, the wait applies to everyone.
+- With `ERRORENGINE_HTTPS=true`, open ErrorEngine with `https://`.
 
 ### Emails are not sent
 

@@ -3,6 +3,7 @@ Login tests (auth.py): protected pages and APIs, login/logout, token for scripts
 """
 import pytest
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 from flask import Config
 from werkzeug.security import generate_password_hash
@@ -173,6 +174,32 @@ class TestLogin:
             thread.join()
         assert len(checked) == auth.LOGIN_ATTEMPTS and sorted(codes) == [200] * 5 + [429] * 7
         assert caplog.text.count('paused for') == 1
+
+    def test_a_right_password_starts_the_count_again(self, client, auth_app):
+        import auth
+        for _ in range(auth.LOGIN_ATTEMPTS - 1):
+            login(client, password='wrong')
+        assert login(client).status_code == 302
+        client.post('/logout')
+        # Had the count gone on, it would be at the limit and this try would wait
+        assert login(client, password='wrong').status_code == 200
+
+    def test_after_a_quarter_of_an_hour_without_wrong_passwords_the_count_starts_again(self, client, auth_app,
+                                                                                         monkeypatch):
+        import auth
+        clock = [1000.0]
+        monkeypatch.setattr(auth, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+        for _ in range(auth.LOGIN_ATTEMPTS):
+            login(client, password='wrong')
+        assert login(client, password='wrong').status_code == 429
+        clock[0] += auth.LOGIN_FORGET_SECONDS + 1
+        # After a wait one try passes anyway: the second one shows whether the count went on
+        assert [login(client, password='wrong').status_code for _ in range(2)] == [200, 200]
+
+    def test_a_user_name_cannot_add_lines_to_the_log(self, client, auth_app, caplog):
+        login(client, username='nobody\n2026-01-01 00:00:00,000 - auth - INFO - Login: admin', password='wrong')
+        failed = [r.getMessage() for r in caplog.records if r.getMessage().startswith('Failed login')]
+        assert len(failed) == 1 and '\n' not in failed[0] and 'nobody\\n2026' in failed[0]
 
 
 class TestConfiguration:

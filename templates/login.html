@@ -43,6 +43,20 @@
                 </div>
                 {% endif %}
 
+                {% if config.HTTPS %}
+                <div class="alert alert-warning hidden" role="alert" id="httpsOnly">
+                    <i class="alert-icon bi bi-exclamation-triangle-fill"></i>
+                    <div class="alert-content">
+                        <div class="alert-title">Open ErrorEngine with https://</div>
+                        ERRORENGINE_HTTPS is true: the browser keeps the sign-in only over HTTPS.
+                    </div>
+                </div>
+                <script>
+                    // The session cookie is Secure: over http://, localhost excepted, the browser drops it at once
+                    if (!window.isSecureContext) document.getElementById('httpsOnly').classList.remove('hidden');
+                </script>
+                {% endif %}
+
                 <form method="POST" action="{{ url_for('auth.login') }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="next" value="{{ next_url }}">

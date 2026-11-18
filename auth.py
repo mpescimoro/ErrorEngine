@@ -43,13 +43,17 @@ PUBLIC_ENDPOINTS = {'auth.login', 'static', 'api.api_health'}
 UNSAFE_METHODS = {'POST', 'PUT', 'PATCH', 'DELETE'}
 # SECRET_KEY and the API token: shorter ones are too easy to guess
 MIN_KEY_LENGTH = 32
-# After LOGIN_ATTEMPTS wrong passwords, an address waits LOGIN_BLOCK_SECONDS before the next try; failures
-# older than LOGIN_FORGET_SECONDS no longer count. Short waits: without ERRORENGINE_TRUSTED_PROXY every
-# attempt seems to come from the reverse proxy, the administrator's included
+# After LOGIN_ATTEMPTS wrong passwords, an address waits LOGIN_BLOCK_SECONDS before the next try; after
+# LOGIN_FORGET_SECONDS without wrong passwords it starts again from zero. Short waits: without
+# ERRORENGINE_TRUSTED_PROXY every attempt seems to come from the reverse proxy, the administrator's included
 LOGIN_ATTEMPTS = 5
 LOGIN_BLOCK_SECONDS = 60
 LOGIN_FORGET_SECONDS = 15 * 60
 _failed_logins_lock = threading.Lock()
+# Anyone can send requests the CSRF check refuses: in the log the first one at once, then one line at most
+# every REFUSALS_LOG_SECONDS, with how many came in between
+REFUSALS_LOG_SECONDS = 60
+_refusals_lock = threading.Lock()
 
 
 def init_auth(app):
@@ -60,6 +64,7 @@ def init_auth(app):
     app.jinja_env.globals['csrf_token'] = csrf_token
     # Wrong passwords by address: (how many in a row, time of the last one). In memory, a single process
     app.extensions['failed_logins'] = {}
+    app.extensions['csrf_refusals'] = {'logged': None, 'unlogged': 0}
 
     @app.context_processor
     def inject_current_user():
@@ -148,20 +153,45 @@ def _check_csrf():
     sent = request.form.get('csrf_token') or request.headers.get('X-CSRF-Token') or ''
     expected = session.get('csrf_token', '')
     # Where the request comes from, as the browser says (over HTTPS and on localhost only)
-    elsewhere = request.headers.get('Sec-Fetch-Site', 'same-origin') not in ('same-origin', 'none')
-    if expected and not elsewhere and hmac.compare_digest(sent.encode(), expected.encode()):
+    site = request.headers.get('Sec-Fetch-Site', 'same-origin')
+    if site not in ('same-origin', 'none'):
+        reason = f'sent from another site (Sec-Fetch-Site: {site})'
+    elif not session:
+        reason = 'no session, the cookie is missing or expired' + (
+            ': with ERRORENGINE_HTTPS=true the browser keeps it only over https://'
+            if current_app.config.get('HTTPS') else '')
+    elif not sent:
+        reason = 'CSRF token missing'
+    elif not hmac.compare_digest(sent.encode(), expected.encode()):
+        reason = 'CSRF token wrong'
+    else:
         return None
-    logger.warning(f"Refused {request.method} {request.path} from {request.remote_addr}: "
-                   "CSRF token missing or wrong")
+    _log_refusal(reason)
     if request.path.startswith('/api/'):
         return jsonify({'error': 'csrf', 'message': 'The page is out of date: reload it and try again'}), 403
-    flash('The page was out of date and has been reloaded: try again', 'warning')
+    # Only into a session the browser sent: a new one would replace the cookie of whoever is signed in
+    # (a page of another site posting to /login, open to everyone, gets this far without it)
+    if session:
+        flash('The page was out of date and has been reloaded: try again', 'warning')
     # Back to the page with the form, if it is a page of ErrorEngine; otherwise the dashboard.
     # Behind a proxy that changes the host, the browser itself can say the form was ours
     back = urlsplit(request.referrer or '')
     ours = back.netloc == request.host or request.headers.get('Sec-Fetch-Site') == 'same-origin'
     page = back.path + (f'?{back.query}' if back.query else '') if ours else ''
     return redirect(_safe_next(page))
+
+
+def _log_refusal(reason: str):
+    """A refused request in the log, unless one was written less than REFUSALS_LOG_SECONDS ago: then counted."""
+    state, now = current_app.extensions['csrf_refusals'], time.monotonic()
+    with _refusals_lock:
+        if state['logged'] is not None and now - state['logged'] < REFUSALS_LOG_SECONDS:
+            state['unlogged'] += 1
+            return
+        unlogged, state['unlogged'], state['logged'] = state['unlogged'], 0, now
+    more = f" ({unlogged} more refused since the previous line)" if unlogged else ''
+    # !r: a line break in the path would write a line of its own
+    logger.warning(f"Refused {request.method} {request.path!r} from {request.remote_addr}: {reason}{more}")
 
 
 def _client_address() -> str:
@@ -234,7 +264,8 @@ def login():
                 logger.info(f"Login: {username} from {request.remote_addr}")
                 return redirect(next_url)
 
-            logger.warning(f"Failed login for '{username}' from {request.remote_addr}")
+            # !r: a line break in the user name would write a line of its own
+            logger.warning(f"Failed login for {username!r} from {request.remote_addr}")
             # Logged by the try that starts the wait, not by every one checked together with it
             if attempt >= LOGIN_ATTEMPTS:
                 logger.warning(f"Sign-in from {address} paused for {LOGIN_BLOCK_SECONDS} s "

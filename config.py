@@ -109,7 +109,7 @@ class Config:
     PERMANENT_SESSION_LIFETIME = timedelta(hours=whole_number('ERRORENGINE_SESSION_HOURS', 12))
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = 'Lax'
-    # Users open ErrorEngine with https://, through a reverse proxy: the cookie only over HTTPS, and HSTS
+    # Users open ErrorEngine with https://, through a reverse proxy: the session cookie only over HTTPS
     HTTPS = flag('ERRORENGINE_HTTPS')
     SESSION_COOKIE_SECURE = HTTPS
     

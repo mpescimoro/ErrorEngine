@@ -227,7 +227,6 @@ class TestApiScheduler:
         assert not [r.rule for r in flask_app.url_map.iter_rules() if r.rule.startswith('/scheduler')]
 
 
-
 class TestHeaders:
     """What the responses tell the browser."""
 
@@ -240,11 +239,22 @@ class TestHeaders:
                         response.headers['Content-Security-Policy'], response.headers['Referrer-Policy']) == \
                     ('nosniff', 'DENY', "frame-ancestors 'none'", 'same-origin'), url
                 assert 'Strict-Transport-Security' not in response.headers
-        # Behind HTTPS: the cookie only over HTTPS, and the browser told to use HTTPS only
-        app.config.update(HTTPS=True, SESSION_COOKIE_SECURE=True)
-        response = app.test_client().get('/')
-        assert 'Secure' in response.headers['Set-Cookie']
-        assert response.headers['Strict-Transport-Security'] == 'max-age=31536000'
+
+    def test_with_https_the_cookie_travels_only_over_https_and_hsts_is_left_to_the_proxy(self):
+        """ERRORENGINE_HTTPS read from the environment, as at startup. HSTS would cover every port of the host
+        name, and only the proxy knows what else runs there."""
+        check = ("from app import create_app\n"
+                 "page = create_app('testing').test_client().get('/login')\n"
+                 "print('Secure' in page.headers['Set-Cookie'], 'Strict-Transport-Security' in page.headers,\n"
+                 "      'id=\"httpsOnly\"' in page.get_data(as_text=True))")
+        env = {name: os.environ[name] for name in ('PATH', 'SYSTEMROOT') if name in os.environ}
+        answers = []
+        for value in ('true', ''):
+            run = subprocess.run([sys.executable, '-c', check], cwd=ROOT, env=dict(env, ERRORENGINE_HTTPS=value),
+                                 capture_output=True, text=True, timeout=120)
+            answers.append(run.stdout.split()[-3:] or run.stderr[-500:])
+        # Secure cookie, HSTS, the warning of the sign-in page for http:// addresses
+        assert answers == [['True', 'False', 'True'], ['False', 'False', 'False']]
 
     def test_scripts_and_styles_keep_their_type_whatever_the_windows_registry_says(self):
         import mimetypes
@@ -258,6 +268,7 @@ class TestHeaders:
             assert (js.mimetype, css.mimetype) == ('text/javascript', 'text/css')
         with app.app_context():
             db.engine.dispose()
+
 
 class TestStartup:
 
@@ -361,7 +372,7 @@ class TestStartup:
         assert answers == [('/', None), ('/', None), ('/queries', None)]
         log = (project / 'logs' / 'errorengine.log').read_text(encoding='utf-8')
         assert 'Trusted reverse proxy: ::1' in log
-        assert log.count('Refused POST /login from 127.0.0.1') == 2 and log.count('from 203.0.113.9') == 1
+        assert log.count("Refused POST '/login' from 127.0.0.1") == 2 and log.count('from 203.0.113.9') == 1
 
     def test_waitress_on_every_platform_and_no_gunicorn(self):
         lines = [l.strip() for l in (ROOT / 'requirements.txt').read_text(encoding='utf-8').splitlines()

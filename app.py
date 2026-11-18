@@ -91,8 +91,7 @@ def create_app(config_name=None):
         response.headers.setdefault('X-Frame-Options', 'DENY')
         response.headers.setdefault('Content-Security-Policy', "frame-ancestors 'none'")
         response.headers.setdefault('Referrer-Policy', 'same-origin')
-        if app.config.get('HTTPS'):
-            response.headers.setdefault('Strict-Transport-Security', 'max-age=31536000')
+        # No HSTS: it covers every port of the host name, and only the reverse proxy knows what else runs there
         return response
 
     # Create the database tables (and add new columns to existing ones)

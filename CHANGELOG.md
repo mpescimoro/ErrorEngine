@@ -3,18 +3,19 @@
 ## Unreleased
 
 **Added**
-- `ERRORENGINE_HTTPS`: behind a reverse proxy with HTTPS, the session cookie travels only over HTTPS and browsers are told to use HTTPS only (HSTS)
-- `ERRORENGINE_TRUSTED_PROXY`: the address of the reverse proxy. From it, the client address (in the log), the host and `https` come from its `X-Forwarded-*` headers; from anyone else the same headers are dropped
+- `ERRORENGINE_HTTPS`: behind a reverse proxy with HTTPS, the session cookie travels only over HTTPS, and the sign-in page says so when it is opened with `http://`. HSTS is up to the proxy: it covers every port of the host name
+- `ERRORENGINE_TRUSTED_PROXY`: the address of the reverse proxy. From it, the client address (in the log and for the limit on wrong passwords), the host and `https` come from its `X-Forwarded-*` headers; from anyone else the same headers are dropped
 
 **Changed**
-- `SECRET_KEY`, and `ERRORENGINE_API_TOKEN` when it is set, need at least 32 characters: with a shorter key nobody can sign in, a shorter token is refused, and the log says so at startup. The command in the docs generates 64
+- `SECRET_KEY`, and `ERRORENGINE_API_TOKEN` when it is set, need at least 32 characters: with a shorter key nobody can sign in and scripts are refused too, a shorter token is refused, and the log says so at startup. The command in the docs generates 64
 - Deprecated SQLAlchemy calls replaced; the tests now fail on any warning, those of Python 3.13 about connections left open included
 
 **Fixed**
-- Cross-site request forgery (CSRF): a page of another site, or of the same host on another port, could make a signed-in browser change or delete queries, connections, channels and logs. The forms and the requests of the pages that change something now carry a token of the session, checked by the server; a request the browser marks as coming from another site is refused even with it. Scripts with the API token are unchanged
+- Cross-site request forgery (CSRF): a page of the same host on another port, or of another host of the same domain, could make a signed-in browser change or delete queries, connections, channels and logs. The forms and the requests of the pages that change something now carry a token of the session, checked by the server; a request the browser marks as coming from another site is refused even with it. Scripts with the API token are unchanged
 - Clickjacking: another site could show ErrorEngine in a frame and lead the user to click its buttons. The responses now forbid frames, tell the browser not to guess the type of a file and do not give the page address to other sites. `.js` and `.css` keep their type even where the Windows registry says `text/plain`
 - The responses no longer name the web server (`Server: waitress`)
-- After a wrong password, the request waited a second holding one of the threads of the server, and the attempts had no limit. Now, after 5 wrong passwords in a row from the same address, even sent together, that address waits a minute before the next try, and no thread waits
+- After a wrong password, the request waited a second holding one of the threads of the server, and the attempts had no limit. Now, after 5 wrong passwords in a row from the same address, even sent together, that address waits a minute before the next try, and no thread waits. Behind a reverse proxy, set `ERRORENGINE_TRUSTED_PROXY`: otherwise every attempt seems to come from the proxy, and the wait applies to everyone
+- A user name with a line break, typed at sign-in, could add a line of its own to the log
 
 ## 2.4.2
 
