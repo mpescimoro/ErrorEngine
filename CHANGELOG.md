@@ -5,10 +5,12 @@
 **Added**
 - `ERRORENGINE_HTTPS`: behind a reverse proxy with HTTPS, the session cookie travels only over HTTPS, and the sign-in page says so when it is opened with `http://`. HSTS is up to the proxy: it covers every port of the host name
 - `ERRORENGINE_TRUSTED_PROXY`: the address of the reverse proxy. From it, the client address (in the log and for the limit on wrong passwords), the host and `https` come from its `X-Forwarded-*` headers; from anyone else the same headers are dropped
+- Connections: **Allow statements that change data**, off for a new connection. Without it, a query with INSERT, UPDATE, DELETE, a procedure (EXEC, CALL) and the like is refused when saved, tested or run, **Run now** included; with it, each save asks to confirm, on the server. The check reads the text of the query: it stops mistakes, not someone set on getting around it, and the guarantee is still a database user that can only read. On upgrade, a connection allows them if one of its queries already uses them, and the log says which
 
 **Changed**
 - `SECRET_KEY`, and `ERRORENGINE_API_TOKEN` when it is set, need at least 32 characters: with a shorter key nobody can sign in and scripts are refused too, a shorter token is refused, and the log says so at startup. The command in the docs generates 64
 - Deprecated SQLAlchemy calls replaced; the tests now fail on any warning, those of Python 3.13 about connections left open included
+- The check for statements that change data reads the whole query, no longer its first word only: `WITH ... DELETE`, `SELECT ... INTO` and a second statement after `;` count too
 
 **Fixed**
 - Cross-site request forgery (CSRF): a page of the same host on another port, or of another host of the same domain, could make a signed-in browser change or delete queries, connections, channels and logs. The forms and the requests of the pages that change something now carry a token of the session, checked by the server; a request the browser marks as coming from another site is refused even with it. Scripts with the API token are unchanged
@@ -16,6 +18,9 @@
 - The responses no longer name the web server (`Server: waitress`)
 - After a wrong password, the request waited a second holding one of the threads of the server, and the attempts had no limit. Now, after 5 wrong passwords in a row from the same address, even sent together, that address waits a minute before the next try, and no thread waits. Behind a reverse proxy, set `ERRORENGINE_TRUSTED_PROXY`: otherwise every attempt seems to come from the proxy, and the wait applies to everyone
 - A user name with a line break, typed at sign-in, could add a line of its own to the log
+- A query or connection form that cannot be saved comes back as it was sent, passwords and tokens excepted, and says what to fix. Until now the server saved key fields made of commas only, an interval of 0 or below, days that are not 1 to 7, and answered with an error page to a connection without a name or with a port that is not a number
+- A query name already in use is said so, instead of an error with the details in the log
+- Days saved as something other than numbers no longer break the dashboard, the list of queries and the form
 
 ## 2.4.2
 

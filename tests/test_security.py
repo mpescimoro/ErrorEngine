@@ -136,11 +136,34 @@ class TestTestQuery:
         with closing(sqlite3.connect(path)) as c:
             return [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")]
 
-    def test_write_statement_refused_without_confirmation(self, app, client, connection):
+    def test_write_statement_refused_where_the_connection_does_not_allow_it(self, app, client, connection):
         conn, path = connection
-        response = client.post(f'/api/connections/{conn.id}/test-query', json={'sql': 'DROP TABLE orders'})
-        assert response.status_code == 400
-        assert 'DROP' in response.get_json()['error']
+        result = client.post(f'/api/connections/{conn.id}/test-query',
+                             json={'sql': 'DROP TABLE orders', 'confirm_write': True}).get_json()
+        assert result['valid'] is False and 'contains DROP' in result['error'] and 'does not allow it' in result['error']
+        assert self.tables(path) == ['orders']
+
+    def test_where_allowed_the_test_asks_first(self, app, client, connection):
+        conn, path = connection
+        conn.allow_writes = True
+        db.session.commit()
+        url = f'/api/connections/{conn.id}/test-query'
+        asked = client.post(url, json={'sql': 'DROP TABLE orders'}).get_json()
+        assert asked['valid'] is False and asked['confirm'] == 'DROP' and self.tables(path) == ['orders']
+        client.post(url, json={'sql': 'DROP TABLE orders', 'confirm_write': True})
+        assert self.tables(path) == []
+
+    def test_a_saved_query_runs_only_where_allowed(self, app, client, connection):
+        # Saved when the connection allowed it, or before the check read the whole statement
+        conn, path = connection
+        query = MonitoredQuery(name='Cleanup', sql_query='DROP TABLE orders', key_fields='ID',
+                               db_connection_id=conn.id)
+        db.session.add(query)
+        db.session.commit()
+        run = client.post(f'/api/queries/{query.id}/run').get_json()
+        assert run['status'] == 'error' and 'does not allow it' in run['error_message']
+        test = client.post(f'/api/queries/{query.id}/test').get_json()
+        assert test['success'] is False and 'does not allow it' in test['message']
         assert self.tables(path) == ['orders']
 
     def test_select_still_works(self, app, client, connection):
@@ -148,17 +171,25 @@ class TestTestQuery:
         result = client.post(f'/api/connections/{conn.id}/test-query', json={'sql': 'SELECT * FROM orders'}).get_json()
         assert result['valid'] is True
 
-    def test_keyword_check_like_the_form(self):
-        assert write_statement_keyword('select 1') is None
-        assert write_statement_keyword('  WITH x AS (SELECT 1) SELECT * FROM x') is None
-        assert write_statement_keyword('/* note */ -- line\n delete from orders') == 'DELETE'
-        assert write_statement_keyword('EXEC proc') == 'EXEC'
+    def test_keyword_check_reads_the_whole_statement(self):
+        reads = ['select 1', '  WITH x AS (SELECT 1) SELECT * FROM x', "SELECT 'DELETE' AS a, \"UPDATE\" FROM t",
+                 "SELECT REPLACE(name, 'a', 'b'), last_update FROM t", 'SELECT 1; -- DROP TABLE t',
+                 "SELECT '--', 1 FROM t", 'SELECT 1;', '(SELECT 1) UNION (SELECT 2)']
+        assert [write_statement_keyword(sql) for sql in reads] == [None] * len(reads)
+        writes = {'/* note */ -- line\n delete from orders': 'DELETE', 'EXEC proc': 'EXEC', 'CALL proc()': 'CALL',
+                  'WITH gone AS (DELETE FROM t RETURNING *) SELECT * FROM gone': 'DELETE',
+                  'SELECT 1; DROP TABLE orders': 'DROP', 'SELECT * INTO copy FROM orders': 'INTO',
+                  "SELECT '--', 1; DELETE FROM t": 'DELETE', 'SET NOCOUNT ON; SELECT 1': 'SET',
+                  'REPLACE INTO t VALUES (1)': 'REPLACE', 'SELECT * FROM t FOR UPDATE': 'UPDATE'}
+        assert {sql: write_statement_keyword(sql) for sql in writes} == writes
 
-    def test_button_asks_like_the_save(self):
+    def test_the_button_asks_when_the_server_says_so(self):
         js = (ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
         test = js[js.index('async function testSqlQuery'):]
         test = test[:test.index('\n}\n')]
-        assert 'sqlSafety.confirm(keyword)' in test and 'confirm_write: confirmWrite' in test
+        # One check, on the server: the page no longer guesses from the first word
+        assert 'result.confirm' in test and 'confirm_write: true' in test and 'sqlSafety.check' not in test
+        assert 'dangerousKeywords' not in (ROOT / 'templates' / 'query_form.html').read_text(encoding='utf-8')
 
 
 class TestSecrets:

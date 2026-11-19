@@ -42,19 +42,30 @@ def validate_email_list(emails_str: str) -> Tuple[bool, str, List[str]]:
     return True, "", validated
 
 
-_SQL_COMMENTS = re.compile(r'/\*.*?\*/|--[^\n]*', re.S)
+# Quoted text and comments run nothing: in a single pass, so that '--' in a string is not a comment
+_SQL_NOT_CODE = re.compile(r"'(?:[^']|'')*'|\"[^\"]*\"|\[[^\]]*\]|`[^`]*`|/\*.*?\*/|--[^\n]*", re.S)
+# Wherever they are: a CTE with DELETE, SELECT ... INTO, a procedure that can write
+_WRITE_WORDS = re.compile(r'\b(INSERT|UPDATE|DELETE|MERGE|UPSERT|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|'
+                          r'RENAME|EXEC|EXECUTE|CALL|INTO)\b')
 
 
 def write_statement_keyword(sql: str):
     """
-    First keyword of a statement that is not a SELECT or a WITH, checked like the
-    query form does (e.g. 'DELETE'); None for a read query.
+    The word that lets the query change data (e.g. 'DELETE'); None for a read query. Every statement
+    must start with SELECT or WITH and contain none of those words. It reads the text: a function that
+    writes, called from a SELECT, still gets through, a database user that can only read does not.
     """
-    text = _SQL_COMMENTS.sub('', sql or '').lstrip().upper()
-    match = re.match(r'[A-Z]+', text)
-    if not match or match.group(0) in ('SELECT', 'WITH'):
-        return None
-    return match.group(0)
+    text = _SQL_NOT_CODE.sub(' ', sql or '').upper()
+    for statement in text.split(';'):
+        first = re.match(r'[\s(]*([A-Z]+)', statement)
+        if not first:
+            continue
+        if first.group(1) not in ('SELECT', 'WITH'):
+            return first.group(1)
+        found = _WRITE_WORDS.search(statement)
+        if found:
+            return found.group(1)
+    return None
 
 
 def validate_routing_rule(data: dict) -> Tuple[bool, str]:

@@ -97,9 +97,13 @@ def create_app(config_name=None):
     # Create the database tables (and add new columns to existing ones)
     with app.app_context():
         db.create_all()
-        from models import ensure_schema
+        from models import ensure_schema, allow_writes_where_queries_write
         for column in ensure_schema():
             logger.info(f"Database updated: added column {column}")
+            if column == 'database_connections.allow_writes':
+                for connection, query, keyword in allow_writes_where_queries_write():
+                    logger.info(f"Connection {connection}: statements that change data allowed, "
+                                f"as the query {query} contains {keyword}")
         if db.engine.dialect.name == 'sqlite' and db.engine.url.database not in (None, '', ':memory:'):
             # WAL: reads do not block writes and vice versa
             with db.engine.connect() as connection:

@@ -351,13 +351,16 @@ def api_connection_test_query(conn_id):
     if not sql:
         return jsonify({'valid': False, 'error': 'SQL query required'}), 400
 
-    # The test runs the statement for real: one that can change data needs the
-    # confirmation the form asks for
+    # The test runs the statement for real: one that can change data only where the connection allows
+    # it, and confirmed (the page asks when it gets 'confirm')
+    refusal = conn.write_refusal(sql)
+    if refusal:
+        return jsonify({'valid': False, 'error': refusal})
     keyword = write_statement_keyword(sql)
     if keyword and data.get('confirm_write') is not True:
-        return jsonify({'valid': False,
-                        'error': f'{keyword} statements can change data: confirm the warning in the query form'}), 400
-    
+        return jsonify({'valid': False, 'confirm': keyword,
+                        'error': f'The query contains {keyword}, which can change data: confirm it to test it'})
+
     try:
         driver = conn.get_driver()
         connection = driver.open(

@@ -779,23 +779,20 @@ async function testSqlQuery() {
         return;
     }
 
-    // A statement that changes data gets the same warning as when saving:
-    // the test runs it for real on the database
-    let confirmWrite = false;
-    if (typeof sqlSafety !== 'undefined') {
-        const keyword = sqlSafety.check(sql);
-        if (keyword) {
-            if (!(await sqlSafety.confirm(keyword))) return;
-            confirmWrite = true;
-        }
-    }
-
     container.classList.remove('hidden');
     container.innerHTML = '<div class="flex items-center justify-center p-lg"><div class="spinner"></div></div>';
 
     try {
-        const result = await api.post(`/api/connections/${connId}/test-query`, { sql, confirm_write: confirmWrite });
-        
+        const url = `/api/connections/${connId}/test-query`;
+        let result = await api.post(url, { sql });
+        // The test runs the statement for real: one that can change data, the server asks to confirm first
+        if (result.confirm) {
+            container.classList.add('hidden');
+            if (!(await sqlSafety.confirm(result.confirm))) return;
+            container.classList.remove('hidden');
+            result = await api.post(url, { sql, confirm_write: true });
+        }
+
         if (result.valid) {
             let html = `
                 <div class="alert alert-success">

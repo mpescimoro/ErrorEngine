@@ -103,7 +103,7 @@ Graph takes the email without saying which addresses do not exist: those come ba
 | IBM i (AS/400) | `JPype1` + JT400 | Needs Java 8+ and `lib/jt400.jar`, see [IBM i driver](ibmi-driver.md) |
 | AS/400 (DB2) | `ibm_db` | DRDA: needs a DB2 Connect license. Port 446 unless you set another |
 
-Use read-only database users: ErrorEngine runs the query you write, and the form only warns before saving one that changes data.
+Use read-only database users: ErrorEngine runs the query you write. Without **Allow statements that change data** in the connection, a query with INSERT, UPDATE, DELETE, a procedure with EXEC or CALL, and the like is refused; with it, each save of the query asks to confirm. The check reads the text of the query: it stops mistakes, not someone set on getting around it (a function that writes, called from a SELECT, or quoting particular to one database). A database user that can only read stops both.
 
 ## Running in production
 

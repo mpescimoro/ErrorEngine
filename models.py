@@ -120,7 +120,9 @@ class MonitoredQuery(db.Model):
         """Returns the list of active days (ISO weekday: 1=Mon, 7=Sun)"""
         if not self.schedule_days:
             return [1, 2, 3, 4, 5, 6, 7]  # Every day if not specified
-        return [int(d.strip()) for d in self.schedule_days.split(',') if d.strip()]
+        # Days saved before the form checked them may be anything: those are left out
+        days = (d.strip() for d in self.schedule_days.split(','))
+        return [int(d) for d in days if d in ('1', '2', '3', '4', '5', '6', '7')]
     
     def get_source_config(self):
         """Returns the source configuration as a dict"""
@@ -304,6 +306,8 @@ class DatabaseConnection(db.Model):
     username = db.Column(db.String(100))
     password = db.Column(db.String(255))  # TODO: encrypt
     is_active = db.Column(db.Boolean, default=True)
+    # Statements that change data (INSERT, UPDATE, DELETE, procedures): only where allowed
+    allow_writes = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=get_utc_now)
     
     queries = db.relationship('MonitoredQuery', backref='db_connection', lazy='dynamic')
@@ -320,8 +324,21 @@ class DatabaseConnection(db.Model):
             self.host, self.port, self.database, self.username, self.password
         )
 
+    def write_refusal(self, sql: str) -> str:
+        """Why this connection does not run the statement, one that can change data; empty when it does."""
+        # Here and not at the top: validators imports routing_service, which imports this module
+        from validators import write_statement_keyword
+        keyword = write_statement_keyword(sql)
+        if keyword and not self.allow_writes:
+            return (f"The query contains {keyword}, which can change data, and the connection {self.name} does not "
+                    "allow it: change the query, or allow statements that change data in the connection")
+        return ''
+
     def execute_query(self, sql: str) -> tuple:
         """Runs a query on this connection."""
+        refusal = self.write_refusal(sql)
+        if refusal:
+            raise ValueError(refusal)
         driver = self.get_driver()
         conn = driver.open(
             self.host, self.port, self.database, self.username, self.password
@@ -650,6 +667,7 @@ NEW_COLUMNS = [
     ('monitored_queries', 'last_failure_message'),
     ('error_records', 'notify_retry_at'),
     ('error_records', 'undeliverable'),
+    ('database_connections', 'allow_writes'),
 ]
 
 
@@ -678,3 +696,20 @@ def ensure_schema() -> list:
             connection.execute(text(ddl))
         added.append(f'{table}.{column_name}')
     return added
+
+
+def allow_writes_where_queries_write() -> list:
+    """
+    Once, when allow_writes arrives in a database of 2.4.2 or earlier, off everywhere: the connections
+    with a saved query that can change data keep running it. Returns [(connection, query, keyword)].
+    """
+    from validators import write_statement_keyword
+    allowed = []
+    for query in MonitoredQuery.query.filter(MonitoredQuery.db_connection_id.isnot(None)).order_by(MonitoredQuery.id):
+        keyword = query.source_type != 'http' and write_statement_keyword(query.sql_query)
+        connection = query.db_connection
+        if keyword and connection is not None and not connection.allow_writes:
+            connection.allow_writes = True
+            allowed.append((connection.name, query.name, keyword))
+    db.session.commit()
+    return allowed

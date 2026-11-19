@@ -4,12 +4,14 @@ Web routes — HTML pages and form handling.
 import logging
 from flask import Blueprint, render_template, request, redirect, url_for, flash
 from datetime import time
+from sqlalchemy import inspect
 from db_drivers import get_available_drivers, DRIVER_LABELS
 from models import (db, MonitoredQuery, ErrorRecord, QueryLog, EmailLog,
                     DatabaseConnection, NotificationChannel)
 from routing_service import get_operators_list
 from utils import local_day_start_utc, server_log_info
 from email_service import email_service, subject_warning
+from validators import write_statement_keyword
 
 import json
 
@@ -80,6 +82,118 @@ def http_source_config(form, saved: dict) -> dict:
             raise ValueError('Headers must be a JSON object, e.g. {"Accept": "application/json"}')
         config['headers'] = headers
     return config
+
+
+def form_number(text, lowest: int, highest: int = None):
+    """A whole number typed in a form, within the limits; None otherwise."""
+    text = (text or '').strip()
+    if not text.lstrip('-').isdigit():
+        return None
+    value = int(text)
+    return value if value >= lowest and (highest is None or value <= highest) else None
+
+
+def statement_that_writes(query) -> tuple:
+    """(keyword, connection) when the query reads a database with a statement that can change data."""
+    keyword = write_statement_keyword(query.sql_query) if query.source_type != 'http' else None
+    if not keyword:
+        return None, None
+    return keyword, db.session.get(DatabaseConnection, query.db_connection_id) if query.db_connection_id else None
+
+
+def query_from_form(query, form) -> list:
+    """
+    The fields of the query form on the query, as typed; returns what is wrong with them. With anything
+    wrong the caller saves nothing and shows the form again as sent, so nothing typed is lost.
+    """
+    problems = []
+    saved_config = query.get_source_config()
+    query.name = form.get('name', '').strip()
+    if not query.name:
+        problems.append('Name: required')
+    elif MonitoredQuery.query.filter(MonitoredQuery.name == query.name, MonitoredQuery.id != query.id).first():
+        problems.append(f'Name: another query is already called {query.name}')
+    query.description = form.get('description', '')
+    query.source_type = form.get('source_type', 'database')
+    # An HTTP query has no database connection: a leftover one would hide the HTTP source
+    connection_id = form.get('db_connection_id', '')
+    query.db_connection_id = int(connection_id) if connection_id.isdigit() and query.source_type != 'http' else None
+    query.sql_query = form.get('sql_query', '')
+    query.key_fields = form.get('key_fields', '')
+    if not query.get_key_fields_list():
+        problems.append('Key fields: at least one column name')
+    query.is_active = form.get('is_active') == 'on'
+    if query.source_type == 'http':
+        try:
+            query.set_source_config(http_source_config(form, saved_config))
+        except ValueError as e:
+            problems.append(str(e))
+
+    query.email_subject = form.get('email_subject', query.email_subject)
+    query.email_recipients = form.get('email_recipients', '')
+    query.email_template = form.get('email_template', '')
+
+    interval = form_number(form.get('check_interval_value', '15'), 1)
+    if interval and form.get('check_interval_unit') == 'hours':
+        interval *= 60
+    if interval and interval <= 1440:
+        query.check_interval_minutes = interval
+    else:
+        problems.append('Interval: a whole number, from 1 minute to 24 hours')
+    query.schedule_start_time = parse_time(form.get('schedule_start_time'))
+    query.schedule_end_time = parse_time(form.get('schedule_end_time'))
+    days = form.get('schedule_days', '')
+    if all(day.strip() in ('1', '2', '3', '4', '5', '6', '7') for day in days.split(',') if day.strip()):
+        query.schedule_days = days
+    else:
+        problems.append('Days: numbers from 1 (Monday) to 7 (Sunday)')
+    query.schedule_reference_time = parse_time(form.get('schedule_reference_time'))
+
+    query.reminder_enabled = form.get('reminder_enabled') == 'on'
+    every = form_number(form.get('reminder_interval_minutes', '60'), 1)
+    count = form_number(form.get('reminder_max_count', '5'), 1)
+    if every and count:
+        query.reminder_interval_minutes, query.reminder_max_count = every, count
+    else:
+        problems.append('Reminders: whole numbers from 1')
+
+    # Basic routing, only in the form of a saved query (the rules are managed through the API)
+    query.routing_enabled = form.get('routing_enabled') == 'on'
+    for field in ('routing_default_recipients', 'routing_aggregation', 'routing_no_match_action'):
+        if field in form:
+            setattr(query, field, form[field])
+
+    channel_ids = [int(i) for i in form.getlist('notification_channels') if i.isdigit()]
+    query.notification_channels = NotificationChannel.query.filter(
+        NotificationChannel.id.in_(channel_ids)).all() if channel_ids else []
+    query.tags = form.get('tags', '')
+
+    keyword, connection = statement_that_writes(query)
+    if keyword and connection is None:
+        problems.append(f'The query contains {keyword}, which can change data: choose a connection that allows it')
+    elif keyword and not connection.allow_writes:
+        problems.append(connection.write_refusal(query.sql_query))
+    elif keyword and form.get('confirm_write') != 'on':
+        problems.append(f'The query contains {keyword}, which can change data: confirm it below the query to save it')
+
+    if problems and query.source_type == 'http':
+        # Shown again as typed, but a token typed does not go back to the browser
+        config = query.get_source_config()
+        config['auth_token'] = saved_config.get('auth_token', '')
+        query.set_source_config(config)
+    return problems
+
+
+def render_query_form(query):
+    """The query form: empty for a new query, or the query as saved or as just typed."""
+    keyword, connection = statement_that_writes(query) if query is not None else (None, None)
+    connections, channels = form_choices(query)
+    return render_template('query_form.html', query=query,
+                           editing=query is not None and inspect(query).persistent,
+                           # The confirmation, where the connection allows the statement: asked at every save
+                           write_keyword=keyword if connection is not None and connection.allow_writes else None,
+                           operators=get_operators_list(), connections=connections, channels=channels,
+                           email_on=email_service.is_enabled())
 
 
 def report_failure(action: str, error: Exception):
@@ -196,70 +310,28 @@ def queries_list():
 @main_bp.route('/queries/new', methods=['GET', 'POST'])
 def query_create():
     """Creates a new query."""
-    if request.method == 'POST':
-        try:
-            # Basic data
-            source_type = request.form.get('source_type', 'database')
-            db_conn_id = request.form.get('db_connection_id')
-            
-            query = MonitoredQuery(
-                name=request.form['name'],
-                description=request.form.get('description', ''),
-                source_type=source_type,
-                db_connection_id=int(db_conn_id) if db_conn_id and source_type != 'http' else None,
-                sql_query=request.form.get('sql_query', ''),
-                key_fields=request.form['key_fields'],
-                is_active=request.form.get('is_active') == 'on'
-            )
-            
-            if source_type == 'http':
-                query.set_source_config(http_source_config(request.form, {}))
-            
-            # Email
-            query.email_subject = request.form.get('email_subject', '[ErrorEngine] New errors: {query_name}')
-            query.email_recipients = request.form.get('email_recipients', '')
-            query.email_template = request.form.get('email_template', '')
-            
-            # Scheduling
-            interval_value = int(request.form.get('check_interval_value', 15))
-            interval_unit = request.form.get('check_interval_unit', 'minutes')
-            if interval_unit == 'hours':
-                query.check_interval_minutes = interval_value * 60
-            else:  # minutes
-                query.check_interval_minutes = interval_value
-            # Limit to 24 h at most
-            if query.check_interval_minutes > 1440:
-                query.check_interval_minutes = 1440
-            query.schedule_start_time = parse_time(request.form.get('schedule_start_time'))
-            query.schedule_end_time = parse_time(request.form.get('schedule_end_time'))
-            query.schedule_days = request.form.get('schedule_days', '')
-            query.schedule_reference_time = parse_time(request.form.get('schedule_reference_time'))
-            
-            # Reminder
-            query.reminder_enabled = request.form.get('reminder_enabled') == 'on'
-            query.reminder_interval_minutes = int(request.form.get('reminder_interval_minutes', 60))
-            query.reminder_max_count = int(request.form.get('reminder_max_count', 5))
-            
-            query.tags = request.form.get('tags', '')
-
-            db.session.add(query)
-            db.session.flush()  # To get the ID
-            
-            channel_ids = request.form.getlist('notification_channels')
-            if channel_ids:
-                channels = NotificationChannel.query.filter(NotificationChannel.id.in_(channel_ids)).all()
-                query.notification_channels = channels
-            
-            db.session.commit()
-            flash(f'Query "{query.name}" created!', 'success')
-            warn_about_the_subject(query)
-            return redirect(url_for('main.query_detail', query_id=query.id))
-        except Exception as e:
-            report_failure('creating', e)
-    
-    connections, channels = form_choices()
-    return render_template('query_form.html', query=None, operators=get_operators_list(),
-                           connections=connections, channels=channels, email_on=email_service.is_enabled())
+    if request.method == 'GET':
+        return render_query_form(None)
+    query = MonitoredQuery(check_interval_minutes=15, reminder_interval_minutes=60, reminder_max_count=5,
+                           email_subject='[ErrorEngine] New errors: {query_name}')
+    # Not in the session yet: the channels ticked would try to save it along with them
+    with db.session.no_autoflush:
+        problems = query_from_form(query, request.form)
+        if problems:
+            for problem in problems:
+                flash(problem, 'danger')
+            page = render_query_form(query)
+            db.session.rollback()
+            return page
+    try:
+        db.session.add(query)
+        db.session.commit()
+        flash(f'Query "{query.name}" created!', 'success')
+        warn_about_the_subject(query)
+        return redirect(url_for('main.query_detail', query_id=query.id))
+    except Exception as e:
+        report_failure('creating', e)
+        return render_query_form(query)
 
 
 @main_bp.route('/queries/<int:query_id>')
@@ -294,73 +366,26 @@ def query_detail(query_id):
 def query_edit(query_id):
     """Edits an existing query."""
     query = db.get_or_404(MonitoredQuery, query_id)
-    
-    if request.method == 'POST':
-        try:
-            # Basic data
-            query.name = request.form['name']
-            query.description = request.form.get('description', '')
-            query.source_type = request.form.get('source_type', 'database')
-            
-            # An HTTP query has no database connection: a leftover one would hide the HTTP source
-            db_conn_id = request.form.get('db_connection_id')
-            query.db_connection_id = int(db_conn_id) if db_conn_id and query.source_type != 'http' else None
-            
-            query.sql_query = request.form.get('sql_query', '')
-            query.key_fields = request.form['key_fields']
-            query.is_active = request.form.get('is_active') == 'on'
-            
-            if query.source_type == 'http':
-                query.set_source_config(http_source_config(request.form, query.get_source_config()))
-            
-            # Email
-            query.email_subject = request.form.get('email_subject', query.email_subject)
-            query.email_recipients = request.form.get('email_recipients', '')
-            query.email_template = request.form.get('email_template', '')
-            
-            # Scheduling
-            interval_value = int(request.form.get('check_interval_value', 15))
-            interval_unit = request.form.get('check_interval_unit', 'minutes')
-            if interval_unit == 'hours':
-                query.check_interval_minutes = interval_value * 60
-            else:  # minutes
-                query.check_interval_minutes = interval_value
-            # Limit to 24 h at most
-            if query.check_interval_minutes > 1440:
-                query.check_interval_minutes = 1440
-            query.schedule_start_time = parse_time(request.form.get('schedule_start_time'))
-            query.schedule_end_time = parse_time(request.form.get('schedule_end_time'))
-            query.schedule_days = request.form.get('schedule_days', '')
-            query.schedule_reference_time = parse_time(request.form.get('schedule_reference_time'))
-
-            # Reminder
-            query.reminder_enabled = request.form.get('reminder_enabled') == 'on'
-            query.reminder_interval_minutes = int(request.form.get('reminder_interval_minutes', 60))
-            query.reminder_max_count = int(request.form.get('reminder_max_count', 5))
-            
-            # Basic routing (the rules are managed through the API)
-            query.routing_enabled = request.form.get('routing_enabled') == 'on'
-            query.routing_default_recipients = request.form.get('routing_default_recipients',
-                                                                query.routing_default_recipients)
-            query.routing_aggregation = request.form.get('routing_aggregation', query.routing_aggregation)
-            query.routing_no_match_action = request.form.get('routing_no_match_action',
-                                                             query.routing_no_match_action)
-            
-            channel_ids = request.form.getlist('notification_channels')
-            query.notification_channels = NotificationChannel.query.filter(NotificationChannel.id.in_(channel_ids)).all() if channel_ids else []
-            
-            query.tags = request.form.get('tags', '')
-            
-            db.session.commit()
-            flash('Query updated!', 'success')
-            warn_about_the_subject(query)
-            return redirect(url_for('main.query_detail', query_id=query.id))
-        except Exception as e:
-            report_failure('updating', e)
-    
-    connections, channels = form_choices(query)
-    return render_template('query_form.html', query=query, action='edit', operators=get_operators_list(),
-                           connections=connections, channels=channels, email_on=email_service.is_enabled())
+    if request.method == 'GET':
+        return render_query_form(query)
+    # Nothing reaches the database before the commit: with problems, the page shows what was typed,
+    # then it is dropped
+    with db.session.no_autoflush:
+        problems = query_from_form(query, request.form)
+        if problems:
+            for problem in problems:
+                flash(problem, 'danger')
+            page = render_query_form(query)
+            db.session.rollback()
+            return page
+    try:
+        db.session.commit()
+        flash('Query updated!', 'success')
+        warn_about_the_subject(query)
+        return redirect(url_for('main.query_detail', query_id=query.id))
+    except Exception as e:
+        report_failure('updating', e)
+        return render_query_form(query)
 
 
 @main_bp.route('/queries/<int:query_id>/delete', methods=['POST'])
@@ -484,55 +509,73 @@ def connections_list():
                            driver_labels=DRIVER_LABELS)
 
 
+def connection_from_form(conn, form) -> list:
+    """The fields of the connection form on the connection, as typed; returns what is wrong with them."""
+    problems = []
+    conn.name = form.get('name', '').strip()
+    if not conn.name:
+        problems.append('Name: required')
+    conn.db_type = form.get('db_type', '')
+    if conn.db_type not in DRIVER_LABELS:
+        problems.append('Type: one of those in the list')
+    conn.host = form.get('host')
+    port = form.get('port', '').strip()
+    if not port:
+        conn.port = None
+    elif form_number(port, 1, 65535):
+        conn.port = int(port)
+    else:
+        problems.append('Port: a number from 1 to 65535, or empty for the usual one')
+    conn.database = form.get('database')
+    conn.username = form.get('username')
+    # Editing, an empty password keeps the saved one
+    if form.get('password'):
+        conn.password = form['password']
+    conn.is_active = form.get('is_active') == 'on'
+    conn.allow_writes = form.get('allow_writes') == 'on'
+    return problems
+
+
+def render_connection_form(conn):
+    """The connection form: empty, or the connection as saved or as just typed (never its password)."""
+    return render_template('connection_form.html', connection=conn,
+                           editing=conn is not None and inspect(conn).persistent, drivers=get_available_drivers())
+
+
 @main_bp.route('/connections/new', methods=['GET', 'POST'])
 def connection_create():
     """Creates a new connection."""
-    if request.method == 'POST':
-        conn = DatabaseConnection(
-            name=request.form.get('name'),
-            db_type=request.form.get('db_type'),
-            host=request.form.get('host'),
-            port=int(request.form.get('port') or 0) or None,
-            database=request.form.get('database'),
-            username=request.form.get('username'),
-            password=request.form.get('password'),
-            is_active=request.form.get('is_active') == 'on'
-        )
-        db.session.add(conn)
-        db.session.commit()
-        flash('Connection created!', 'success')
-        return redirect(url_for('main.connections_list'))
-    
-    return render_template('connection_form.html', 
-                           connection=None,
-                           drivers=get_available_drivers())
+    if request.method == 'GET':
+        return render_connection_form(None)
+    conn = DatabaseConnection()
+    problems = connection_from_form(conn, request.form)
+    if problems:
+        for problem in problems:
+            flash(problem, 'danger')
+        return render_connection_form(conn)
+    db.session.add(conn)
+    db.session.commit()
+    flash('Connection created!', 'success')
+    return redirect(url_for('main.connections_list'))
 
 
 @main_bp.route('/connections/<int:conn_id>/edit', methods=['GET', 'POST'])
 def connection_edit(conn_id):
     """Edits an existing connection."""
     conn = db.get_or_404(DatabaseConnection, conn_id)
-    
-    if request.method == 'POST':
-        conn.name = request.form.get('name')
-        conn.db_type = request.form.get('db_type')
-        conn.host = request.form.get('host')
-        conn.port = int(request.form.get('port') or 0) or None
-        conn.database = request.form.get('database')
-        conn.username = request.form.get('username')
-        # Update the password only if one is given
-        new_password = request.form.get('password')
-        if new_password:
-            conn.password = new_password
-        conn.is_active = request.form.get('is_active') == 'on'
-        
-        db.session.commit()
-        flash('Connection updated!', 'success')
-        return redirect(url_for('main.connections_list'))
-    
-    return render_template('connection_form.html', 
-                           connection=conn,
-                           drivers=get_available_drivers())
+    if request.method == 'GET':
+        return render_connection_form(conn)
+    with db.session.no_autoflush:
+        problems = connection_from_form(conn, request.form)
+        if problems:
+            for problem in problems:
+                flash(problem, 'danger')
+            page = render_connection_form(conn)
+            db.session.rollback()
+            return page
+    db.session.commit()
+    flash('Connection updated!', 'success')
+    return redirect(url_for('main.connections_list'))
 
 
 @main_bp.route('/connections/<int:conn_id>/delete', methods=['POST'])

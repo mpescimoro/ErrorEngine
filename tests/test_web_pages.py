@@ -259,7 +259,7 @@ class TestQueryFormSave:
         db.session.commit()
         html = save_form(client, query, source_headers='{not json').get_data(as_text=True)
         # Our own check: its words on screen, unlike a database error (only in the log)
-        assert 'Error while updating: Headers must be a JSON object' in html
+        assert 'Headers must be a JSON object' in html
         db.session.refresh(query)
         assert not query.get_source_config().get('headers')
 

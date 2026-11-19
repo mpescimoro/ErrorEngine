@@ -64,7 +64,7 @@ Rows with the same values in the key fields count as the same error. Choose them
 
 - Returns rows only when there is a problem, one row per problem
 - Has the columns that help whoever gets the notification
-- Reads data only: use a read-only database user
+- Reads data only: use a read-only database user. Statements that change data run only on a connection that allows them, see [Configuration](configuration.md#database-drivers)
 
 ### Oracle
 
