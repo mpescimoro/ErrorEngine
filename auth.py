@@ -6,13 +6,15 @@ Single-user login, configured in .env:
         venv\Scripts\python.exe -c "import getpass; from werkzeug.security import generate_password_hash as h; print(h(getpass.getpass('Password: ')))"
     ERRORENGINE_API_TOKEN       optional: to call the APIs from scripts, with the header
                                 "Authorization: Bearer <token>"
-    ERRORENGINE_SESSION_HOURS   hours of inactivity after which the session expires (default 12)
+    ERRORENGINE_SESSION_HOURS   hours of inactivity after which the session expires (default 12):
+                                the requests a page makes by itself do not count
 
 Every page and API requires login, except the login page, static files
 and /api/health (for external checks). Until the password hash and a SECRET_KEY
 other than the example one are set, nobody can open the interface; the scheduler
 keeps running. Without any SECRET_KEY, serve.py does not start at all.
-Changing the password or the username ends the open sessions.
+Changing the password or the username ends the open sessions; so do signing out, in every
+browser, and a restart.
 
 The forms and the requests of the pages that change something carry a token of the
 session (CSRF), checked here: another site cannot make a signed-in browser send them.
@@ -54,6 +56,8 @@ _failed_logins_lock = threading.Lock()
 # every REFUSALS_LOG_SECONDS, with how many came in between
 REFUSALS_LOG_SECONDS = 60
 _refusals_lock = threading.Lock()
+# Set by app.js just before it reloads a live page by itself: that reload is not the user doing something
+BACKGROUND_COOKIE = 'errorengine_background'
 
 
 def init_auth(app):
@@ -65,6 +69,15 @@ def init_auth(app):
     # Wrong passwords by address: (how many in a row, time of the last one). In memory, a single process
     app.extensions['failed_logins'] = {}
     app.extensions['csrf_refusals'] = {'logged': None, 'unlogged': 0}
+    # Part of every session: signing out draws a new one and every copy of a cookie stops working. In
+    # memory, new at every start: a restart ends the sessions too, and a copy never comes back
+    app.extensions['session_generation'] = secrets.token_hex(8)
+
+    @app.after_request
+    def forget_the_background_mark(response):
+        if BACKGROUND_COOKIE in request.cookies:
+            response.delete_cookie(BACKGROUND_COOKIE)
+        return response
 
     @app.context_processor
     def inject_current_user():
@@ -95,15 +108,24 @@ def _configuration_problem(config) -> str:
 
 
 def _credentials_fingerprint() -> str:
-    """Fingerprint of username and password: when they change, open sessions are no longer valid."""
+    """Fingerprint of username, password and generation: when one changes, open sessions are no longer valid."""
     cfg = current_app.config
-    data = f"{cfg['LOGIN_USERNAME']}:{cfg['LOGIN_PASSWORD_HASH']}"
+    data = f"{cfg['LOGIN_USERNAME']}:{cfg['LOGIN_PASSWORD_HASH']}:{current_app.extensions['session_generation']}"
     return hashlib.sha256(data.encode()).hexdigest()[:16]
 
 
 def _is_logged_in() -> bool:
-    return bool(session.get('user')) and hmac.compare_digest(
-        session.get('auth', ''), _credentials_fingerprint())
+    """Signed in, with credentials and generation unchanged, and something done in the last hours."""
+    idle = time.time() - session.get('seen', 0)
+    return (bool(session.get('user')) and idle <= current_app.permanent_session_lifetime.total_seconds()
+            and hmac.compare_digest(session.get('auth', ''), _credentials_fingerprint()))
+
+
+def _done_by_the_user() -> bool:
+    """A page opened or a change: not what a page asks by itself (the API read every 30 s, its own reload)."""
+    if request.method in ('GET', 'HEAD') and request.path.startswith('/api/'):
+        return False
+    return BACKGROUND_COOKIE not in request.cookies
 
 
 def _valid_api_token() -> bool:
@@ -127,6 +149,8 @@ def _require_login():
     if current_app.config.get('LOGIN_DISABLED') or request.endpoint in PUBLIC_ENDPOINTS:
         return None
     if not _configuration_problem(current_app.config) and _is_logged_in():
+        if _done_by_the_user():
+            session['seen'] = int(time.time())
         return None
     if request.path.startswith('/api/'):
         if not _configuration_problem(current_app.config) and _valid_api_token():
@@ -261,6 +285,7 @@ def login():
                 session.permanent = True
                 session['user'] = username
                 session['auth'] = _credentials_fingerprint()
+                session['seen'] = int(time.time())
                 logger.info(f"Login: {username} from {request.remote_addr}")
                 return redirect(next_url)
 
@@ -280,6 +305,7 @@ def login():
 def logout():
     user = session.get('user')
     session.clear()
+    current_app.extensions['session_generation'] = secrets.token_hex(8)
     if user:
         logger.info(f"Logout: {user}")
     return redirect(url_for('auth.login'))

@@ -1223,6 +1223,8 @@ const liveUpdates = {
             this.showBanner();
             return;
         }
+        // Reloaded by the page, not by the user: the server does not count it as activity
+        document.cookie = 'errorengine_background=1; path=/; SameSite=Lax';
         location.reload();
     },
 

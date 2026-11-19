@@ -2,6 +2,7 @@
 Login tests (auth.py): protected pages and APIs, login/logout, token for scripts.
 """
 import pytest
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
@@ -188,7 +189,7 @@ class TestLogin:
                                                                                          monkeypatch):
         import auth
         clock = [1000.0]
-        monkeypatch.setattr(auth, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+        monkeypatch.setattr(auth, 'time', SimpleNamespace(monotonic=lambda: clock[0], time=lambda: clock[0]))
         for _ in range(auth.LOGIN_ATTEMPTS):
             login(client, password='wrong')
         assert login(client, password='wrong').status_code == 429
@@ -200,6 +201,80 @@ class TestLogin:
         login(client, username='nobody\n2026-01-01 00:00:00,000 - auth - INFO - Login: admin', password='wrong')
         failed = [r.getMessage() for r in caplog.records if r.getMessage().startswith('Failed login')]
         assert len(failed) == 1 and '\n' not in failed[0] and 'nobody\\n2026' in failed[0]
+
+
+class TestSessions:
+    """
+    A session ends after ERRORENGINE_SESSION_HOURS without the user doing anything, and the requests a page
+    makes by itself do not count. Signing out ends every copy of it, and so does a restart.
+    """
+
+    @pytest.fixture
+    def clock(self, auth_app, monkeypatch):
+        import auth
+        now = [1_000_000.0]
+        monkeypatch.setattr(auth, 'time', SimpleNamespace(time=lambda: now[0], monotonic=lambda: now[0]))
+        auth_app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=1)
+        return now
+
+    def test_what_a_page_asks_by_itself_does_not_keep_it_alive(self, client, clock):
+        login(client)
+        clock[0] += 3000
+        counter = client.get('/api/errors/summary')
+        assert counter.status_code == 200 and 'Set-Cookie' not in counter.headers
+        clock[0] += 700
+        assert client.get('/api/errors/summary').status_code == 401 and client.get('/').status_code == 302
+
+    def test_what_the_user_does_keeps_it_alive(self, client, clock):
+        login(client)
+        for _ in range(3):
+            clock[0] += 3000
+            assert client.get('/').status_code == 200
+        clock[0] += 3000
+        assert client.post('/api/queries/999/toggle').status_code == 404   # a change counts too
+        clock[0] += 3000
+        assert client.get('/').status_code == 200
+
+    def test_the_reload_of_a_live_page_is_not_done_by_the_user(self, client, clock):
+        login(client)
+        clock[0] += 3000
+        client.set_cookie('errorengine_background', '1')
+        page = client.get('/errors')
+        assert page.status_code == 200
+        assert any(c.startswith('errorengine_background=;') for c in page.headers.getlist('Set-Cookie'))
+        assert client.get_cookie('errorengine_background') is None
+        clock[0] += 700
+        assert client.get('/').status_code == 302
+        js = (Path(__file__).resolve().parent.parent / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
+        reload = js[js.index('    reload() {'):]
+        assert "document.cookie = 'errorengine_background=1" in reload[:reload.index('location.reload()')]
+
+    def test_signing_out_ends_every_copy(self, auth_app):
+        browser, copy = auth_app.test_client(), auth_app.test_client()
+        login(browser)
+        copy.set_cookie('session', browser.get_cookie('session').value)
+        assert copy.get('/').status_code == 200
+        browser.post('/logout')
+        assert copy.get('/').status_code == 302 and copy.get('/api/queries').status_code == 401
+
+    def test_only_who_is_signed_in_can_sign_everyone_out(self, auth_app):
+        browser, stranger = auth_app.test_client(), auth_app.test_client()
+        login(browser)
+        assert stranger.post('/logout').status_code == 302
+        assert browser.get('/').status_code == 200
+
+    def test_a_restart_ends_them(self, auth_app):
+        from app import create_app
+        from models import db
+        browser = auth_app.test_client()
+        login(browser)
+        restarted = create_app('testing')
+        restarted.config.update(LOGIN)
+        copy = restarted.test_client()
+        copy.set_cookie('session', browser.get_cookie('session').value)
+        assert copy.get('/').status_code == 302
+        with restarted.app_context():
+            db.engine.dispose()
 
 
 class TestConfiguration:

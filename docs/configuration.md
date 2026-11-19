@@ -9,7 +9,7 @@ Settings live in `.env` in the project folder: copy `.env.example`, which has th
 | `SECRET_KEY` | — | **Required.** Random string of at least 32 characters that signs the session cookie |
 | `ERRORENGINE_PASSWORD_HASH` | — | **Required.** Hash of the password, see [Sign-in](#sign-in) |
 | `ERRORENGINE_USER` | `admin` | User name |
-| `ERRORENGINE_SESSION_HOURS` | `12` | Hours of inactivity before the session expires |
+| `ERRORENGINE_SESSION_HOURS` | `12` | Hours without doing anything before the session expires: what a page asks by itself, every 30 seconds, does not count |
 | `ERRORENGINE_API_TOKEN` | — | Token of at least 32 characters for scripts that call the [API](api-reference.md) |
 | `ERRORENGINE_HOST` | `0.0.0.0` | Address the server listens on |
 | `ERRORENGINE_PORT` | `5000` | Port the server listens on |
@@ -51,6 +51,8 @@ venv/bin/python -c "import getpass; from werkzeug.security import generate_passw
 ```
 
 `SECRET_KEY` must be a random value of at least 32 characters, for example from `venv/bin/python -c "import secrets; print(secrets.token_hex(32))"`, which gives 64. Without `SECRET_KEY`, ErrorEngine does not start, and the log says why. With the example key, a shorter one, or without the password hash, it checks the queries but nobody can sign in, and the sign-in page says what is missing.
+
+A session ends after `ERRORENGINE_SESSION_HOURS` without opening a page or changing something; a page left open does not keep it alive. **Sign out** ends it in every browser, and so does a restart of ErrorEngine: after one, sign in again.
 
 After 5 wrong passwords in a row from the same address, that address waits a minute before the next try. Behind a reverse proxy, set `ERRORENGINE_TRUSTED_PROXY`: otherwise every attempt seems to come from the proxy, and the wait applies to everyone.
 

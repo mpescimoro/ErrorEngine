@@ -109,6 +109,9 @@ class Config:
     PERMANENT_SESSION_LIFETIME = timedelta(hours=whole_number('ERRORENGINE_SESSION_HOURS', 12))
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = 'Lax'
+    # The cookie goes out again only when the session changes (something the user does): the requests
+    # a page makes by itself do not move its expiry forward
+    SESSION_REFRESH_EACH_REQUEST = False
     # Users open ErrorEngine with https://, through a reverse proxy: the session cookie only over HTTPS
     HTTPS = flag('ERRORENGINE_HTTPS')
     SESSION_COOKIE_SECURE = HTTPS

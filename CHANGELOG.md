@@ -11,6 +11,7 @@
 - `SECRET_KEY`, and `ERRORENGINE_API_TOKEN` when it is set, need at least 32 characters: with a shorter key nobody can sign in and scripts are refused too, a shorter token is refused, and the log says so at startup. The command in the docs generates 64
 - Deprecated SQLAlchemy calls replaced; the tests now fail on any warning, those of Python 3.13 about connections left open included
 - The check for statements that change data reads the whole query, no longer its first word only: `WITH ... DELETE`, `SELECT ... INTO` and a second statement after `;` count too
+- **Sign out** ends the session in every browser, copies of the cookie included, and a restart of ErrorEngine ends the open sessions: after one, sign in again
 
 **Fixed**
 - Cross-site request forgery (CSRF): a page of the same host on another port, or of another host of the same domain, could make a signed-in browser change or delete queries, connections, channels and logs. The forms and the requests of the pages that change something now carry a token of the session, checked by the server; a request the browser marks as coming from another site is refused even with it. Scripts with the API token are unchanged
@@ -22,6 +23,7 @@
 - Routing rules through the API: an operator sent as a list or a regular expression sent as a number no longer give an error page; a number is kept as text, as the page sends it
 - A query name already in use is said so, instead of an error with the details in the log
 - Days saved as something other than numbers no longer break the dashboard, the list of queries and the form
+- A page left open kept the session alive for ever: what it asks by itself every 30 seconds, and its own reloads, counted as activity. Now only what the user does counts, opening a page or changing something, for the hours of `ERRORENGINE_SESSION_HOURS`
 
 ## 2.4.2
 
