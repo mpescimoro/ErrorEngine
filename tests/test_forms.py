@@ -94,6 +94,14 @@ class TestQueryForm:
         assert 'Interval:' in html and 'https://api.example.com/errors' in html
         assert 'typed-secret-token' not in html
 
+    def test_http_settings_stay_when_the_headers_are_not_json(self, client):
+        form = {'name': 'API', 'source_type': 'http', 'source_url': 'https://api.example.com/typed',
+                'source_headers': '{not json', 'key_fields': 'ID', 'check_interval_value': '15',
+                'check_interval_unit': 'minutes'}
+        html = client.post('/queries/new', data=form).get_data(as_text=True)
+        assert 'Headers must be a JSON object' in html
+        assert 'https://api.example.com/typed' in html and '{not json</textarea>' in html
+
     def test_days_that_are_not_numbers_do_not_break_the_pages(self, client, source):
         # Saved before the form checked them
         query = MonitoredQuery(name='Old', sql_query='SELECT 1', key_fields='ID', schedule_days='1,x,9',
@@ -169,3 +177,46 @@ class TestConnectionForm:
         client.post(f'/connections/{writes.id}/edit', data={'name': 'Writes', 'db_type': 'sqlite',
                                                            'database': ':memory:'})
         assert db.session.get(DatabaseConnection, writes.id).allow_writes is False
+
+
+class TestChannelForm:
+
+    @pytest.mark.parametrize('changes, says', [
+        ({'name': ' '}, 'Name: required'),
+        ({'webhook_headers': '{not json'}, 'Headers must be a JSON object'),
+        ({'webhook_headers': '["Accept"]'}, 'Headers must be a JSON object'),
+        ({'webhook_url': 'hooks.example.com/typed-secret'}, 'URL: an address that starts with http:// or https://'),
+    ])
+    def test_what_cannot_be_saved_comes_back_as_typed(self, client, changes, says):
+        form = {'name': 'Ops hook', 'channel_type': 'webhook', 'webhook_url': 'https://hooks.example.com/typed-secret',
+                'webhook_method': 'PUT', 'webhook_headers': '{"Accept": "text/plain"}', **changes}
+        response = client.post('/channels/new', data=form)
+        html = response.get_data(as_text=True)
+        assert response.status_code == 200 and says in html and 'New channel' in html
+        assert 'typed-secret' not in html and NotificationChannel.query.count() == 0
+        if changes.get('name') is None:
+            assert 'value="Ops hook"' in html
+        typed = changes.get('webhook_headers', '{"Accept": "text/plain"}')
+        assert typed in html or typed.replace('"', '&#34;') in html
+
+    def test_telegram_and_teams_need_their_addresses(self, client):
+        html = client.post('/channels/new', data={'name': 'Bot', 'channel_type': 'telegram',
+                                                  'telegram_chat_id': '-1001'}).get_data(as_text=True)
+        assert 'Telegram: bot token and chat ID are both required' in html and 'value="-1001"' in html
+        html = client.post('/channels/new', data={'name': 'Teams', 'channel_type': 'teams'}).get_data(as_text=True)
+        assert 'Teams: the webhook URL, which starts with https://' in html
+        assert NotificationChannel.query.count() == 0
+
+    def test_an_edit_that_cannot_be_saved_changes_nothing(self, client):
+        channel = NotificationChannel(name='Teams IT', channel_type='teams')
+        channel.set_config({'webhook_url': 'https://teams.example.com/saved'})
+        db.session.add(channel)
+        db.session.commit()
+        for changes in ({'name': 'Renamed', 'channel_type': 'teams', 'teams_webhook_url': 'nope'},
+                        {'name': 'Renamed', 'channel_type': 'carrier pigeon'}):
+            response = client.post(f'/channels/{channel.id}/edit', data=changes)
+            html = response.get_data(as_text=True)
+            assert response.status_code == 200 and 'value="Renamed"' in html and 'Edit channel' in html
+        assert 'Type: one of those in the list' in html
+        saved = db.session.get(NotificationChannel, channel.id)
+        assert (saved.name, saved.get_config()) == ('Teams IT', {'webhook_url': 'https://teams.example.com/saved'})

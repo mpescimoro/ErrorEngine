@@ -59,6 +59,15 @@ def form_choices(query=None) -> tuple:
     return connections, channels
 
 
+def json_object(text: str):
+    """The JSON object typed in a form field ({} when empty); None when the text is not one."""
+    try:
+        value = json.loads(text) if text else {}
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def http_source_config(form, saved: dict) -> dict:
     """
     HTTP settings from the query form, over the saved ones: a setting the form
@@ -74,13 +83,9 @@ def http_source_config(form, saved: dict) -> dict:
         config['auth_token'] = form.get('source_auth_token', '')
     if 'source_headers' in form:
         text = form.get('source_headers', '').strip()
-        try:
-            headers = json.loads(text) if text else {}
-        except ValueError:
-            headers = None
-        if not isinstance(headers, dict):
-            raise ValueError('Headers must be a JSON object, e.g. {"Accept": "application/json"}')
-        config['headers'] = headers
+        # Not a JSON object: the text as typed, for the form to show it again with the problem
+        headers = json_object(text)
+        config['headers'] = headers if headers is not None else text
     return config
 
 
@@ -124,10 +129,9 @@ def query_from_form(query, form) -> list:
         problems.append('Key fields: at least one column name')
     query.is_active = form.get('is_active') == 'on'
     if query.source_type == 'http':
-        try:
-            query.set_source_config(http_source_config(form, saved_config))
-        except ValueError as e:
-            problems.append(str(e))
+        query.set_source_config(http_source_config(form, saved_config))
+        if not isinstance(query.get_source_config().get('headers', {}), dict):
+            problems.append('Headers must be a JSON object, e.g. {"Accept": "application/json"}')
 
     query.email_subject = form.get('email_subject', query.email_subject)
     query.email_recipients = form.get('email_recipients', '')
@@ -608,72 +612,87 @@ def channels_list():
     return render_template('channels_list.html', channels=channels, channel_types=CHANNEL_TYPES)
 
 
+# Settings of a channel that let anyone send to it: a form with problems does not send back those typed
+CHANNEL_SECRETS = {'webhook': 'url', 'telegram': 'bot_token', 'teams': 'webhook_url'}
+
+
+def channel_from_form(channel, form) -> list:
+    """The fields of the channel form on the channel, as typed; returns what is wrong with them."""
+    problems = []
+    saved_type, saved = channel.channel_type, (channel.get_config() if channel.config else {})
+    channel.name = form.get('name', '').strip()
+    if not channel.name:
+        problems.append('Name: required')
+    channel.channel_type = form.get('channel_type', '')
+    channel.is_active = form.get('is_active') == 'on'
+    if channel.channel_type == 'webhook':
+        config = {'url': form.get('webhook_url', '').strip(), 'method': form.get('webhook_method', 'POST')}
+        if not config['url'].startswith(('http://', 'https://')):
+            problems.append('URL: an address that starts with http:// or https://')
+        headers = json_object(form.get('webhook_headers', '').strip())
+        if headers is not None:
+            config['headers'] = headers
+        else:
+            config['headers'] = form.get('webhook_headers', '').strip()
+            problems.append('Headers must be a JSON object, e.g. {"Authorization": "Bearer xxx"}')
+    elif channel.channel_type == 'telegram':
+        config = {'bot_token': form.get('telegram_bot_token', '').strip(),
+                  'chat_id': form.get('telegram_chat_id', '').strip()}
+        if not (config['bot_token'] and config['chat_id']):
+            problems.append('Telegram: bot token and chat ID are both required')
+    elif channel.channel_type == 'teams':
+        config = {'webhook_url': form.get('teams_webhook_url', '').strip()}
+        if not config['webhook_url'].startswith(('http://', 'https://')):
+            problems.append('Teams: the webhook URL, which starts with https://')
+    else:
+        config = {}
+        problems.append('Type: one of those in the list')
+    secret = CHANNEL_SECRETS.get(channel.channel_type)
+    if problems and secret:
+        # As saved when editing, as GET shows it; empty for a new channel
+        config[secret] = saved.get(secret, '') if saved_type == channel.channel_type else ''
+    channel.set_config(config)
+    return problems
+
+
+def render_channel_form(channel):
+    """The channel form: empty, or the channel as saved or as just typed (not the secrets typed)."""
+    return render_template('channel_form.html', channel=channel, channel_types=CHANNEL_TYPES,
+                           editing=channel is not None and inspect(channel).persistent)
+
+
 @main_bp.route('/channels/new', methods=['GET', 'POST'])
 def channel_create():
-    if request.method == 'POST':
-        channel_type = request.form.get('channel_type')
-        
-        if channel_type == 'webhook':
-            config = {
-                'url': request.form.get('webhook_url', ''),
-                'method': request.form.get('webhook_method', 'POST'),
-                'headers': json.loads(request.form.get('webhook_headers', '{}') or '{}')
-            }
-        elif channel_type == 'telegram':
-            config = {
-                'bot_token': request.form.get('telegram_bot_token', ''),
-                'chat_id': request.form.get('telegram_chat_id', '')
-            }
-        elif channel_type == 'teams':
-            config = {'webhook_url': request.form.get('teams_webhook_url', '')}
-        else:
-            flash('Invalid channel type', 'danger')
-            return redirect(url_for('main.channels_list'))
-        
-        channel = NotificationChannel(
-            name=request.form.get('name'),
-            channel_type=channel_type,
-            is_active=request.form.get('is_active') == 'on'
-        )
-        channel.set_config(config)
-        
-        db.session.add(channel)
-        db.session.commit()
-        flash('Channel created!', 'success')
-        return redirect(url_for('main.channels_list'))
-    
-    return render_template('channel_form.html', channel=None, channel_types=CHANNEL_TYPES)
+    if request.method == 'GET':
+        return render_channel_form(None)
+    channel = NotificationChannel()
+    problems = channel_from_form(channel, request.form)
+    if problems:
+        for problem in problems:
+            flash(problem, 'danger')
+        return render_channel_form(channel)
+    db.session.add(channel)
+    db.session.commit()
+    flash('Channel created!', 'success')
+    return redirect(url_for('main.channels_list'))
 
 
 @main_bp.route('/channels/<int:channel_id>/edit', methods=['GET', 'POST'])
 def channel_edit(channel_id):
     channel = db.get_or_404(NotificationChannel, channel_id)
-    
-    if request.method == 'POST':
-        channel.name = request.form.get('name')
-        channel.channel_type = request.form.get('channel_type')
-        channel.is_active = request.form.get('is_active') == 'on'
-        
-        if channel.channel_type == 'webhook':
-            config = {
-                'url': request.form.get('webhook_url', ''),
-                'method': request.form.get('webhook_method', 'POST'),
-                'headers': json.loads(request.form.get('webhook_headers', '{}') or '{}')
-            }
-        elif channel.channel_type == 'telegram':
-            config = {
-                'bot_token': request.form.get('telegram_bot_token', ''),
-                'chat_id': request.form.get('telegram_chat_id', '')
-            }
-        elif channel.channel_type == 'teams':
-            config = {'webhook_url': request.form.get('teams_webhook_url', '')}
-        
-        channel.set_config(config)
-        db.session.commit()
-        flash('Channel updated!', 'success')
-        return redirect(url_for('main.channels_list'))
-    
-    return render_template('channel_form.html', channel=channel, channel_types=CHANNEL_TYPES)
+    if request.method == 'GET':
+        return render_channel_form(channel)
+    with db.session.no_autoflush:
+        problems = channel_from_form(channel, request.form)
+        if problems:
+            for problem in problems:
+                flash(problem, 'danger')
+            page = render_channel_form(channel)
+            db.session.rollback()
+            return page
+    db.session.commit()
+    flash('Channel updated!', 'success')
+    return redirect(url_for('main.channels_list'))
 
 
 @main_bp.route('/channels/<int:channel_id>/delete', methods=['POST'])

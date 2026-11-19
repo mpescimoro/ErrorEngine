@@ -18,7 +18,8 @@
 - The responses no longer name the web server (`Server: waitress`)
 - After a wrong password, the request waited a second holding one of the threads of the server, and the attempts had no limit. Now, after 5 wrong passwords in a row from the same address, even sent together, that address waits a minute before the next try, and no thread waits. Behind a reverse proxy, set `ERRORENGINE_TRUSTED_PROXY`: otherwise every attempt seems to come from the proxy, and the wait applies to everyone
 - A user name with a line break, typed at sign-in, could add a line of its own to the log
-- A query or connection form that cannot be saved comes back as it was sent, passwords and tokens excepted, and says what to fix. Until now the server saved key fields made of commas only, an interval of 0 or below, days that are not 1 to 7, and answered with an error page to a connection without a name or with a port that is not a number
+- A query, connection or channel form that cannot be saved comes back as it was sent, passwords, tokens and webhook addresses excepted, and says what to fix. Until now the server saved key fields made of commas only, an interval of 0 or below, days that are not 1 to 7, a channel without its address, and answered with an error page to a connection or channel without a name, a port that is not a number, headers that are not a JSON object or a channel type it does not know
+- Routing rules through the API: an operator sent as a list or a regular expression sent as a number no longer give an error page; a number is kept as text, as the page sends it
 - A query name already in use is said so, instead of an error with the details in the log
 - Days saved as something other than numbers no longer break the dashboard, the list of queries and the form
 

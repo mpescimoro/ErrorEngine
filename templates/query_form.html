@@ -242,7 +242,7 @@
                                       id="source_headers"
                                       name="source_headers"
                                       rows="2"
-                                      placeholder='{"Accept": "application/json"}'>{{ source_config.get('headers')|tojson if source_config.get('headers') else '' }}</textarea>
+                                      placeholder='{"Accept": "application/json"}'>{{ source_config.headers if source_config.headers is string else (source_config.headers|tojson if source_config.headers else '') }}</textarea>
                             <div class="form-text">Other headers to send, as a JSON object. Optional.</div>
                         </div>
                         

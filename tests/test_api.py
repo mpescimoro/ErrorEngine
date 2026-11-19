@@ -4,6 +4,8 @@ Tests for the API routes.
 import json
 from datetime import timedelta
 
+import pytest
+
 from models import db, ErrorRecord, MonitoredQuery
 from utils import get_utc_now
 from version import __version__
@@ -129,6 +131,24 @@ class TestRoutingRulesAPI:
         
         assert response.status_code == 400
     
+    @pytest.mark.parametrize('condition, says', [
+        ({'field_name': 'STATUS', 'operator': ['equals'], 'value': 'X'}, 'Condition 1: unknown operator'),
+        ({'field_name': ['STATUS'], 'operator': 'equals', 'value': 'X'}, 'Condition 1: field is required'),
+        ({'field_name': 'STATUS', 'operator': 'equals', 'value': {'X': 1}}, 'Condition 1: the value is text or a number'),
+    ])
+    def test_conditions_of_another_type_are_refused(self, client, sample_query, condition, says):
+        response = client.post(f'/api/queries/{sample_query.id}/routing/rules',
+                               json={'recipients': 'ops@example.com', 'conditions': [condition]})
+        assert response.status_code == 400 and says in response.get_json()['message']
+
+    def test_numbers_are_kept_as_the_page_sends_them(self, client, sample_query):
+        url = f'/api/queries/{sample_query.id}/routing/rules'
+        for operator, value in (('regex', 5), ('gt', 0)):
+            response = client.post(url, json={'recipients': 'ops@example.com', 'conditions': [
+                {'field_name': 'QTY', 'operator': operator, 'value': value}]})
+            assert response.status_code == 200, response.get_json()
+        assert [c['value'] for rule in client.get(url).get_json()['rules'] for c in rule['conditions']] == ['5', '0']
+
     def test_delete_routing_rule(self, client, sample_query_with_routing):
         """Deletes a routing rule."""
         # First get the rules

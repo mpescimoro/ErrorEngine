@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 
-{% block title %}{{ 'Edit' if channel else 'New' }} channel - ErrorEngine{% endblock %}
+{% block title %}{{ 'Edit' if editing else 'New' }} channel - ErrorEngine{% endblock %}
 
 {% block content %}
 <div class="page-header">
     <h1 class="page-title">
         <i class="bi bi-broadcast"></i>
-        {{ 'Edit channel' if channel else 'New channel' }}
+        {{ 'Edit channel' if editing else 'New channel' }}
     </h1>
 </div>
 
@@ -55,7 +55,7 @@
             </div>
             <div class="card-body">
                 <div id="testResult" class="mb-lg"></div>
-                {% if channel %}
+                {% if editing %}
                 <button type="button" class="btn btn-secondary" onclick="testChannel()">
                     <i class="bi bi-send"></i> Send test
                 </button>
@@ -89,7 +89,7 @@
             <div class="form-group mb-0">
                 <label class="form-label">Headers (JSON)</label>
                 <textarea class="form-control font-mono" id="webhook_headers" name="webhook_headers" rows="2"
-                          placeholder='{"Authorization": "Bearer xxx"}'>{{ channel.get_config().get('headers', {})|tojson if channel and channel.channel_type == 'webhook' else '{}' }}</textarea>
+                          placeholder='{"Authorization": "Bearer xxx"}'>{% set headers = channel.get_config().get('headers', {}) if channel and channel.channel_type == 'webhook' else {} %}{{ headers if headers is string else headers|tojson }}</textarea>
             </div>
         </div>
     </div>
@@ -138,7 +138,7 @@
     <div class="flex gap-md mt-lg">
         <button type="submit" class="btn btn-primary">
             <i class="bi bi-check-lg"></i>
-            {{ 'Save' if channel else 'Create' }}
+            {{ 'Save' if editing else 'Create' }}
         </button>
         <a href="{{ url_for('main.channels_list') }}" class="btn btn-ghost">Cancel</a>
     </div>
@@ -157,7 +157,7 @@ function toggleConfig() {
     }
 }
 
-{% if channel %}
+{% if editing %}
 async function testChannel() {
     const result = document.getElementById('testResult');
     result.innerHTML = '<div class="spinner"></div>';

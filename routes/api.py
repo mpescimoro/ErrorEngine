@@ -121,6 +121,11 @@ def api_get_routing_rules(query_id):
     })
 
 
+def condition_value(value) -> str:
+    """The value of a condition as the page sends it: text, numbers from scripts included."""
+    return '' if value is None else str(value)
+
+
 @api_bp.route('/queries/<int:query_id>/routing/rules', methods=['POST'])
 def api_create_routing_rule(query_id):
     """API: Creates a new routing rule."""
@@ -150,7 +155,7 @@ def api_create_routing_rule(query_id):
                 rule_id=rule.id,
                 field_name=sanitize_string(cond_data.get('field_name', ''), 100),
                 operator=cond_data.get('operator', 'equals'),
-                value=sanitize_string(cond_data.get('value', ''), 500),
+                value=sanitize_string(condition_value(cond_data.get('value')), 500),
                 case_sensitive=bool(cond_data.get('case_sensitive', False))
             )
             db.session.add(condition)
@@ -193,7 +198,7 @@ def api_update_routing_rule(query_id, rule_id):
                     rule_id=rule.id,
                     field_name=sanitize_string(cond_data.get('field_name', ''), 100),
                     operator=cond_data.get('operator', 'equals'),
-                    value=sanitize_string(cond_data.get('value', ''), 500),
+                    value=sanitize_string(condition_value(cond_data.get('value')), 500),
                     case_sensitive=bool(cond_data.get('case_sensitive', False))
                 )
                 db.session.add(condition)

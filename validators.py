@@ -72,6 +72,8 @@ def validate_routing_rule(data: dict) -> Tuple[bool, str]:
     """Validates the data of a routing rule: (is_valid, error_message)."""
     if not isinstance(data, dict):
         return False, "The rule must be a JSON object"
+    if not isinstance(data.get('name', ''), str):
+        return False, "Rule name: text"
     # Recipients are required
     recipients = data.get('recipients', '')
     if not isinstance(recipients, str):
@@ -101,16 +103,20 @@ def validate_routing_rule(data: dict) -> Tuple[bool, str]:
     if not isinstance(conditions, list) or not all(isinstance(cond, dict) for cond in conditions):
         return False, "Conditions must be a list of objects"
     for i, cond in enumerate(conditions):
-        if not cond.get('field_name'):
+        field, operator, value = cond.get('field_name'), cond.get('operator'), cond.get('value')
+        if not isinstance(field, str) or not field.strip():
             return False, f"Condition {i+1}: field is required"
-        if not cond.get('operator'):
+        if not operator:
             return False, f"Condition {i+1}: operator is required"
-        if cond.get('operator') not in OPERATORS:
+        if not isinstance(operator, str) or operator not in OPERATORS:
             # Saved, it would never match
-            return False, f"Condition {i+1}: unknown operator {cond.get('operator')!r}"
-        if cond.get('operator') == 'regex':
+            return False, f"Condition {i+1}: unknown operator {operator!r}"
+        # A number from a script is kept as the page sends it, as text
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (str, int, float))):
+            return False, f"Condition {i+1}: the value is text or a number"
+        if operator == 'regex':
             try:
-                re.compile(cond.get('value') or '')
+                re.compile('' if value is None else str(value))
             except re.error as e:
                 return False, f"Condition {i+1}: invalid regular expression ({e})"
 
