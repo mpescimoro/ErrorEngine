@@ -7,13 +7,15 @@ from datetime import time
 from sqlalchemy import inspect
 from db_drivers import get_available_drivers, DRIVER_LABELS
 from models import (db, MonitoredQuery, ErrorRecord, QueryLog, EmailLog,
-                    DatabaseConnection, NotificationChannel)
+                    DatabaseConnection, NotificationChannel, CHANNEL_SECRETS, SOURCE_CLEAR)
+from encryption import decrypt
 from routing_service import get_operators_list
 from utils import local_day_start_utc, server_log_info
 from email_service import email_service, subject_warning
 from validators import write_statement_keyword
 
 import json
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 main_bp = Blueprint('main', __name__)
@@ -68,24 +70,89 @@ def json_object(text: str):
     return value if isinstance(value, dict) else None
 
 
-def http_source_config(form, saved: dict) -> dict:
+# In the forms in place of a saved header value, which does not go back to the browser: sent back, it keeps it
+SAVED = '(saved)'
+
+
+def masked_headers(headers) -> str:
+    """The saved headers as the form shows them: the names, every value (saved)."""
+    if not isinstance(headers, dict) or not headers:
+        return ''
+    return json.dumps({name: SAVED for name in headers}, ensure_ascii=False)
+
+
+def server_of(url) -> tuple:
+    """Scheme, host and port of an address: a saved secret goes only to the server it was typed for."""
+    try:
+        parts = urlsplit((url or '').strip())
+        scheme = parts.scheme.lower()
+        return scheme, (parts.hostname or '').lower(), parts.port or {'http': 80, 'https': 443}.get(scheme)
+    except ValueError:   # a port that is not a number
+        return '', url, None
+
+
+def holds_text(value) -> bool:
+    """Whether a saved setting outside the fields in clear holds a text, that is a secret."""
+    if isinstance(value, str):
+        return value != ''
+    if isinstance(value, dict):
+        value = list(value.values())
+    return isinstance(value, list) and any(holds_text(item) for item in value)
+
+
+def headers_from_form(text: str, kept, problems: list, example: str, elsewhere=()):
     """
-    HTTP settings from the query form, over the saved ones: a setting the form
-    does not show (e.g. a timeout) stays as it is.
+    The headers typed, a JSON object, in which (saved) keeps the value saved under that name, encrypted as it
+    is: kept has the saved ones, elsewhere the names of those left behind as the address went to another
+    server. Text that is not a JSON object: a problem, and the saved headers.
     """
-    config = dict(saved or {})
+    kept = kept if isinstance(kept, dict) else {}
+    headers = json_object(text)
+    if headers is None:
+        problems.append(f'Headers must be a JSON object, e.g. {example}')
+        return kept
+    for name, value in headers.items():
+        if value != SAVED:
+            continue
+        if name in kept:
+            headers[name] = kept[name]
+        elif name in elsewhere:
+            problems.append(f'Header {name}: the address is on another server, type its value again')
+        else:
+            problems.append(f'Header {name}: no value saved under this name, type it')
+    return headers
+
+
+def http_source_config(form, saved: dict, problems: list) -> dict:
+    """
+    HTTP settings from the query form, over the saved ones (as saved, secrets encrypted): a setting the
+    form does not show (e.g. a timeout) stays as it is. The saved token and header values are not in the
+    form: left so they stay, for the same server only; Authentication None removes the token.
+    """
+    saved = saved or {}
+    config = dict(saved)
     for key, field in (('url', 'source_url'), ('method', 'source_method'),
                        ('response_path', 'source_response_path'), ('auth_type', 'source_auth_type'),
-                       ('api_key_name', 'source_api_key_name')):
+                       ('api_key_name', 'source_api_key_name'), ('api_key_in', 'source_api_key_in')):
         if field in form:
             config[key] = form.get(field, '').strip()
-    if 'source_auth_token' in form:
-        config['auth_token'] = form.get('source_auth_token', '')
+    if not config.get('api_key_in'):
+        config.pop('api_key_in', None)   # in a header, the default
+    moved = server_of(config.get('url')) != server_of(saved.get('url'))
+    if moved:
+        # The saved secrets go only to the server they were typed for: for another one, typed again
+        config = {field: value for field, value in config.items() if field in SOURCE_CLEAR or not holds_text(value)}
+    if 'source_auth_type' in form and not config['auth_type']:
+        config['auth_token'] = ''
+    elif form.get('source_auth_token'):
+        config['auth_token'] = form['source_auth_token']
+    elif moved and saved.get('auth_token'):
+        problems.append('Token/Key: the URL is on another server, type it again')
     if 'source_headers' in form:
-        text = form.get('source_headers', '').strip()
-        # Not a JSON object: the text as typed, for the form to show it again with the problem
-        headers = json_object(text)
-        config['headers'] = headers if headers is not None else text
+        saved_headers = saved.get('headers') if isinstance(saved.get('headers'), dict) else {}
+        config['headers'] = headers_from_form(form.get('source_headers', '').strip(), {} if moved else saved_headers,
+                                              problems, '{"Accept": "application/json"}',
+                                              elsewhere=saved_headers if moved else ())
     return config
 
 
@@ -112,7 +179,7 @@ def query_from_form(query, form) -> list:
     wrong the caller saves nothing and shows the form again as sent, so nothing typed is lost.
     """
     problems = []
-    saved_config = query.get_source_config()
+    saved_config = query.stored_source_config()
     query.name = form.get('name', '').strip()
     if not query.name:
         problems.append('Name: required')
@@ -129,9 +196,7 @@ def query_from_form(query, form) -> list:
         problems.append('Key fields: at least one column name')
     query.is_active = form.get('is_active') == 'on'
     if query.source_type == 'http':
-        query.set_source_config(http_source_config(form, saved_config))
-        if not isinstance(query.get_source_config().get('headers', {}), dict):
-            problems.append('Headers must be a JSON object, e.g. {"Accept": "application/json"}')
+        query.set_source_config(http_source_config(form, saved_config, problems))
 
     query.email_subject = form.get('email_subject', query.email_subject)
     query.email_recipients = form.get('email_recipients', '')
@@ -180,20 +245,32 @@ def query_from_form(query, form) -> list:
     elif keyword and form.get('confirm_write') != 'on':
         problems.append(f'The query contains {keyword}, which can change data: confirm it below the query to save it')
 
-    if problems and query.source_type == 'http':
-        # Shown again as typed, but a token typed does not go back to the browser
-        config = query.get_source_config()
-        config['auth_token'] = saved_config.get('auth_token', '')
-        query.set_source_config(config)
     return problems
 
 
-def render_query_form(query):
-    """The query form: empty for a new query, or the query as saved or as just typed."""
+def secret_hint(typed: bool, saved: bool):
+    """What a secret field says next to its name: typed in a form that came back, it is to be typed again."""
+    return 'typed' if typed else 'saved' if saved else None
+
+
+def render_query_form(query, form=None):
+    """
+    The query form: empty for a new query, or the query as saved or as just typed (form). Not the saved token
+    and header values: whether a token is saved, and the header names.
+    """
     keyword, connection = statement_that_writes(query) if query is not None else (None, None)
     connections, channels = form_choices(query)
-    return render_template('query_form.html', query=query,
-                           editing=query is not None and inspect(query).persistent,
+    editing = query is not None and inspect(query).persistent
+    source_config = query.stored_source_config() if query is not None else {}
+    # As in the database: the object holds what was just typed
+    text = db.session.query(MonitoredQuery.source_config).filter_by(id=query.id).scalar() if editing else None
+    saved = json.loads(text) if text else {}
+    same_server = form is None or server_of(form.get('source_url')) == server_of(saved.get('url'))
+    headers = form.get('source_headers', '') if form is not None else masked_headers(saved.get('headers'))
+    return render_template('query_form.html', query=query, editing=editing, source_config=source_config,
+                           token_hint=secret_hint(form is not None and bool(form.get('source_auth_token')),
+                                                  bool(saved.get('auth_token')) and same_server),
+                           headers=headers,
                            # The confirmation, where the connection allows the statement: asked at every save
                            write_keyword=keyword if connection is not None and connection.allow_writes else None,
                            operators=get_operators_list(), connections=connections, channels=channels,
@@ -324,7 +401,7 @@ def query_create():
         if problems:
             for problem in problems:
                 flash(problem, 'danger')
-            page = render_query_form(query)
+            page = render_query_form(query, request.form)
             db.session.rollback()
             return page
     try:
@@ -335,7 +412,7 @@ def query_create():
         return redirect(url_for('main.query_detail', query_id=query.id))
     except Exception as e:
         report_failure('creating', e)
-        return render_query_form(query)
+        return render_query_form(query, request.form)
 
 
 @main_bp.route('/queries/<int:query_id>')
@@ -379,7 +456,7 @@ def query_edit(query_id):
         if problems:
             for problem in problems:
                 flash(problem, 'danger')
-            page = render_query_form(query)
+            page = render_query_form(query, request.form)
             db.session.rollback()
             return page
     try:
@@ -389,7 +466,7 @@ def query_edit(query_id):
         return redirect(url_for('main.query_detail', query_id=query.id))
     except Exception as e:
         report_failure('updating', e)
-        return render_query_form(query)
+        return render_query_form(query, request.form)
 
 
 @main_bp.route('/queries/<int:query_id>/delete', methods=['POST'])
@@ -513,9 +590,15 @@ def connections_list():
                            driver_labels=DRIVER_LABELS)
 
 
+def database_server(conn) -> tuple:
+    """Host and port of a connection: its saved password goes only there."""
+    return (conn.host or '').strip().lower(), conn.port
+
+
 def connection_from_form(conn, form) -> list:
     """The fields of the connection form on the connection, as typed; returns what is wrong with them."""
     problems = []
+    saved_server = database_server(conn)
     conn.name = form.get('name', '').strip()
     if not conn.name:
         problems.append('Name: required')
@@ -532,18 +615,28 @@ def connection_from_form(conn, form) -> list:
         problems.append('Port: a number from 1 to 65535, or empty for the usual one')
     conn.database = form.get('database')
     conn.username = form.get('username')
-    # Editing, an empty password keeps the saved one
+    # Editing, an empty password keeps the saved one, for the same server only
     if form.get('password'):
         conn.password = form['password']
+    elif conn._password and database_server(conn) != saved_server:
+        problems.append('Password: the server changed, type it again')
     conn.is_active = form.get('is_active') == 'on'
     conn.allow_writes = form.get('allow_writes') == 'on'
     return problems
 
 
-def render_connection_form(conn):
-    """The connection form: empty, or the connection as saved or as just typed (never its password)."""
-    return render_template('connection_form.html', connection=conn,
-                           editing=conn is not None and inspect(conn).persistent, drivers=get_available_drivers())
+def render_connection_form(conn, form=None):
+    """The connection form: empty, or the connection as saved or as just typed (form); never its password."""
+    editing = conn is not None and inspect(conn).persistent
+    saved = None
+    if editing:
+        # As in the database: the object holds what was just typed
+        saved = db.session.query(DatabaseConnection.host, DatabaseConnection.port,
+                                 DatabaseConnection._password).filter_by(id=conn.id).one()
+    keeps = (saved is not None and bool(saved[2])
+             and ((saved[0] or '').strip().lower(), saved[1]) == database_server(conn))
+    return render_template('connection_form.html', connection=conn, editing=editing, drivers=get_available_drivers(),
+                           password_hint=secret_hint(form is not None and bool(form.get('password')), keeps))
 
 
 @main_bp.route('/connections/new', methods=['GET', 'POST'])
@@ -556,7 +649,7 @@ def connection_create():
     if problems:
         for problem in problems:
             flash(problem, 'danger')
-        return render_connection_form(conn)
+        return render_connection_form(conn, request.form)
     db.session.add(conn)
     db.session.commit()
     flash('Connection created!', 'success')
@@ -574,7 +667,7 @@ def connection_edit(conn_id):
         if problems:
             for problem in problems:
                 flash(problem, 'danger')
-            page = render_connection_form(conn)
+            page = render_connection_form(conn, request.form)
             db.session.rollback()
             return page
     db.session.commit()
@@ -612,53 +705,84 @@ def channels_list():
     return render_template('channels_list.html', channels=channels, channel_types=CHANNEL_TYPES)
 
 
-# Settings of a channel that let anyone send to it: a form with problems does not send back those typed
-CHANNEL_SECRETS = {'webhook': 'url', 'telegram': 'bot_token', 'teams': 'webhook_url'}
+def saved_server(encrypted_url):
+    """The server of a saved address; None when it cannot be read."""
+    try:
+        return server_of(decrypt(encrypted_url))
+    except ValueError:
+        return None
 
 
 def channel_from_form(channel, form) -> list:
-    """The fields of the channel form on the channel, as typed; returns what is wrong with them."""
+    """
+    The fields of the channel form on the channel, as typed; returns what is wrong with them. The saved
+    addresses, token and header values are not in the form: left empty they stay, (saved) keeps a header
+    for the same server only.
+    """
     problems = []
-    saved_type, saved = channel.channel_type, (channel.get_config() if channel.config else {})
+    # The saved secrets count for the same type only
+    kept = channel.stored_config() if channel.config and channel.channel_type == form.get('channel_type') else {}
     channel.name = form.get('name', '').strip()
     if not channel.name:
         problems.append('Name: required')
     channel.channel_type = form.get('channel_type', '')
     channel.is_active = form.get('is_active') == 'on'
+    # A secret field left empty keeps the saved value, encrypted as it is
     if channel.channel_type == 'webhook':
-        config = {'url': form.get('webhook_url', '').strip(), 'method': form.get('webhook_method', 'POST')}
-        if not config['url'].startswith(('http://', 'https://')):
+        typed = form.get('webhook_url', '').strip()
+        config = {'url': typed or kept.get('url', ''), 'method': form.get('webhook_method', 'POST')}
+        if not config['url'] or (typed and not typed.startswith(('http://', 'https://'))):
             problems.append('URL: an address that starts with http:// or https://')
-        headers = json_object(form.get('webhook_headers', '').strip())
-        if headers is not None:
-            config['headers'] = headers
-        else:
-            config['headers'] = form.get('webhook_headers', '').strip()
-            problems.append('Headers must be a JSON object, e.g. {"Authorization": "Bearer xxx"}')
+        saved_headers = kept.get('headers') if isinstance(kept.get('headers'), dict) else {}
+        # A new address on another server: the saved header values do not go there
+        moved = bool(typed) and server_of(typed) != saved_server(kept.get('url'))
+        config['headers'] = headers_from_form(form.get('webhook_headers', '').strip(),
+                                              {} if moved else saved_headers, problems,
+                                              '{"Authorization": "Bearer xxx"}',
+                                              elsewhere=saved_headers if moved else ())
     elif channel.channel_type == 'telegram':
-        config = {'bot_token': form.get('telegram_bot_token', '').strip(),
+        config = {'bot_token': form.get('telegram_bot_token', '').strip() or kept.get('bot_token', ''),
                   'chat_id': form.get('telegram_chat_id', '').strip()}
         if not (config['bot_token'] and config['chat_id']):
             problems.append('Telegram: bot token and chat ID are both required')
     elif channel.channel_type == 'teams':
-        config = {'webhook_url': form.get('teams_webhook_url', '').strip()}
-        if not config['webhook_url'].startswith(('http://', 'https://')):
+        typed = form.get('teams_webhook_url', '').strip()
+        config = {'webhook_url': typed or kept.get('webhook_url', '')}
+        if not config['webhook_url'] or (typed and not typed.startswith(('http://', 'https://'))):
             problems.append('Teams: the webhook URL, which starts with https://')
     else:
         config = {}
         problems.append('Type: one of those in the list')
-    secret = CHANNEL_SECRETS.get(channel.channel_type)
-    if problems and secret:
-        # As saved when editing, as GET shows it; empty for a new channel
-        config[secret] = saved.get(secret, '') if saved_type == channel.channel_type else ''
     channel.set_config(config)
     return problems
 
 
-def render_channel_form(channel):
-    """The channel form: empty, or the channel as saved or as just typed (not the secrets typed)."""
-    return render_template('channel_form.html', channel=channel, channel_types=CHANNEL_TYPES,
-                           editing=channel is not None and inspect(channel).persistent)
+# The field of the form of each secret of a channel that has one
+SECRET_INPUTS = {'url': 'webhook_url', 'bot_token': 'telegram_bot_token', 'webhook_url': 'teams_webhook_url'}
+
+
+def render_channel_form(channel, form=None):
+    """
+    The channel form: empty, or the channel as saved or as just typed (form). Not the saved addresses, token
+    and header values: which of them are saved, and the header names.
+    """
+    editing = channel is not None and inspect(channel).persistent
+    stored = channel.stored_config() if channel is not None and channel.config else {}
+    saved_type, saved = None, {}
+    if editing:
+        # As in the database: the object holds what was just typed
+        saved_type, text = db.session.query(NotificationChannel.channel_type,
+                                            NotificationChannel.config).filter_by(id=channel.id).one()
+        saved = json.loads(text) if text else {}
+    hints = {field: secret_hint(form is not None and bool(form.get(SECRET_INPUTS[field], '').strip()),
+                                saved_type == kind and bool(saved.get(field)))
+             for kind, fields in CHANNEL_SECRETS.items() for field in fields if field in SECRET_INPUTS}
+    if form is not None:
+        headers = form.get('webhook_headers', '')
+    else:
+        headers = masked_headers(saved.get('headers')) if saved_type == 'webhook' else ''
+    return render_template('channel_form.html', channel=channel, channel_types=CHANNEL_TYPES, editing=editing,
+                           stored=stored, hints=hints, headers=headers)
 
 
 @main_bp.route('/channels/new', methods=['GET', 'POST'])
@@ -670,7 +794,7 @@ def channel_create():
     if problems:
         for problem in problems:
             flash(problem, 'danger')
-        return render_channel_form(channel)
+        return render_channel_form(channel, request.form)
     db.session.add(channel)
     db.session.commit()
     flash('Channel created!', 'success')
@@ -687,7 +811,7 @@ def channel_edit(channel_id):
         if problems:
             for problem in problems:
                 flash(problem, 'danger')
-            page = render_channel_form(channel)
+            page = render_channel_form(channel, request.form)
             db.session.rollback()
             return page
     db.session.commit()

@@ -14,7 +14,7 @@ DOCS = sorted((ROOT / 'docs').glob('*.md'))
 CONFIGURATION = (ROOT / 'docs' / 'configuration.md').read_text(encoding='utf-8')
 
 # Read by the code but not meant for users: development, tests, internal database URL
-NOT_DOCUMENTED = {'DATABASE_URL', 'FLASK_ENV', 'FLASK_DEBUG', 'PATH', 'EE_SECRET_MARKER'}
+NOT_DOCUMENTED = {'FLASK_ENV', 'FLASK_DEBUG', 'PATH', 'EE_SECRET_MARKER'}
 # Only for scripts/check_ibmi.py, documented in docs/ibmi-driver.md
 IBMI_SCRIPT = {'IBMI_HOST', 'IBMI_USER', 'IBMI_PASSWORD', 'IBMI_LIBRARY'}
 
@@ -45,7 +45,7 @@ def test_every_setting_is_documented():
     # Settings of older versions: no longer in the table or in .env.example, only named as retired
     assert not set(RETIRED_SETTINGS) & (documented | example)
     assert all(f'`{name}`' in CONFIGURATION for name in RETIRED_SETTINGS)
-    assert {'SECRET_KEY', 'ERRORENGINE_PASSWORD_HASH', 'TIMEZONE', 'MAIL_SERVER'} <= example
+    assert {'ERRORENGINE_PASSWORD_HASH', 'ERRORENGINE_ENCRYPTION_KEY', 'TIMEZONE', 'MAIL_SERVER'} <= example
     assert 'docs/configuration.md' in example_text
     assert IBMI_SCRIPT <= set(re.findall(r'`(IBMI_[A-Z]+)`', (ROOT / 'docs' / 'ibmi-driver.md').read_text(encoding='utf-8')))
 

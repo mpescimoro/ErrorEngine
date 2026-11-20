@@ -6,9 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
-from flask import Config
 from werkzeug.security import generate_password_hash
-from config import config, DEFAULT_SECRET_KEY, INSECURE_SECRET_KEYS
 
 
 # The API token of the tests: 32 characters at least, as the real ones
@@ -20,7 +18,6 @@ LOGIN = dict(
     LOGIN_DISABLED=False,
     LOGIN_USERNAME='admin',
     LOGIN_PASSWORD_HASH=generate_password_hash('secret', method='pbkdf2:sha256:1000'),
-    SECRET_KEY='test-key-' + 'k' * 23,
     API_TOKEN='',
 )
 
@@ -287,32 +284,9 @@ class TestConfiguration:
         assert client.get('/').status_code == 302
         assert client.get('/api/queries').status_code == 401
 
-    def test_every_published_key_is_public(self):
-        """Default keys of past versions and the .env.example placeholder stay blocked after an upgrade."""
-        example = (Path(__file__).resolve().parent.parent / '.env.example').read_text(encoding='utf-8')
-        placeholder = next(line.split('=', 1)[1].strip() for line in example.splitlines()
-                           if line.startswith('SECRET_KEY='))
-        for key in (DEFAULT_SECRET_KEY, 'chiave-segreta-da-cambiare-in-produzione', placeholder):
-            assert key in INSECURE_SECRET_KEYS, key
-
-    @pytest.mark.parametrize('key', sorted(INSECURE_SECRET_KEYS) + ['k' * 31])
-    def test_public_or_short_secret_key_blocks_login(self, client, auth_app, key):
-        """With the default key, the .env.example one or a short one, the cookie could be forged."""
-        auth_app.config['SECRET_KEY'] = key
-        assert 'SECRET_KEY' in client.get('/login').get_data(as_text=True)
-        login(client)
-        assert client.get('/').status_code == 302
-
     def test_invalid_hash(self, client, auth_app):
         auth_app.config['LOGIN_PASSWORD_HASH'] = 'not-a-hash'
         assert 'Wrong username or password' in login(client).get_data(as_text=True)
-
-    def test_production_secret_key_read_from_property(self, monkeypatch):
-        """from_object gets an instance: SECRET_KEY is the value, not the property object."""
-        monkeypatch.setenv('SECRET_KEY', 'production-key')
-        cfg = Config('.')
-        cfg.from_object(config['production']())
-        assert cfg['SECRET_KEY'] == 'production-key'
 
 
 class TestTokenApi:

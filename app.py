@@ -23,8 +23,7 @@ def create_app(config_name=None):
         config_name = os.environ.get('FLASK_ENV', 'development')
     
     app = Flask(__name__)
-    # An instance, not the class: this way ProductionConfig's SECRET_KEY @property is read
-    app.config.from_object(config[config_name]())
+    app.config.from_object(config[config_name])
 
     try:
         ZoneInfo(app.config['TIMEZONE'] or 'UTC')   # empty: UTC, the default
@@ -34,6 +33,10 @@ def create_app(config_name=None):
                        "dates and schedules use UTC")
     for warning in retired_settings_warnings():
         logger.warning(warning)
+
+    # The key of the passwords saved in the database: without it ErrorEngine stops here
+    from encryption import init_app as init_encryption
+    init_encryption(app)
 
     # SQLite: with the scheduler running in parallel, several threads write to the internal DB,
     # so wait up to 30 s for the lock instead of failing after 5
@@ -104,6 +107,8 @@ def create_app(config_name=None):
                 for connection, query, keyword in allow_writes_where_queries_write():
                     logger.info(f"Connection {connection}: statements that change data allowed, "
                                 f"as the query {query} contains {keyword}")
+        from encryption import encrypt_saved_secrets
+        encrypt_saved_secrets()
         if db.engine.dialect.name == 'sqlite' and db.engine.url.database not in (None, '', ':memory:'):
             # WAL: reads do not block writes and vice versa
             with db.engine.connect() as connection:

@@ -12,6 +12,9 @@ Werkzeug==3.1.9
 # Database
 SQLAlchemy==2.0.55
 
+# Encryption of the passwords saved in the database (ERRORENGINE_ENCRYPTION_KEY)
+cryptography==50.0.2
+
 # Database drivers
 # ----------------
 # All drivers are installed by default: put a '#' in front of the ones you don't use.

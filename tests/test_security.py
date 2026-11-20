@@ -25,7 +25,7 @@ import requests
 from flask import Flask
 from flask_apscheduler import APScheduler
 
-from config import Config, DevelopmentConfig, ProductionConfig
+from config import Config, DevelopmentConfig, ProductionConfig, TestingConfig
 from models import db, MonitoredQuery, DatabaseConnection, NotificationChannel, QueryLog
 from utils import redact_secrets, RedactSecretsFilter
 from validators import write_statement_keyword
@@ -43,7 +43,8 @@ def project_copy(tmp_path):
         probe.bind(('127.0.0.1', 0))
         port = probe.getsockname()[1]
     env = {name: os.environ[name] for name in ('PATH', 'SYSTEMROOT') if name in os.environ}
-    env.update(SECRET_KEY='s' * 32, ERRORENGINE_HOST='127.0.0.1', ERRORENGINE_PORT=str(port),
+    env.update(ERRORENGINE_HOST='127.0.0.1', ERRORENGINE_PORT=str(port),
+               ERRORENGINE_ENCRYPTION_KEY=TestingConfig.ENCRYPTION_KEY,
                DATABASE_URL=f"sqlite:///{(tmp_path / 'ee.db').as_posix()}")
     return project, port, env
 
@@ -312,8 +313,9 @@ class TestStartup:
     def test_settings_that_do_not_work_are_named_at_startup(self, caplog, monkeypatch):
         import config
         from app import create_app
-        warnings = ("is not a time zone", "MAIL_USE_TLS is no longer used", "NOTIFY_RETRY_HOURS is no longer used")
-        for name in ('MAIL_USE_TLS', 'NOTIFY_RETRY_HOURS'):
+        warnings = ("is not a time zone", "MAIL_USE_TLS is no longer used", "NOTIFY_RETRY_HOURS is no longer used",
+                    "SECRET_KEY is no longer used")
+        for name in ('MAIL_USE_TLS', 'NOTIFY_RETRY_HOURS', 'SECRET_KEY'):
             monkeypatch.delenv(name, raising=False)
         with caplog.at_level(logging.WARNING, logger='app'):
             app = create_app('testing')
@@ -323,11 +325,22 @@ class TestStartup:
         monkeypatch.setattr(config.TestingConfig, 'TIMEZONE', 'Europe/Rom')
         monkeypatch.setenv('MAIL_USE_TLS', 'true')
         monkeypatch.setenv('NOTIFY_RETRY_HOURS', '24')
+        monkeypatch.setenv('SECRET_KEY', 'k' * 64)
         with caplog.at_level(logging.WARNING, logger='app'):
             app = create_app('testing')
         with app.app_context():
             db.engine.dispose()
         assert all(w in caplog.text for w in warnings)
+
+    def test_the_session_key_is_new_at_every_start(self):
+        """Not read from .env: SECRET_KEY of older versions, still there, only gets the warning above."""
+        def key():
+            return subprocess.run([sys.executable, '-c', 'import config; print(config.Config.SECRET_KEY)'],
+                                  cwd=ROOT, env=dict(os.environ, SECRET_KEY='k' * 64), capture_output=True,
+                                  text=True, check=True).stdout.strip()
+        first, second = key(), key()
+        assert first != second and len(first) == len(second) == 64
+        assert 'k' * 64 not in (first, second)
 
     def test_a_setting_with_a_wrong_value_is_named(self, monkeypatch, caplog):
         from config import flag, whole_number
@@ -366,6 +379,7 @@ class TestStartup:
         assert 'MAIL_PORT=2.5 in .env' in refused(MAIL_PORT='2.5')
         assert 'ERRORENGINE_HTTPS=yes in .env' in refused(ERRORENGINE_HTTPS='yes')
         assert 'ERRORENGINE_TRUSTED_PROXY=proxy.local in .env' in refused(ERRORENGINE_TRUSTED_PROXY='proxy.local')
+        assert 'ERRORENGINE_ENCRYPTION_KEY is missing' in refused(ERRORENGINE_ENCRYPTION_KEY='')
 
         first = start(project, port, env)
         try:
@@ -381,6 +395,29 @@ class TestStartup:
         log = (project / 'logs' / 'errorengine.log').read_text(encoding='utf-8')
         assert log.count('Scheduler started') == 1 and log.count('ErrorEngine stopped') == 1, log
         assert 'unexpected error' not in log
+
+    @pytest.mark.skipif(sys.platform == 'win32', reason='On Windows the permissions of the folder decide')
+    def test_its_files_are_for_its_account_only(self, tmp_path):
+        """The files it creates; one that other users can read, as .env copied with cp, is named in the log."""
+        project, port, env = project_copy(tmp_path)
+        (project / '.env').write_text('# copied from .env.example\n', encoding='utf-8')
+        (project / '.env').chmod(0o644)
+        server = start(project, port, env)
+        try:
+            # The port answers before the app is ready: this waits for it
+            health = http.client.HTTPConnection('127.0.0.1', port, timeout=60)
+            health.request('GET', '/api/health')
+            assert health.getresponse().status == 200
+            health.close()
+        finally:
+            server.kill()
+            server.wait()
+        log = (project / 'logs' / 'errorengine.log').read_text(encoding='utf-8')
+        assert f"Other users of this machine can read {project / '.env'}: " in log
+        assert f"chmod 600 {project / '.env'}\n" in log
+        made = [tmp_path / name for name in ('ee.db', 'ee.db-wal', 'ee.db-shm') if (tmp_path / name).exists()]
+        for path in made + [project / 'logs' / 'errorengine.log']:
+            assert path.stat().st_mode & 0o077 == 0, path
 
     def test_from_the_trusted_proxy_alone_the_client_and_the_host_come_from_its_headers(self, tmp_path):
         project, port, env = project_copy(tmp_path)

@@ -38,13 +38,13 @@ It closes the error by hand. If the query still returns that row, at the next ch
 
 ### ErrorEngine does not start
 
-Look at the console or at `logs/errorengine.log`: it stops right away and says why. Without `SECRET_KEY` in `.env`, see [Configuration](configuration.md#sign-in). When the port is taken, ErrorEngine is often already running, as a service or a scheduled task; otherwise `ERRORENGINE_PORT` chooses another port.
+Look at the console or at `logs/errorengine.log`: it stops right away and says why. Without `ERRORENGINE_ENCRYPTION_KEY` in `.env`, see [Saved passwords and tokens](configuration.md#saved-passwords-and-tokens). When the port is taken, ErrorEngine is often already running, as a service or a scheduled task; otherwise `ERRORENGINE_PORT` chooses another port.
 
 ### Nobody can sign in
 
 The sign-in page says what is wrong:
 
-- `ERRORENGINE_PASSWORD_HASH` is missing, or `SECRET_KEY` is the example one or shorter than 32 characters: until it is fixed, scripts with the API token are refused too. See [Configuration](configuration.md#sign-in) and restart ErrorEngine.
+- `ERRORENGINE_PASSWORD_HASH` is missing: until it is set, scripts with the API token are refused too. See [Configuration](configuration.md#sign-in) and restart ErrorEngine.
 - After 5 wrong passwords in a row from the same address, that address waits a minute. Behind a reverse proxy without `ERRORENGINE_TRUSTED_PROXY`, the wait applies to everyone.
 - With `ERRORENGINE_HTTPS=true`, open ErrorEngine with `https://`.
 
@@ -77,7 +77,7 @@ Set `TIMEZONE` (e.g. `Europe/Rome`) in `.env` and restart.
 
 ### How do I back up?
 
-Stop ErrorEngine and copy `instance/errorengine.db` (with the `-wal` and `-shm` files if present) and `.env`.
+Stop ErrorEngine and copy the database (with the `-wal` and `-shm` files if present) and `.env`, in two copies: see [Maintenance](configuration.md#maintenance).
 
 ### Where are the logs?
 
@@ -98,7 +98,7 @@ Better not. It has a single-user login, but keep it on the internal network or b
 
 ### Are database passwords encrypted?
 
-Not yet (planned for v2.5): they are stored in plain text in the internal database. Protect the `instance/` folder.
+Yes, with `ERRORENGINE_ENCRYPTION_KEY`, which is in `.env`: the passwords of the connections and the secrets of the HTTP sources and of the channels. The database can then be kept apart from the instance, see [Saved passwords and tokens](configuration.md#saved-passwords-and-tokens).
 
 ### What permissions does the database user need?
 

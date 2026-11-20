@@ -86,7 +86,7 @@ def test_the_token_of_the_page_is_accepted_and_not_from_another_site(csrf_app, c
 def test_without_a_session_the_answer_sets_no_cookie(csrf_app):
     """A page of another site posting to /login: the browser does not send the cookie (SameSite=Lax), and a new
     one in the answer would replace it, signing the user out."""
-    csrf_app.config.update(LOGIN_DISABLED=False, LOGIN_USERNAME='admin', SECRET_KEY='k' * 40,
+    csrf_app.config.update(LOGIN_DISABLED=False, LOGIN_USERNAME='admin',
                            LOGIN_PASSWORD_HASH=generate_password_hash('secret', method='pbkdf2:sha256:1000'))
     client = csrf_app.test_client()
     refused = client.post('/login', data={'username': 'admin', 'password': 'secret'})
@@ -141,15 +141,14 @@ def test_the_requests_of_app_js_carry_the_token():
 
 def test_scripts_with_the_api_token_do_not_need_it(csrf_app, client, sample_query):
     csrf_app.config.update(LOGIN_DISABLED=False, API_TOKEN='t' * 40, LOGIN_USERNAME='admin',
-                           LOGIN_PASSWORD_HASH=generate_password_hash('secret', method='pbkdf2:sha256:1000'),
-                           SECRET_KEY='k' * 40)
+                           LOGIN_PASSWORD_HASH=generate_password_hash('secret', method='pbkdf2:sha256:1000'))
     url = f'/api/queries/{sample_query.id}/toggle'
     assert client.post(url, headers={'Authorization': 'Bearer ' + 't' * 40}).status_code == 200
     assert client.post(url, headers={'Authorization': 'Bearer wrong'}).status_code == 401
 
 
 def test_the_login_needs_the_token_and_gets_a_new_one(csrf_app, client):
-    csrf_app.config.update(LOGIN_DISABLED=False, LOGIN_USERNAME='admin', SECRET_KEY='k' * 40,
+    csrf_app.config.update(LOGIN_DISABLED=False, LOGIN_USERNAME='admin',
                            LOGIN_PASSWORD_HASH=generate_password_hash('secret', method='pbkdf2:sha256:1000'))
     credentials = {'username': 'admin', 'password': 'secret'}
     refused = client.post('/login', data=credentials, headers={'Referer': 'http://localhost/login'})

@@ -114,7 +114,8 @@
                         <div class="form-group">
                             <label for="password" class="form-label">
                                 Password
-                                {% if editing %}<span class="text-muted">(leave empty to keep it)</span>{% endif %}
+                                {% if password_hint == 'typed' %}<span class="text-muted">(type it again)</span>
+                                {% elif password_hint == 'saved' %}<span class="text-muted">(saved: leave empty to keep it)</span>{% endif %}
                             </label>
                             <input type="password" 
                                    class="form-control" 

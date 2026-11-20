@@ -10,9 +10,8 @@ Single-user login, configured in .env:
                                 the requests a page makes by itself do not count
 
 Every page and API requires login, except the login page, static files
-and /api/health (for external checks). Until the password hash and a SECRET_KEY
-other than the example one are set, nobody can open the interface; the scheduler
-keeps running. Without any SECRET_KEY, serve.py does not start at all.
+and /api/health (for external checks). Until the password hash is set, nobody can
+open the interface; the scheduler keeps running.
 Changing the password or the username ends the open sessions; so do signing out, in every
 browser, and a restart.
 
@@ -33,8 +32,6 @@ from flask import (Blueprint, current_app, flash, has_request_context, jsonify, 
                    render_template, request, session, url_for)
 from werkzeug.security import check_password_hash
 
-from config import INSECURE_SECRET_KEYS
-
 logger = logging.getLogger(__name__)
 
 auth_bp = Blueprint('auth', __name__)
@@ -43,8 +40,8 @@ auth_bp = Blueprint('auth', __name__)
 PUBLIC_ENDPOINTS = {'auth.login', 'static', 'api.api_health'}
 # Methods of the requests that change something: they need the CSRF token
 UNSAFE_METHODS = {'POST', 'PUT', 'PATCH', 'DELETE'}
-# SECRET_KEY and the API token: shorter ones are too easy to guess
-MIN_KEY_LENGTH = 32
+# The API token: a shorter one is too easy to guess
+MIN_TOKEN_LENGTH = 32
 # After LOGIN_ATTEMPTS wrong passwords, an address waits LOGIN_BLOCK_SECONDS before the next try; after
 # LOGIN_FORGET_SECONDS without wrong passwords it starts again from zero. Short waits: without
 # ERRORENGINE_TRUSTED_PROXY every attempt seems to come from the reverse proxy, the administrator's included
@@ -91,19 +88,15 @@ def init_auth(app):
             logger.warning(f"Login not configured. {problem} "
                            "Until it is fixed, nobody can open the interface.")
     token = app.config.get('API_TOKEN')
-    if token and len(token) < MIN_KEY_LENGTH:
-        logger.warning(f"ERRORENGINE_API_TOKEN is shorter than {MIN_KEY_LENGTH} characters: scripts that use it "
-                       "are refused. Generate a longer one, as for SECRET_KEY")
+    if token and len(token) < MIN_TOKEN_LENGTH:
+        logger.warning(f"ERRORENGINE_API_TOKEN is shorter than {MIN_TOKEN_LENGTH} characters: scripts that use "
+                       "it are refused. Generate a longer one with the command in docs/configuration.md (Sign-in)")
 
 
 def _configuration_problem(config) -> str:
     """What is missing to use the login (empty string when everything is fine)."""
     if not config.get('LOGIN_PASSWORD_HASH'):
         return "ERRORENGINE_PASSWORD_HASH is missing from the server's .env file."
-    if not config.get('SECRET_KEY') or config.get('SECRET_KEY') in INSECURE_SECRET_KEYS:
-        return "The SECRET_KEY in the server's .env file is missing or is the example one."
-    if len(config['SECRET_KEY']) < MIN_KEY_LENGTH:
-        return f"The SECRET_KEY in the server's .env file is shorter than {MIN_KEY_LENGTH} characters."
     return ''
 
 
@@ -130,7 +123,7 @@ def _done_by_the_user() -> bool:
 
 def _valid_api_token() -> bool:
     token = current_app.config.get('API_TOKEN')
-    if not token or len(token) < MIN_KEY_LENGTH:
+    if not token or len(token) < MIN_TOKEN_LENGTH:
         return False
     scheme, _, value = request.headers.get('Authorization', '').partition(' ')
     return scheme.lower() == 'bearer' and hmac.compare_digest(value.strip().encode(), token.encode())

@@ -5,6 +5,8 @@ import json
 import logging
 import requests
 from html import escape
+from urllib.parse import urljoin
+from data_sources import REDIRECTS
 from utils import format_local_now, get_utc_now, redact_secrets, utc_iso
 
 logger = logging.getLogger(__name__)
@@ -115,9 +117,16 @@ class NotificationService:
         """POST/PUT of a JSON; non-standard values (Decimal, dates) become text."""
         try:
             body = json.dumps(payload, default=str, ensure_ascii=False).encode('utf-8')
-            response = requests.request(method, url, data=body, headers=headers, timeout=self.timeout)
+            # Followed, a redirect would take the saved headers to the server it names
+            response = requests.request(method, url, data=body, headers=headers, timeout=self.timeout,
+                                        allow_redirects=False)
             if 200 <= response.status_code < 300:
                 return {'success': True, 'message': f'OK ({response.status_code})'}
+            if response.status_code in REDIRECTS:
+                target = redact_secrets(urljoin(url, response.headers.get('Location', '')))
+                return {'success': False, 'permanent': True,
+                        'message': f"HTTP {response.status_code}: the webhook redirects to {target}. Put that "
+                                   "address in the channel: redirects are not followed"}
             return self._http_failure(response.status_code, response.reason)
         except requests.RequestException as e:
             return {'success': False, 'message': redact_secrets(str(e))}

@@ -3,11 +3,20 @@ Models of the internal database (SQLite by default).
 """
 from datetime import datetime, time, timedelta
 from utils import get_utc_now
+from encryption import encrypt, decrypt, encrypt_fields, decrypt_fields, unreadable, UnreadableSecret
 from flask_sqlalchemy import SQLAlchemy
 import hashlib
 import json
 
 db = SQLAlchemy()
+
+# The settings the forms show, saved in clear: every other text of the settings is encrypted (encryption.py),
+# so that a field nobody listed is not left in clear. Those of an HTTP source:
+SOURCE_CLEAR = ('url', 'method', 'auth_type', 'api_key_name', 'api_key_in', 'response_path')
+# Those of a channel:
+CHANNEL_CLEAR = ('method', 'chat_id')
+# The fields of each type of channel that let anyone send to it: never sent back to the browser by its form
+CHANNEL_SECRETS = {'webhook': ('url', 'headers'), 'telegram': ('bot_token',), 'teams': ('webhook_url',)}
 
 
 class MonitoredQuery(db.Model):
@@ -124,12 +133,17 @@ class MonitoredQuery(db.Model):
         days = (d.strip() for d in self.schedule_days.split(','))
         return [int(d) for d in days if d in ('1', '2', '3', '4', '5', '6', '7')]
     
+    def stored_source_config(self) -> dict:
+        """The source settings as saved, secrets encrypted: what the form shows, without decrypting them."""
+        return json.loads(self.source_config) if self.source_config else {}
+
     def get_source_config(self):
-        """Returns the source configuration as a dict"""
-        if not self.source_config:
-            return {}
-        return json.loads(self.source_config)
-        
+        """The source settings, secrets in clear."""
+        try:
+            return decrypt_fields(self.stored_source_config(), SOURCE_CLEAR)
+        except UnreadableSecret:
+            raise unreadable('A token or header', f'the query {self.name}') from None
+
     def get_tags_list(self):
         """Returns the list of tags."""
         if not self.tags:
@@ -137,8 +151,8 @@ class MonitoredQuery(db.Model):
         return [t.strip() for t in self.tags.split(',') if t.strip()]
 
     def set_source_config(self, config):
-        """Sets the source configuration from a dict"""
-        self.source_config = json.dumps(config, ensure_ascii=False)
+        """Sets the source settings, secrets encrypted (one already encrypted stays as it is)."""
+        self.source_config = json.dumps(encrypt_fields(config, SOURCE_CLEAR), ensure_ascii=False)
 
     def connection_disabled(self) -> bool:
         """A database query whose connection is disabled: it does not run until the connection is enabled."""
@@ -304,14 +318,27 @@ class DatabaseConnection(db.Model):
     port = db.Column(db.Integer)
     database = db.Column(db.String(255))  # database name, or service_name for Oracle
     username = db.Column(db.String(100))
-    password = db.Column(db.String(255))  # TODO: encrypt
+    # Encrypted (the password property): the column keeps its name
+    _password = db.Column('password', db.Text)
     is_active = db.Column(db.Boolean, default=True)
     # Statements that change data (INSERT, UPDATE, DELETE, procedures): only where allowed
     allow_writes = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=get_utc_now)
     
     queries = db.relationship('MonitoredQuery', backref='db_connection', lazy='dynamic')
-    
+
+    @property
+    def password(self):
+        """The password in clear."""
+        try:
+            return decrypt(self._password)
+        except UnreadableSecret:
+            raise unreadable('The password', f'the connection {self.name}') from None
+
+    @password.setter
+    def password(self, value):
+        self._password = encrypt(value)
+
     def get_driver(self):
         """Returns the driver for this DB type, with the configured timeouts."""
         from db_drivers import get_driver, driver_timeouts
@@ -319,10 +346,11 @@ class DatabaseConnection(db.Model):
 
     def test_connection(self) -> dict:
         """Tests the connection."""
-        driver = self.get_driver()
-        return driver.test_connection(
-            self.host, self.port, self.database, self.username, self.password
-        )
+        try:
+            password = self.password
+        except UnreadableSecret as e:
+            return {'status': 'error', 'message': str(e)}
+        return self.get_driver().test_connection(self.host, self.port, self.database, self.username, password)
 
     def write_refusal(self, sql: str) -> str:
         """Why this connection does not run the statement, one that can change data; empty when it does."""
@@ -381,13 +409,20 @@ class NotificationChannel(db.Model):
     last_sent_at = db.Column(db.DateTime)
     last_error = db.Column(db.Text)
     
-    def get_config(self):
-        import json
+    def stored_config(self) -> dict:
+        """The settings as saved, secrets encrypted: what the form shows, without decrypting them."""
         return json.loads(self.config) if self.config else {}
-    
+
+    def get_config(self):
+        """The settings, secrets in clear."""
+        try:
+            return decrypt_fields(self.stored_config(), CHANNEL_CLEAR)
+        except UnreadableSecret:
+            raise unreadable('An address, token or header', f'the channel {self.name}') from None
+
     def set_config(self, config_dict):
-        import json
-        self.config = json.dumps(config_dict, ensure_ascii=False)
+        """Sets the settings, secrets encrypted (one already encrypted stays as it is)."""
+        self.config = json.dumps(encrypt_fields(config_dict, CHANNEL_CLEAR), ensure_ascii=False)
     
     def __repr__(self):
         return f'<NotificationChannel {self.name} ({self.channel_type})>'

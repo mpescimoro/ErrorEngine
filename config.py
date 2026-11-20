@@ -3,19 +3,14 @@ ErrorEngine application configuration
 """
 import logging
 import os
+import secrets
 from datetime import timedelta
 
 logger = logging.getLogger(__name__)
 
-# Key used only when SECRET_KEY is missing
-DEFAULT_SECRET_KEY = 'secret-key-to-change-in-production'
-# Publicly known keys (defaults and the .env.example placeholder): with these, login stays blocked
-INSECURE_SECRET_KEYS = {DEFAULT_SECRET_KEY, 'chiave-segreta-da-cambiare-in-produzione',
-                        'change-this-to-a-random-string'}
-
 # Settings of older versions, no longer read: still in an .env, they get a warning at startup
 # (retired_settings_warnings) instead of being ignored without a word
-RETIRED_SETTINGS = ('MAIL_USE_TLS', 'NOTIFY_RETRY_HOURS')
+RETIRED_SETTINGS = ('MAIL_USE_TLS', 'NOTIFY_RETRY_HOURS', 'SECRET_KEY')
 
 
 def whole_number(name: str, default: int, between: tuple = None) -> int:
@@ -90,19 +85,24 @@ def retired_settings_warnings() -> list:
         warnings.append("NOTIFY_RETRY_HOURS is no longer used: a notification that cannot be delivered gets "
                         "NOTIFY_ATTEMPTS attempts (5 by default), then it is shown as not delivered. "
                         "Remove it from .env")
+    if (os.environ.get('SECRET_KEY') or '').strip():
+        warnings.append("SECRET_KEY is no longer used: ErrorEngine makes a new one at every start. "
+                        "Remove it from .env")
     return warnings
 
 
 class Config:
     """Base configuration."""
     
-    # Flask
-    SECRET_KEY = os.environ.get('SECRET_KEY') or DEFAULT_SECRET_KEY
+    # Flask: signs the session cookie. New at every start, as a restart ends the sessions anyway (auth.py)
+    SECRET_KEY = secrets.token_hex(32)
 
     # Login (single user, see auth.py)
     LOGIN_USERNAME = os.environ.get('ERRORENGINE_USER') or 'admin'
     LOGIN_PASSWORD_HASH = os.environ.get('ERRORENGINE_PASSWORD_HASH', '')
     API_TOKEN = os.environ.get('ERRORENGINE_API_TOKEN', '')  # optional, for scripts
+    # Encrypts the passwords and tokens saved in the database (encryption.py); required
+    ENCRYPTION_KEY = os.environ.get('ERRORENGINE_ENCRYPTION_KEY', '')
     LOGIN_DISABLED = False
     CSRF_DISABLED = False
     # The session expires after N hours of inactivity
@@ -185,14 +185,6 @@ class DevelopmentConfig(Config):
 class ProductionConfig(Config):
     """Production configuration."""
     DEBUG = False
-    
-    # In production SECRET_KEY must come from the environment
-    @property
-    def SECRET_KEY(self):
-        key = os.environ.get('SECRET_KEY')
-        if not key:
-            raise ValueError("SECRET_KEY must be set in production")
-        return key
 
 
 class TestingConfig(Config):
@@ -202,6 +194,8 @@ class TestingConfig(Config):
     
     # In-memory database for fast tests (the scheduler does not start with TESTING)
     SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
+    # A key for the tests only
+    ENCRYPTION_KEY = 'wwS1YF4NDS-lYLzKPezGSYzMoD7ZvoQbkJkUE50mcKk='
 
     # Login disabled in tests (tests/test_auth.py turns it back on)
     LOGIN_DISABLED = True

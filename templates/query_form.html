@@ -184,8 +184,6 @@
                     HTTP/API configuration
                 </div>
                 <div class="card-body">
-                    {% set source_config = query.get_source_config() if query else {} %}
-                    
                     <div class="grid grid-cols-2 gap-md">
                         <div class="form-group" style="grid-column: span 2;">
                             <label for="source_url" class="form-label">URL</label>
@@ -195,6 +193,7 @@
                                    name="source_url"
                                    value="{{ source_config.get('url', '') }}"
                                    placeholder="https://api.example.com/errors">
+                            <div class="form-text">Shown in this form: a key goes in Token/Key or in the headers, not in the URL.</div>
                         </div>
                         
                         <div class="form-group">
@@ -215,25 +214,37 @@
                         </div>
                         
                         <div class="form-group" style="grid-column: span 2;">
-                            <label for="source_auth_token" class="form-label">Token/Key</label>
-                            <input type="password" 
-                                   class="form-control" 
-                                   id="source_auth_token" 
+                            <label for="source_auth_token" class="form-label">
+                                Token/Key
+                                {% if token_hint == 'typed' %}<span class="text-muted">(type it again)</span>
+                                {% elif token_hint == 'saved' %}<span class="text-muted">(saved: leave empty to keep it)</span>{% endif %}
+                            </label>
+                            <input type="password"
+                                   class="form-control"
+                                   id="source_auth_token"
                                    name="source_auth_token"
-                                   value="{{ source_config.get('auth_token', '') }}"
-                                   autocomplete="off">
-                            <div class="form-text">Bearer Token: sent as <code>Authorization: Bearer …</code>. API Key: sent in the header below.</div>
+                                   autocomplete="new-password">
+                            <div class="form-text">Bearer Token: sent as <code>Authorization: Bearer …</code>. API Key: sent as below.{% if token_hint == 'saved' %} Authentication None removes the saved one.{% endif %}</div>
                         </div>
 
-                        <div class="form-group" style="grid-column: span 2;">
-                            <label for="source_api_key_name" class="form-label">API key header</label>
+                        <div class="form-group">
+                            <label for="source_api_key_name" class="form-label">API key name</label>
                             <input type="text"
                                    class="form-control"
                                    id="source_api_key_name"
                                    name="source_api_key_name"
                                    value="{{ source_config.get('api_key_name', '') }}"
                                    placeholder="X-API-Key">
-                            <div class="form-text">Name of the header that carries the API key; empty: <code>X-API-Key</code>.</div>
+                            <div class="form-text">Of the header or of the query string parameter; empty: <code>X-API-Key</code>.</div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="source_api_key_in" class="form-label">API key in</label>
+                            <select class="form-control form-select" id="source_api_key_in" name="source_api_key_in">
+                                <option value="">Header</option>
+                                <option value="query" {{ 'selected' if source_config.get('api_key_in') == 'query' }}>Query string</option>
+                            </select>
+                            <div class="form-text">Query string: added to the URL when the request is sent, saved encrypted as the token.</div>
                         </div>
 
                         <div class="form-group" style="grid-column: span 2;">
@@ -242,8 +253,8 @@
                                       id="source_headers"
                                       name="source_headers"
                                       rows="2"
-                                      placeholder='{"Accept": "application/json"}'>{{ source_config.headers if source_config.headers is string else (source_config.headers|tojson if source_config.headers else '') }}</textarea>
-                            <div class="form-text">Other headers to send, as a JSON object. Optional.</div>
+                                      placeholder='{"Accept": "application/json"}'>{{ headers }}</textarea>
+                            <div class="form-text">Other headers to send, as a JSON object. Optional. The saved values are shown as <code>(saved)</code>: left so, they stay.</div>
                         </div>
                         
                         <div class="form-group" style="grid-column: span 2;">

@@ -5,10 +5,14 @@ Supports databases (through db_drivers) and HTTP/REST.
 import logging
 import requests
 from abc import ABC, abstractmethod
+from urllib.parse import urljoin
 from flask import current_app
 from utils import redact_secrets
 
 logger = logging.getLogger(__name__)
+
+# The answers that send the request elsewhere: HTTP sources and webhooks do not follow them
+REDIRECTS = (301, 302, 303, 307, 308)
 
 
 def _default_http_timeout() -> int:
@@ -51,6 +55,7 @@ class HttpDataSource(DataSource):
         
         # Authentication
         auth = None
+        params = body if method == 'GET' and body else None
         auth_type = config.get('auth_type')
         if auth_type == 'basic':
             auth = (config.get('auth_username', ''), config.get('auth_password', ''))
@@ -61,9 +66,8 @@ class HttpDataSource(DataSource):
             # The query form saves the key in auth_token
             key_value = config.get('api_key_value') or config.get('auth_token', '')
             if config.get('api_key_in') == 'query':
-                # Add as a query parameter
-                separator = '&' if '?' in url else '?'
-                url = f"{url}{separator}{key_name}={key_value}"
+                # A parameter of the request, encoded by requests: not part of the saved URL, shown by the form
+                params = {**(params if isinstance(params, dict) else {}), key_name: key_value}
             else:
                 # Default: header
                 headers[key_name] = key_value
@@ -74,10 +78,16 @@ class HttpDataSource(DataSource):
                 url=url,
                 headers=headers,
                 json=body if method in ('POST', 'PUT', 'PATCH') else None,
-                params=body if method == 'GET' and body else None,
+                params=params,
                 auth=auth,
-                timeout=timeout
+                timeout=timeout,
+                # Followed, a redirect would take the saved token and headers to the server it names
+                allow_redirects=False,
             )
+            if response.status_code in REDIRECTS:
+                target = redact_secrets(urljoin(response.url or url, response.headers.get('Location', '')))
+                raise RuntimeError(f"HTTP {response.status_code}: the server redirects to {target}. Put that "
+                                   "address in the URL: redirects are not followed")
             response.raise_for_status()
             
             data = response.json()
@@ -181,7 +191,11 @@ def execute_query_source(query) -> tuple:
 def test_query_source(query) -> dict:
     """Tests the source of a query; returns {'success', 'message', 'details'}."""
     if query.source_type == 'http':
-        return DataSourceFactory.get_source('http').test(query.get_source_config())
+        try:
+            config = query.get_source_config()
+        except ValueError as e:   # a token saved with another key
+            return {'success': False, 'message': str(e)}
+        return DataSourceFactory.get_source('http').test(config)
     try:
         columns, rows = _connection(query).execute_query(query.sql_query)
     except Exception as e:
