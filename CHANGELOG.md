@@ -1,6 +1,16 @@
 # Changelog
 
-## Unreleased
+## 2.5.0
+
+**Upgrading from 2.4.2**
+- Before the first start, make a backup of the database: it is the way back to 2.4.2, and it holds the passwords in clear, so keep it away from the instance and delete it once 2.5.0 works. The first start encrypts them and rebuilds the database file: it needs free space of about twice the database (see Saved passwords and tokens in docs/configuration.md)
+- Add `ERRORENGINE_ENCRYPTION_KEY` to `.env`, and save a copy of it apart: without it ErrorEngine does not start, and the log gives the command that generates it
+- Remove `SECRET_KEY` from `.env`: it is no longer used
+- Sign in again after the upgrade, and after every restart
+- Scripts with the API token: reads, and the actions of the API reference; the other requests get 403
+- HTTP sources and webhooks that answer with a redirect fail, and name the address to put in their URL
+- On Linux and macOS the files ErrorEngine creates from now on, logs included, can be read only by its account: give access to whoever else reads them
+- A connection with a query that changes data gets **Allow statements that change data**, and the log names it: check that it is meant
 
 **Added**
 - `ERRORENGINE_HTTPS`: behind a reverse proxy with HTTPS, the session cookie travels only over HTTPS, and the sign-in page says so when it is opened with `http://`. HSTS is up to the proxy: it covers every port of the host name
@@ -17,12 +27,12 @@
 - On Linux and macOS the files ErrorEngine creates, database and logs included, can be read only by the account that runs it; the log names `.env` and the database files when other users can read them
 - `ERRORENGINE_API_TOKEN`, when it is set, needs at least 32 characters: a shorter one is refused, and the log says so at startup. The command in the docs generates 64
 - Deprecated SQLAlchemy calls replaced; the tests now fail on any warning, those of Python 3.13 about connections left open included
-- The check for statements that change data reads the whole query, no longer its first word only: `WITH ... DELETE`, `SELECT ... INTO` and a second statement after `;` count too
+- The check for statements that change data reads the whole query, no longer its first word only: `WITH ... DELETE`, `SELECT ... INTO` and a second statement after `;` count too, `SET NOCOUNT` and `SET TRANSACTION ISOLATION LEVEL` before a SELECT do not
 - **Sign out** ends the session in every browser, copies of the cookie included, and a restart of ErrorEngine ends the open sessions: after one, sign in again
 - `SECRET_KEY` is no longer used: the key that signs the session cookie is new at every start, as a restart ends the sessions anyway. If it is still in `.env`, the log says so at startup
 
 **Fixed**
-- Cross-site request forgery (CSRF): a page of the same host on another port, or of another host of the same domain, could make a signed-in browser change or delete queries, connections, channels and logs. The forms and the requests of the pages that change something now carry a token of the session, checked by the server; a request the browser marks as coming from another site is refused even with it. Scripts with the API token are unchanged
+- Cross-site request forgery (CSRF): a page of the same host on another port, or of another host of the same domain, could make a signed-in browser change or delete queries, connections, channels and logs. The forms and the requests of the pages that change something now carry a token of the session, checked by the server; a request the browser marks as coming from another site is refused even with it. Scripts with the API token do not need it
 - Clickjacking: another site could show ErrorEngine in a frame and lead the user to click its buttons. The responses now forbid frames, tell the browser not to guess the type of a file and do not give the page address to other sites. `.js` and `.css` keep their type even where the Windows registry says `text/plain`
 - The responses no longer name the web server (`Server: waitress`)
 - After a wrong password, the request waited a second holding one of the threads of the server, and the attempts had no limit. Now, after 5 wrong passwords in a row from the same address, even sent together, that address waits a minute before the next try, and no thread waits. Behind a reverse proxy, set `ERRORENGINE_TRUSTED_PROXY`: otherwise every attempt seems to come from the proxy, and the wait applies to everyone

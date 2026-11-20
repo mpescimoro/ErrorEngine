@@ -121,9 +121,9 @@ Graph takes the email without saying which addresses do not exist: those come ba
 | MySQL / MariaDB | `PyMySQL` | |
 | SQL Server | `pymssql` | |
 | IBM i (AS/400) | `JPype1` + JT400 | Needs Java 8+ and `lib/jt400.jar`, see [IBM i driver](ibmi-driver.md) |
-| AS/400 (DB2) | `ibm_db` | DRDA: needs a DB2 Connect license. Port 446 unless you set another |
+| AS/400 (DB2) | `ibm_db` | DRDA: needs a DB2 Connect license. Port 446 unless you set another. A password containing `;` does not work: use **IBM i (AS/400)** |
 
-Use read-only database users: ErrorEngine runs the query you write. Without **Allow statements that change data** in the connection, a query with INSERT, UPDATE, DELETE, a procedure with EXEC or CALL, and the like is refused; with it, each save of the query asks to confirm. The check reads the text of the query: it stops mistakes, not someone set on getting around it (a function that writes, called from a SELECT, or quoting particular to one database). A database user that can only read stops both.
+Use read-only database users: ErrorEngine runs the query you write. Without **Allow statements that change data** in the connection, a query with INSERT, UPDATE, DELETE, a procedure with EXEC or CALL, and the like is refused; with it, each save of the query asks to confirm. `SET NOCOUNT` and `SET TRANSACTION ISOLATION LEVEL` before a SELECT, as SQL Server queries often start, do not count. The check reads the text of the query: it stops mistakes, not someone set on getting around it (a function that writes, called from a SELECT, or quoting particular to one database). A database user that can only read stops both.
 
 ## Running in production
 

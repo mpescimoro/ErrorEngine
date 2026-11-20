@@ -47,16 +47,22 @@ _SQL_NOT_CODE = re.compile(r"'(?:[^']|'')*'|\"[^\"]*\"|\[[^\]]*\]|`[^`]*`|/\*.*?
 # Wherever they are: a CTE with DELETE, SELECT ... INTO, a procedure that can write
 _WRITE_WORDS = re.compile(r'\b(INSERT|UPDATE|DELETE|MERGE|UPSERT|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|'
                           r'RENAME|EXEC|EXECUTE|CALL|INTO)\b')
+# Settings of the session that SQL Server queries often start with, also without ; after them
+_READ_SETTINGS = re.compile(r'\s*SET\s+(?:NOCOUNT\s+(?:ON|OFF)|TRANSACTION\s+ISOLATION\s+LEVEL\s+'
+                            r'(?:READ\s+UNCOMMITTED|READ\s+COMMITTED|REPEATABLE\s+READ|SNAPSHOT|SERIALIZABLE))\b')
 
 
 def write_statement_keyword(sql: str):
     """
     The word that lets the query change data (e.g. 'DELETE'); None for a read query. Every statement
-    must start with SELECT or WITH and contain none of those words. It reads the text: a function that
-    writes, called from a SELECT, still gets through, a database user that can only read does not.
+    must start with SELECT or WITH, after SET NOCOUNT and SET TRANSACTION ISOLATION LEVEL, and contain
+    none of those words. It reads the text: a function that writes, called from a SELECT, still gets
+    through, a database user that can only read does not.
     """
     text = _SQL_NOT_CODE.sub(' ', sql or '').upper()
     for statement in text.split(';'):
+        while (setting := _READ_SETTINGS.match(statement)):
+            statement = statement[setting.end():]
         first = re.match(r'[\s(]*([A-Z]+)', statement)
         if not first:
             continue

@@ -175,12 +175,18 @@ class TestTestQuery:
     def test_keyword_check_reads_the_whole_statement(self):
         reads = ['select 1', '  WITH x AS (SELECT 1) SELECT * FROM x', "SELECT 'DELETE' AS a, \"UPDATE\" FROM t",
                  "SELECT REPLACE(name, 'a', 'b'), last_update FROM t", 'SELECT 1; -- DROP TABLE t',
-                 "SELECT '--', 1 FROM t", 'SELECT 1;', '(SELECT 1) UNION (SELECT 2)']
+                 "SELECT '--', 1 FROM t", 'SELECT 1;', '(SELECT 1) UNION (SELECT 2)',
+                 # The settings SQL Server queries start with, with or without ;
+                 'SET NOCOUNT ON; SELECT 1', 'set nocount on\nselect 1', 'SET NOCOUNT ON',
+                 'SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED\nSELECT 1',
+                 'SET TRANSACTION ISOLATION LEVEL SNAPSHOT SET NOCOUNT OFF; WITH x AS (SELECT 1) SELECT * FROM x']
         assert [write_statement_keyword(sql) for sql in reads] == [None] * len(reads)
         writes = {'/* note */ -- line\n delete from orders': 'DELETE', 'EXEC proc': 'EXEC', 'CALL proc()': 'CALL',
                   'WITH gone AS (DELETE FROM t RETURNING *) SELECT * FROM gone': 'DELETE',
                   'SELECT 1; DROP TABLE orders': 'DROP', 'SELECT * INTO copy FROM orders': 'INTO',
-                  "SELECT '--', 1; DELETE FROM t": 'DELETE', 'SET NOCOUNT ON; SELECT 1': 'SET',
+                  "SELECT '--', 1; DELETE FROM t": 'DELETE', 'SET NOCOUNT ON DELETE FROM t': 'DELETE',
+                  'SET NOCOUNT ON; UPDATE t SET a = 1': 'UPDATE', 'SET ROWCOUNT 10; SELECT 1': 'SET',
+                  'SET NOCOUNT ONE; SELECT 1': 'SET', 'SET @since = 1; SELECT 1': 'SET',
                   'REPLACE INTO t VALUES (1)': 'REPLACE', 'SELECT * FROM t FOR UPDATE': 'UPDATE'}
         assert {sql: write_statement_keyword(sql) for sql in writes} == writes
 
