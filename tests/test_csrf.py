@@ -142,7 +142,7 @@ def test_the_requests_of_app_js_carry_the_token():
 def test_scripts_with_the_api_token_do_not_need_it(csrf_app, client, sample_query):
     csrf_app.config.update(LOGIN_DISABLED=False, API_TOKEN='t' * 40, LOGIN_USERNAME='admin',
                            LOGIN_PASSWORD_HASH=generate_password_hash('secret', method='pbkdf2:sha256:1000'))
-    url = f'/api/queries/{sample_query.id}/toggle'
+    url = f'/api/queries/{sample_query.id}/routing/test'
     assert client.post(url, headers={'Authorization': 'Bearer ' + 't' * 40}).status_code == 200
     assert client.post(url, headers={'Authorization': 'Bearer wrong'}).status_code == 401
 

@@ -77,6 +77,15 @@ def test_api_reference_lists_existing_endpoints(app):
         assert method in rules.get(path, set()), f'{method} {path}'
 
 
+def test_the_api_reference_lists_what_the_token_can_change(app):
+    from auth import TOKEN_ACTIONS
+    reference = (ROOT / 'docs' / 'api-reference.md').read_text(encoding='utf-8')
+    documented = set(re.findall(r'^\| (POST|PUT|DELETE) \| `([^`?]+)', reference, re.M))
+    actions = {(method, re.sub(r'<(?:\w+:)?\w+>', '{id}', rule.rule)) for rule in app.url_map.iter_rules()
+               if rule.endpoint in TOKEN_ACTIONS for method in rule.methods - {'HEAD', 'OPTIONS'}}
+    assert len(documented) == len(TOKEN_ACTIONS) and documented == actions
+
+
 def test_routing_operators_match_the_code():
     from routing_service import OPERATORS
     doc = (ROOT / 'docs' / 'routing-rules.md').read_text(encoding='utf-8')

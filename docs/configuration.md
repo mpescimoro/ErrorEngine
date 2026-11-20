@@ -57,7 +57,7 @@ A session ends after `ERRORENGINE_SESSION_HOURS` without opening a page or chang
 
 After 5 wrong passwords in a row from the same address, that address waits a minute before the next try. Behind a reverse proxy, set `ERRORENGINE_TRUSTED_PROXY`: otherwise every attempt seems to come from the proxy, and the wait applies to everyone.
 
-Scripts call the API with `Authorization: Bearer <ERRORENGINE_API_TOKEN>`, a random token of at least 32 characters, for example from `venv/bin/python -c "import secrets; print(secrets.token_hex(32))"`, which gives 64: a shorter one is refused, and the log says so at startup. Only `/api/health` needs no login.
+Scripts call the API with `Authorization: Bearer <ERRORENGINE_API_TOKEN>`, a random token of at least 32 characters, for example from `venv/bin/python -c "import secrets; print(secrets.token_hex(32))"`, which gives 64: a shorter one is refused, and the log says so at startup. The token can read, and change only what the [API reference](api-reference.md) lists: running and testing what is saved, resolving errors. Only `/api/health` needs no login.
 
 ## Saved passwords and tokens
 

@@ -5,7 +5,8 @@ Single-user login, configured in .env:
     ERRORENGINE_PASSWORD_HASH   password hash, generated with:
         venv\Scripts\python.exe -c "import getpass; from werkzeug.security import generate_password_hash as h; print(h(getpass.getpass('Password: ')))"
     ERRORENGINE_API_TOKEN       optional: to call the APIs from scripts, with the header
-                                "Authorization: Bearer <token>"
+                                "Authorization: Bearer <token>". It reads, and changes only
+                                what docs/api-reference.md lists (TOKEN_ACTIONS)
     ERRORENGINE_SESSION_HOURS   hours of inactivity after which the session expires (default 12):
                                 the requests a page makes by itself do not count
 
@@ -40,6 +41,10 @@ auth_bp = Blueprint('auth', __name__)
 PUBLIC_ENDPOINTS = {'auth.login', 'static', 'api.api_health'}
 # Methods of the requests that change something: they need the CSRF token
 UNSAFE_METHODS = {'POST', 'PUT', 'PATCH', 'DELETE'}
+# What the API token can change, the actions in docs/api-reference.md: it runs and tests what is saved and
+# resolves errors. The other requests that change something are those of the pages: only with the session
+TOKEN_ACTIONS = {'api.api_run_query', 'api.api_test_query', 'api.api_test_routing', 'api.api_resolve_error',
+                 'api.api_connection_test', 'api.api_channel_test'}
 # The API token: a shorter one is too easy to guess
 MIN_TOKEN_LENGTH = 32
 # After LOGIN_ATTEMPTS wrong passwords, an address waits LOGIN_BLOCK_SECONDS before the next try; after
@@ -49,8 +54,8 @@ LOGIN_ATTEMPTS = 5
 LOGIN_BLOCK_SECONDS = 60
 LOGIN_FORGET_SECONDS = 15 * 60
 _failed_logins_lock = threading.Lock()
-# Anyone can send requests the CSRF check refuses: in the log the first one at once, then one line at most
-# every REFUSALS_LOG_SECONDS, with how many came in between
+# Requests refused by the CSRF check, which anyone can send, or to the API token: in the log the first one at
+# once, then one line at most every REFUSALS_LOG_SECONDS, with how many came in between
 REFUSALS_LOG_SECONDS = 60
 _refusals_lock = threading.Lock()
 # Set by app.js just before it reloads a live page by itself: that reload is not the user doing something
@@ -65,7 +70,7 @@ def init_auth(app):
     app.jinja_env.globals['csrf_token'] = csrf_token
     # Wrong passwords by address: (how many in a row, time of the last one). In memory, a single process
     app.extensions['failed_logins'] = {}
-    app.extensions['csrf_refusals'] = {'logged': None, 'unlogged': 0}
+    app.extensions['refusals'] = {'logged': None, 'unlogged': 0}
     # Part of every session: signing out draws a new one and every copy of a cookie stops working. In
     # memory, new at every start: a restart ends the sessions too, and a copy never comes back
     app.extensions['session_generation'] = secrets.token_hex(8)
@@ -147,6 +152,10 @@ def _require_login():
         return None
     if request.path.startswith('/api/'):
         if not _configuration_problem(current_app.config) and _valid_api_token():
+            if request.method in UNSAFE_METHODS and request.endpoint not in TOKEN_ACTIONS:
+                _log_refusal('the API token only reads and runs the actions listed in docs/api-reference.md')
+                return jsonify({'error': 'forbidden', 'message': 'The API token only reads and runs the actions '
+                                                               'listed in docs/api-reference.md'}), 403
             return None
         return jsonify({'error': 'unauthorized', 'message': 'Login required'}), 401
     return redirect(url_for('auth.login', next=request.full_path.rstrip('?')))
@@ -200,7 +209,7 @@ def _check_csrf():
 
 def _log_refusal(reason: str):
     """A refused request in the log, unless one was written less than REFUSALS_LOG_SECONDS ago: then counted."""
-    state, now = current_app.extensions['csrf_refusals'], time.monotonic()
+    state, now = current_app.extensions['refusals'], time.monotonic()
     with _refusals_lock:
         if state['logged'] is not None and now - state['logged'] < REFUSALS_LOG_SECONDS:
             state['unlogged'] += 1

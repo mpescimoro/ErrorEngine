@@ -1,6 +1,7 @@
 """
 Login tests (auth.py): protected pages and APIs, login/logout, token for scripts.
 """
+import re
 import pytest
 from datetime import timedelta
 from pathlib import Path
@@ -311,6 +312,32 @@ class TestTokenApi:
         auth_app.config['API_TOKEN'] = TOKEN
         headers = {'Authorization': 'Bearer other'}
         assert client.get('/api/queries', headers=headers).status_code == 401
+
+    def test_the_token_reads_and_runs_only_the_actions_of_the_api_reference(self, client, auth_app, caplog):
+        """Every route of the API, those added later included: changing the configuration, SQL or servers typed
+        in a form, test emails and the cleanup need the session."""
+        auth_app.config['API_TOKEN'] = TOKEN
+        headers = {'Authorization': f'Bearer {TOKEN}'}
+        refused = set()
+        for rule in auth_app.url_map.iter_rules():
+            if rule.rule.startswith('/api/'):
+                url = re.sub(r'<(?:\w+:)?\w+>', '999999', rule.rule)
+                for method in rule.methods - {'HEAD', 'OPTIONS'}:
+                    if client.open(url, method=method, headers=headers).status_code == 403:
+                        refused.add(rule.endpoint)
+        assert refused == {'api.api_toggle_query', 'api.api_create_routing_rule', 'api.api_update_routing_rule',
+                           'api.api_delete_routing_rule', 'api.api_connection_test_new',
+                           'api.api_connection_test_query', 'api.api_test_email', 'api.api_sample_email',
+                           'api.api_run_cleanup'}
+        assert 'the API token only reads and runs the actions listed in docs/api-reference.md' in caplog.text
+
+    def test_the_session_keeps_what_the_token_cannot_do(self, client, auth_app, sample_query):
+        auth_app.config['API_TOKEN'] = TOKEN
+        url = f'/api/queries/{sample_query.id}/toggle'
+        answer = client.post(url, headers={'Authorization': f'Bearer {TOKEN}'})
+        assert answer.status_code == 403 and answer.get_json()['error'] == 'forbidden'
+        login(client)
+        assert client.post(url).get_json()['is_active'] is False
 
     def test_token_does_not_open_pages(self, client, auth_app):
         auth_app.config['API_TOKEN'] = TOKEN

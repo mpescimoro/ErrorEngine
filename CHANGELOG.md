@@ -13,6 +13,7 @@
 **Changed**
 - The forms no longer show the saved passwords, tokens, channel addresses and header values: left empty they stay, for the same server only, `(saved)` keeps a header, and Authentication **None** removes the token of an HTTP source. A form that comes back with a problem asks to type them again
 - HTTP sources and webhooks no longer follow redirects, which would take the saved token and headers to another server: a redirect is an error that names the address to put in the URL
+- The API token can read, and send only the requests of the API reference that change something: run or test a query, test its routing, a connection or a channel, resolve an error. Enabling a query, routing rules, SQL or a server typed in a form, test emails and the cleanup need a signed-in session: the token gets 403, and the log says so
 - On Linux and macOS the files ErrorEngine creates, database and logs included, can be read only by the account that runs it; the log names `.env` and the database files when other users can read them
 - `ERRORENGINE_API_TOKEN`, when it is set, needs at least 32 characters: a shorter one is refused, and the log says so at startup. The command in the docs generates 64
 - Deprecated SQLAlchemy calls replaced; the tests now fail on any warning, those of Python 3.13 about connections left open included
