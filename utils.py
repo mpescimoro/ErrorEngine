@@ -8,6 +8,8 @@ from datetime import datetime, timezone, time, timedelta
 from urllib.parse import urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
+from requests.utils import requote_uri
+
 # Cache to avoid repeated lookups
 _cached_tz = None
 _cached_tz_name = None
@@ -131,15 +133,40 @@ def _redact_url(url: str) -> str:
     return urlunsplit((parts.scheme, netloc, path, query, '***' if parts.fragment else ''))
 
 
-def redact_secrets(text):
+def _known_texts(values) -> list:
+    """
+    Each value and, of an address, its path and query, as saved and as sent (percent-encoded): the longest first,
+    an address before its path. Under 4 characters a text holds no secret, and would mask pieces of the message.
+    """
+    texts = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        texts.add(value)
+        for form in (value, requote_uri(value)):
+            try:
+                parts = urlsplit(form)
+            except ValueError:
+                continue
+            if parts.scheme and parts.netloc:
+                texts.update((form, parts.path, parts.query))
+    return sorted((text for text in texts if len(text) >= 4), key=len, reverse=True)
+
+
+def redact_secrets(text, known=()):
     """
     Hides what may be a secret in the URLs inside a text: query string values,
     user and password, the Telegram bot token, long tokens in the path.
     The host and the rest of the path stay, so the message still says what failed.
+    known: the secrets in hand (the address, token and headers of a channel), hidden first and exactly, as the
+    guesses miss what does not look like a token: /hooks/catch/1234567/abcde12/ becomes /***.
     """
     if not text:
         return text
-    text = _URL_RE.sub(lambda m: _redact_url(m.group(0)), str(text))
+    text = str(text)
+    for secret in _known_texts(known):
+        text = text.replace(secret, '/***' if secret.startswith('/') else '***')
+    text = _URL_RE.sub(lambda m: _redact_url(m.group(0)), text)
     # Paths without the host, as in "Max retries exceeded with url: /path?key=..."
     text = re.sub(r"(url: )(/[^\s'\"]+)", lambda m: m.group(1) + _redact_url(m.group(2)), text)
     # Telegram bot token anywhere (123456789:AA...)

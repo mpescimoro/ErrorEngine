@@ -227,6 +227,29 @@ class TestSecrets:
             result = notification_service._post_telegram('123456:SECRETtokenSECRETtoken123', '42', 'hi')
         assert result['success'] is False and 'SECRET' not in result['message']
 
+    @pytest.mark.parametrize('path, secret', [('/hooks/catch/1234567/abcde12/', 'abcde12'),
+                                              ('/api/webhook/allarme_unità', 'allarme')])
+    def test_a_channel_error_does_not_show_its_address(self, app, monkeypatch, caplog, path, secret):
+        """Not even where it does not look like a token (Zapier, Home Assistant), as saved or as sent."""
+        from notification_service import notification_service
+        monkeypatch.setenv('NO_PROXY', '127.0.0.1')
+        with closing(socket.socket()) as closed:
+            closed.bind(('127.0.0.1', 0))
+            url = f'http://127.0.0.1:{closed.getsockname()[1]}{path}'
+        channel = NotificationChannel(name='Hook', channel_type='webhook', is_active=True)
+        channel.set_config({'url': url})
+        db.session.add(channel)
+        db.session.commit()
+        query = make_query(channels=[channel])
+        moved = requests.Response()
+        moved.status_code, moved.headers['Location'] = 301, url.replace('http:', 'https:')
+        with patch('notification_service.requests.request', return_value=moved):
+            redirect = notification_service.send_to_channel(channel, query, [{'ID': 1}])['message']
+        no_answer = notification_service.test_channel(channel)['message']
+        notification_service.send_system_message(query, 'query_failing', 'Failing', ['x'])
+        assert 'https://127.0.0.1' in redirect and '127.0.0.1' in no_answer and '/***' in no_answer
+        assert not [text for text in (redirect, no_answer, channel.last_error, caplog.text) if secret in text]
+
     def test_log_lines_hidden(self):
         stream = io.StringIO()
         handler = logging.StreamHandler(stream)

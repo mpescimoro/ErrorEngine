@@ -113,6 +113,7 @@ class NotificationService:
 
     def _post_json(self, url: str, payload: dict, headers: dict, method: str = 'POST') -> dict:
         """POST/PUT of a JSON; non-standard values (Decimal, dates) become text."""
+        secrets = [url, *headers.values()]
         try:
             body = json.dumps(payload, default=str, ensure_ascii=False).encode('utf-8')
             # Followed, a redirect would take the saved headers to the server it names
@@ -121,13 +122,13 @@ class NotificationService:
             if 200 <= response.status_code < 300:
                 return {'success': True, 'message': f'OK ({response.status_code})'}
             if response.status_code in REDIRECTS:
-                target = redact_secrets(urljoin(url, response.headers.get('Location', '')))
+                target = redact_secrets(urljoin(url, response.headers.get('Location', '')), secrets)
                 return {'success': False, 'permanent': True,
                         'message': f"HTTP {response.status_code}: the webhook redirects to {target}. Put that "
                                    "address in the channel: redirects are not followed"}
             return self._http_failure(response.status_code, response.reason)
         except requests.RequestException as e:
-            return {'success': False, 'message': redact_secrets(str(e))}
+            return {'success': False, 'message': redact_secrets(str(e), secrets)}
 
     @staticmethod
     def _http_failure(status: int, reason: str = '') -> dict:
@@ -193,7 +194,7 @@ class NotificationService:
             result['message'] = data.get('description') or result['message']
             return result
         except requests.RequestException as e:
-            return {'success': False, 'message': redact_secrets(str(e))}
+            return {'success': False, 'message': redact_secrets(str(e), [bot_token])}
     
     def _send_teams(self, config: dict, query, errors: list, reminder: bool = False) -> dict:
         """Sends to Microsoft Teams through a webhook."""
@@ -236,7 +237,7 @@ class NotificationService:
                 return {'success': True, 'message': 'Sent'}
             return self._http_failure(response.status_code, response.reason)
         except requests.RequestException as e:
-            return {'success': False, 'message': redact_secrets(str(e))}
+            return {'success': False, 'message': redact_secrets(str(e), [webhook_url])}
 
     def send_system_message(self, query, event: str, title: str, lines: list) -> dict:
         """
