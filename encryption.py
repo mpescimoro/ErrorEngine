@@ -18,6 +18,8 @@ import sys
 from cryptography.fernet import Fernet, InvalidToken
 from flask import current_app
 
+from utils import redact_secrets
+
 logger = logging.getLogger(__name__)
 
 # In front of every encrypted value: a value without it was saved in clear, before 2.5
@@ -192,14 +194,43 @@ def _rebuild(database: str) -> bool:
     return True
 
 
+def _hide_channels_in_messages() -> list:
+    """
+    The changes that hide the address, token and headers of each channel in the error messages saved before
+    (its last error, those of the errors), as they are hidden now when a message is written.
+    """
+    from models import ErrorRecord, NotificationChannel, CHANNEL_CLEAR
+    changes, known = [], []
+    for channel in NotificationChannel.query.order_by(NotificationChannel.id):
+        try:
+            config = channel.get_config()
+        except (ValueError, AttributeError):
+            continue   # not valid JSON, or no key reads it: nothing known to hide
+        secrets = []
+        for field, value in config.items():
+            if field not in CHANNEL_CLEAR:
+                each_text(value, secrets.append)
+        known += secrets
+        hidden = redact_secrets(channel.last_error, secrets)
+        if hidden != channel.last_error:
+            changes.append((channel, 'last_error', hidden))
+    # One message names the channels that failed: any of them
+    for record in ErrorRecord.query.filter(ErrorRecord.last_notify_error.isnot(None)):
+        hidden = redact_secrets(record.last_notify_error, known)
+        if hidden != record.last_notify_error:
+            changes.append((record, 'last_notify_error', hidden))
+    return changes
+
+
 def encrypt_saved_secrets() -> dict:
     """
     At every start, in one transaction: the texts saved in clear (before 2.5) encrypted with the first key,
-    those of another key encrypted again with it. Then the database file rebuilt without the old values.
-    Returns {'clear': n, 'older': n, 'unreadable': [where], 'saved': bool, 'rebuilt': bool}.
+    those of another key encrypted again with it, the secrets of the channels hidden in the error messages
+    saved before. Then the database file rebuilt without the old values.
+    Returns {'clear': n, 'older': n, 'unreadable': [where], 'messages': n, 'saved': bool, 'rebuilt': bool}.
     """
     from models import db, DatabaseConnection, MonitoredQuery, NotificationChannel, SOURCE_CLEAR, CHANNEL_CLEAR
-    found = {'clear': 0, 'older': 0, 'unreadable': [], 'saved': False, 'rebuilt': False}
+    found = {'clear': 0, 'older': 0, 'unreadable': [], 'messages': 0, 'saved': False, 'rebuilt': False}
     changes = []
     for connection in DatabaseConnection.query.order_by(DatabaseConnection.id):
         value = _updated(connection._password, found, f'the connection {connection.name}')
@@ -221,6 +252,9 @@ def encrypt_saved_secrets() -> dict:
                       for field, value in stored.items()}
             if config != stored:
                 changes.append((item, column, json.dumps(config, ensure_ascii=False)))
+    messages = _hide_channels_in_messages()
+    found['messages'] = len(messages)
+    changes += messages
 
     database = _database_file()
     marker = database + REBUILD_MARKER if database else None
@@ -261,6 +295,8 @@ def _log(found: dict, database):
     if found['older']:
         logger.info(f"Passwords and tokens of an older key: {found['older']} encrypted again with the first key of "
                     "ERRORENGINE_ENCRYPTION_KEY" + ('' if found['unreadable'] else ': the other keys can be removed'))
+    if found['messages']:
+        logger.info(f"Error messages saved with the address or token of a channel: {found['messages']} hidden")
     if found['rebuilt']:
         logger.info("Database file rebuilt: the old values are no longer in it")
     if found['unreadable']:

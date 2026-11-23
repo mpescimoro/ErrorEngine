@@ -18,7 +18,7 @@ import config
 import data_sources
 from app import create_app
 from encryption import PREFIX, REBUILD_MARKER, UnreadableSecret, encrypt_saved_secrets, read_keys
-from models import db, DatabaseConnection, MonitoredQuery, NotificationChannel
+from models import db, DatabaseConnection, ErrorRecord, MonitoredQuery, NotificationChannel
 from notification_service import notification_service
 
 SECRETS = ('db-password-1', 'api-token-2', 'header-secret-3', 'https://hooks.example.com/secret-4',
@@ -167,6 +167,28 @@ class TestAtStart:
         assert sorted(path.name for path in tmp_path.iterdir() if 'errorengine' in path.name) in (
             ['errorengine.db'], ['errorengine.db', 'errorengine.db-shm'],
             ['errorengine.db', 'errorengine.db-shm', 'errorengine.db-wal'])
+
+    def test_the_messages_saved_before_no_longer_show_the_channel(self, file_kept_as_is, caplog):
+        """As 2.4.2 saved them: the path of the address was left in clear when it did not look like a token."""
+        save_in_clear()
+        failed = ("HTTPSConnectionPool(host='hooks.example.com', port=443): Max retries exceeded with url: "
+                  "/secret-4 (Caused by NameResolutionError)")
+        hook = NotificationChannel.query.one()
+        hook.last_error = failed
+        teams = NotificationChannel(name='Teams', channel_type='teams')   # the error names the other channel
+        teams.set_config({'webhook_url': SECRETS[6]})
+        db.session.add_all([teams, ErrorRecord(query_id=MonitoredQuery.query.one().id, error_hash='h', error_data='{}',
+                                               last_notify_error=f'Not delivered: ops@x.it; Hook: {failed}')])
+        db.session.commit()
+        with caplog.at_level(logging.INFO, logger='encryption'):
+            found = encrypt_saved_secrets()
+        assert (found['messages'], found['rebuilt']) == (2, True) and '2 hidden' in caplog.text
+        db.session.expire_all()
+        hidden = failed.replace('/secret-4', '/***')
+        assert hook.last_error == hidden and teams.last_error is None
+        assert ErrorRecord.query.one().last_notify_error == f'Not delivered: ops@x.it; Hook: {hidden}'
+        assert b'secret-4' not in database_bytes()
+        assert encrypt_saved_secrets()['messages'] == 0
 
     def test_the_next_start_changes_nothing(self, file_app):
         db.create_all()
