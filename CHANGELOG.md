@@ -2,16 +2,6 @@
 
 ## 2.5.0
 
-**Upgrading from 2.4.2**
-- Before the first start, make a backup of the database: it is the way back to 2.4.2, and it holds the passwords in clear, so keep it away from the instance and delete it once 2.5.0 works. The first start encrypts them and rebuilds the database file: it needs free space of about twice the database (see Saved passwords and tokens in docs/configuration.md)
-- Add `ERRORENGINE_ENCRYPTION_KEY` to `.env`, and save a copy of it apart: without it ErrorEngine does not start, and the log gives the command that generates it
-- Remove `SECRET_KEY` from `.env`: it is no longer used
-- Sign in again after the upgrade, and after every restart
-- Scripts with the API token: reads, and the actions of the API reference; the other requests get 403
-- HTTP sources and webhooks that answer with a redirect fail, and name the address to put in their URL
-- On Linux and macOS the files ErrorEngine creates from now on, logs included, can be read only by its account: give access to whoever else reads them
-- A connection with a query that changes data gets **Allow statements that change data**, and the log names it: check that it is meant
-
 **Added**
 - `ERRORENGINE_HTTPS`: behind a reverse proxy with HTTPS, the session cookie travels only over HTTPS, and the sign-in page says so when it is opened with `http://`. HSTS is up to the proxy: it covers every port of the host name
 - `ERRORENGINE_TRUSTED_PROXY`: the address of the reverse proxy. From it, the client address (in the log and for the limit on wrong passwords), the host and `https` come from its `X-Forwarded-*` headers; from anyone else the same headers are dropped
