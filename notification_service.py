@@ -5,6 +5,8 @@ import json
 import logging
 import requests
 from html import escape
+from urllib.parse import urljoin
+from data_sources import REDIRECTS
 from utils import format_local_now, get_utc_now, redact_secrets, utc_iso
 
 logger = logging.getLogger(__name__)
@@ -40,8 +42,6 @@ class NotificationService:
                 result = self._send_teams(config, query, errors, reminder)
             else:
                 return {'success': False, 'message': f'Unsupported type: {channel.channel_type}'}
-            
-            # Update the statistics
             if result['success']:
                 channel.total_sent += 1
                 channel.last_sent_at = get_utc_now()
@@ -113,14 +113,22 @@ class NotificationService:
 
     def _post_json(self, url: str, payload: dict, headers: dict, method: str = 'POST') -> dict:
         """POST/PUT of a JSON; non-standard values (Decimal, dates) become text."""
+        secrets = [url, *headers.values()]
         try:
             body = json.dumps(payload, default=str, ensure_ascii=False).encode('utf-8')
-            response = requests.request(method, url, data=body, headers=headers, timeout=self.timeout)
+            # Followed, a redirect would take the saved headers to the server it names
+            response = requests.request(method, url, data=body, headers=headers, timeout=self.timeout,
+                                        allow_redirects=False)
             if 200 <= response.status_code < 300:
                 return {'success': True, 'message': f'OK ({response.status_code})'}
+            if response.status_code in REDIRECTS:
+                target = redact_secrets(urljoin(url, response.headers.get('Location', '')), secrets)
+                return {'success': False, 'permanent': True,
+                        'message': f"HTTP {response.status_code}: the webhook redirects to {target}. Put that "
+                                   "address in the channel: redirects are not followed"}
             return self._http_failure(response.status_code, response.reason)
         except requests.RequestException as e:
-            return {'success': False, 'message': redact_secrets(str(e))}
+            return {'success': False, 'message': redact_secrets(str(e), secrets)}
 
     @staticmethod
     def _http_failure(status: int, reason: str = '') -> dict:
@@ -186,21 +194,17 @@ class NotificationService:
             result['message'] = data.get('description') or result['message']
             return result
         except requests.RequestException as e:
-            return {'success': False, 'message': redact_secrets(str(e))}
+            return {'success': False, 'message': redact_secrets(str(e), [bot_token])}
     
     def _send_teams(self, config: dict, query, errors: list, reminder: bool = False) -> dict:
         """Sends to Microsoft Teams through a webhook."""
         webhook_url = config.get('webhook_url')
         if not webhook_url:
             return {'success': False, 'message': 'Webhook URL missing'}
-        
-        # MessageCard for Teams
         facts = [
             {"name": "Errors still active" if reminder else "New errors", "value": str(len(errors))},
             {"name": "Time", "value": format_local_now('%d/%m/%Y %H:%M')},
         ]
-        
-        # Add the first errors as facts
         for i, error in enumerate(errors[:3]):
             preview = " | ".join([f"{k}: {v}" for k, v in list(error.items())[:2]])
             if len(preview) > 60:
@@ -233,7 +237,7 @@ class NotificationService:
                 return {'success': True, 'message': 'Sent'}
             return self._http_failure(response.status_code, response.reason)
         except requests.RequestException as e:
-            return {'success': False, 'message': redact_secrets(str(e))}
+            return {'success': False, 'message': redact_secrets(str(e), [webhook_url])}
 
     def send_system_message(self, query, event: str, title: str, lines: list) -> dict:
         """

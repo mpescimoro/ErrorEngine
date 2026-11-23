@@ -27,7 +27,6 @@ api_bp = Blueprint('api', __name__, url_prefix='/api')
 
 @api_bp.route('/queries', methods=['GET'])
 def api_queries_list():
-    """API: List of queries."""
     queries = MonitoredQuery.query.all()
     return jsonify([{
         'id': q.id,
@@ -44,24 +43,23 @@ def api_queries_list():
 
 @api_bp.route('/queries/<int:query_id>/run', methods=['POST'])
 def api_run_query(query_id):
-    """API: Runs a query right away (ignores the time window)."""
-    query = MonitoredQuery.query.get_or_404(query_id)
+    """Runs a query right away (ignores the time window)."""
+    query = db.get_or_404(MonitoredQuery, query_id)
     result = monitor_service.check_query(query, force=True)
     return jsonify(result)
 
 
 @api_bp.route('/queries/<int:query_id>/test', methods=['POST'])
 def api_test_query(query_id):
-    """API: Tests a query without saving the results."""
-    query = MonitoredQuery.query.get_or_404(query_id)
+    """Tests a query without saving the results."""
+    query = db.get_or_404(MonitoredQuery, query_id)
     result = test_query_source(query)
     return jsonify(result)
 
 
 @api_bp.route('/queries/<int:query_id>/toggle', methods=['POST'])
 def api_toggle_query(query_id):
-    """API: Activates/deactivates a query."""
-    query = MonitoredQuery.query.get_or_404(query_id)
+    query = db.get_or_404(MonitoredQuery, query_id)
     query.is_active = not query.is_active
     db.session.commit()
     
@@ -73,15 +71,14 @@ def api_toggle_query(query_id):
 
 @api_bp.route('/queries/<int:query_id>/status', methods=['GET'])
 def api_query_status(query_id):
-    """API: Current state of a query."""
-    MonitoredQuery.query.get_or_404(query_id)
+    db.get_or_404(MonitoredQuery, query_id)
     status = monitor_service.get_query_status(query_id)
     return jsonify(status)
 
 
 @api_bp.route('/queries/<int:query_id>/fields', methods=['GET'])
 def api_query_fields(query_id):
-    """API: Fields available from the query (for routing configuration)."""
+    """Fields available from the query (for routing configuration)."""
     fields = monitor_service.get_query_available_fields(query_id)
     return jsonify({'fields': fields})
 
@@ -90,8 +87,7 @@ def api_query_fields(query_id):
 
 @api_bp.route('/queries/<int:query_id>/routing/rules', methods=['GET'])
 def api_get_routing_rules(query_id):
-    """API: List of the routing rules of a query."""
-    query = MonitoredQuery.query.get_or_404(query_id)
+    query = db.get_or_404(MonitoredQuery, query_id)
     
     rules = []
     for rule in query.routing_rules:
@@ -121,10 +117,14 @@ def api_get_routing_rules(query_id):
     })
 
 
+def condition_value(value) -> str:
+    """The value of a condition as the page sends it: text, numbers from scripts included."""
+    return '' if value is None else str(value)
+
+
 @api_bp.route('/queries/<int:query_id>/routing/rules', methods=['POST'])
 def api_create_routing_rule(query_id):
-    """API: Creates a new routing rule."""
-    MonitoredQuery.query.get_or_404(query_id)   # 404 if the query does not exist
+    db.get_or_404(MonitoredQuery, query_id)
     data = request.get_json()
     
     is_valid, error = validate_routing_rule(data)
@@ -143,14 +143,12 @@ def api_create_routing_rule(query_id):
         )
         db.session.add(rule)
         db.session.flush()  # To get the ID
-        
-        # Add the conditions
         for cond_data in data.get('conditions', []):
             condition = RoutingCondition(
                 rule_id=rule.id,
                 field_name=sanitize_string(cond_data.get('field_name', ''), 100),
                 operator=cond_data.get('operator', 'equals'),
-                value=sanitize_string(cond_data.get('value', ''), 500),
+                value=sanitize_string(condition_value(cond_data.get('value')), 500),
                 case_sensitive=bool(cond_data.get('case_sensitive', False))
             )
             db.session.add(condition)
@@ -169,7 +167,6 @@ def api_create_routing_rule(query_id):
 
 @api_bp.route('/queries/<int:query_id>/routing/rules/<int:rule_id>', methods=['PUT'])
 def api_update_routing_rule(query_id, rule_id):
-    """API: Updates a routing rule."""
     rule = RoutingRule.query.filter_by(id=rule_id, query_id=query_id).first_or_404()
     data = request.get_json()
     
@@ -193,7 +190,7 @@ def api_update_routing_rule(query_id, rule_id):
                     rule_id=rule.id,
                     field_name=sanitize_string(cond_data.get('field_name', ''), 100),
                     operator=cond_data.get('operator', 'equals'),
-                    value=sanitize_string(cond_data.get('value', ''), 500),
+                    value=sanitize_string(condition_value(cond_data.get('value')), 500),
                     case_sensitive=bool(cond_data.get('case_sensitive', False))
                 )
                 db.session.add(condition)
@@ -211,7 +208,6 @@ def api_update_routing_rule(query_id, rule_id):
 
 @api_bp.route('/queries/<int:query_id>/routing/rules/<int:rule_id>', methods=['DELETE'])
 def api_delete_routing_rule(query_id, rule_id):
-    """API: Deletes a routing rule."""
     rule = RoutingRule.query.filter_by(id=rule_id, query_id=query_id).first_or_404()
     
     try:
@@ -225,8 +221,8 @@ def api_delete_routing_rule(query_id, rule_id):
 
 @api_bp.route('/queries/<int:query_id>/routing/test', methods=['POST'])
 def api_test_routing(query_id):
-    """API: Recipients the routing rules choose for the errors sent, or for the active ones."""
-    query = MonitoredQuery.query.get_or_404(query_id)
+    """Recipients the routing rules choose for the errors sent, or for the active ones."""
+    query = db.get_or_404(MonitoredQuery, query_id)
     data = request.get_json(silent=True) if request.get_data() else {}
     test_errors = data.get('errors', []) if isinstance(data, dict) else None
     if not (isinstance(test_errors, list) and all(isinstance(error, dict) for error in test_errors)):
@@ -234,7 +230,6 @@ def api_test_routing(query_id):
                                                      'or nothing for the active errors of the query'}), 400
 
     if not test_errors:
-        # Use the current real errors
         test_errors = [e.get_error_data() for e in 
                       ErrorRecord.query.filter_by(query_id=query_id, resolved_at=None).limit(10).all()]
     
@@ -265,7 +260,6 @@ def api_test_routing(query_id):
 
 @api_bp.route('/errors', methods=['GET'])
 def api_errors_list():
-    """API: List of active errors."""
     query_id = request.args.get('query_id', type=int)
     errors = monitor_service.get_active_errors(query_id)
     return jsonify(errors)
@@ -273,14 +267,14 @@ def api_errors_list():
 
 @api_bp.route('/errors/summary', methods=['GET'])
 def api_errors_summary():
-    """API: Summary of the active errors, for the automatic page refresh."""
+    """Summary of the active errors, for the automatic page refresh."""
     return jsonify(ErrorRecord.active_summary())
 
 
 @api_bp.route('/errors/<int:error_id>/resolve', methods=['POST'])
 def api_resolve_error(error_id):
-    """API: Marks an error as resolved manually."""
-    error = ErrorRecord.query.get_or_404(error_id)
+    """Marks an error as resolved manually."""
+    error = db.get_or_404(ErrorRecord, error_id)
     # Already resolved: it keeps its time, which the cleanup of resolved errors counts from
     if error.resolved_at is None:
         error.resolved_at = get_utc_now()
@@ -296,7 +290,6 @@ def api_resolve_error(error_id):
 
 @api_bp.route('/connections', methods=['GET'])
 def api_connections_list():
-    """API: List of connections."""
     connections = DatabaseConnection.query.filter_by(is_active=True).all()
     return jsonify([{
         'id': c.id,
@@ -312,15 +305,14 @@ def api_connections_list():
 
 @api_bp.route('/connections/<int:conn_id>/test', methods=['POST'])
 def api_connection_test(conn_id):
-    """API: Tests a saved connection."""
-    conn = DatabaseConnection.query.get_or_404(conn_id)
+    conn = db.get_or_404(DatabaseConnection, conn_id)
     result = conn.test_connection()
     return jsonify(result)
 
 
 @api_bp.route('/connections/test', methods=['POST'])
 def api_connection_test_new():
-    """API: Tests a connection not saved yet."""
+    """Tests a connection not saved yet."""
     data = request.get_json()
     
     db_type = data.get('db_type')
@@ -343,21 +335,24 @@ def api_connection_test_new():
 
 @api_bp.route('/connections/<int:conn_id>/test-query', methods=['POST'])
 def api_connection_test_query(conn_id):
-    """API: Tests a query on a specific connection."""
-    conn = DatabaseConnection.query.get_or_404(conn_id)
+    """Tests a query on a specific connection."""
+    conn = db.get_or_404(DatabaseConnection, conn_id)
     data = request.get_json() or {}
     sql = data.get('sql')
     
     if not sql:
         return jsonify({'valid': False, 'error': 'SQL query required'}), 400
 
-    # The test runs the statement for real: one that can change data needs the
-    # confirmation the form asks for
+    # The test runs the statement for real: one that can change data only where the connection allows
+    # it, and confirmed (the page asks when it gets 'confirm')
+    refusal = conn.write_refusal(sql)
+    if refusal:
+        return jsonify({'valid': False, 'error': refusal})
     keyword = write_statement_keyword(sql)
     if keyword and data.get('confirm_write') is not True:
-        return jsonify({'valid': False,
-                        'error': f'{keyword} statements can change data: confirm the warning in the query form'}), 400
-    
+        return jsonify({'valid': False, 'confirm': keyword,
+                        'error': f'The query contains {keyword}, which can change data: confirm it to test it'})
+
     try:
         driver = conn.get_driver()
         connection = driver.open(
@@ -386,7 +381,7 @@ def api_channels_list():
 
 @api_bp.route('/channels/<int:channel_id>/test', methods=['POST'])
 def api_channel_test(channel_id):
-    channel = NotificationChannel.query.get_or_404(channel_id)
+    channel = db.get_or_404(NotificationChannel, channel_id)
     result = notification_service.test_channel(channel)
     return jsonify(result)
 
@@ -412,26 +407,19 @@ def api_stats_overview():
     prev_period_start = period_start - timedelta(days=days)
     month_ago = now - timedelta(days=30)
     
-    # Errors today
     errors_today = errors(ErrorRecord.first_seen_at >= today_start).count()
-    
-    # Errors in the selected period
     errors_period = errors(ErrorRecord.first_seen_at >= period_start).count()
     
-    # Errors in the previous period (for the trend)
     errors_prev_period = errors(ErrorRecord.first_seen_at >= prev_period_start,
                                 ErrorRecord.first_seen_at < period_start).count()
     
-    # Trend
     if errors_prev_period > 0:
         trend_percent = round(((errors_period - errors_prev_period) / errors_prev_period) * 100)
     else:
         trend_percent = 100 if errors_period > 0 else 0
     
-    # Active (unresolved) errors
     errors_active = errors(ErrorRecord.resolved_at.is_(None)).count()
     
-    # Average resolution time (last 30 days)
     resolved_errors = errors(ErrorRecord.resolved_at.isnot(None), ErrorRecord.resolved_at >= month_ago).all()
     
     avg_resolution_hours = 0
@@ -442,7 +430,6 @@ def api_stats_overview():
         )
         avg_resolution_hours = round(total_seconds / len(resolved_errors) / 3600, 1)
     
-    # Top 5 queries by errors
     top_queries = db.session.query(
         MonitoredQuery.id,
         MonitoredQuery.name,
@@ -505,14 +492,13 @@ def errors_per_local_day(days: int, query_id: int = None) -> dict:
 
 @api_bp.route('/stats/by-query', methods=['GET'])
 def api_stats_by_query():
-    """Statistics for a single query."""
     query_id = request.args.get('query_id', type=int)
     days = request.args.get('days', 30, type=int)
     
     if not query_id:
         return jsonify({'error': 'query_id required'}), 400
     
-    query = MonitoredQuery.query.get_or_404(query_id)
+    query = db.get_or_404(MonitoredQuery, query_id)
     start_date = get_utc_now() - timedelta(days=days)
     
     total_errors = ErrorRecord.query.filter(
@@ -539,7 +525,6 @@ def api_stats_by_query():
 
 @api_bp.route('/stats/all-queries', methods=['GET'])
 def api_stats_all_queries():
-    """Statistics for all queries."""
     from sqlalchemy import func
     
     days = request.args.get('days', 30, type=int)
@@ -583,7 +568,6 @@ def api_stats_all_queries():
 
 @api_bp.route('/test/email', methods=['POST'])
 def api_test_email():
-    """API: Test email."""
     data = request.get_json()
     recipient = data.get('recipient')
     
@@ -614,10 +598,7 @@ def sample_rows(data: dict, query_id) -> tuple:
 
 @api_bp.route('/test/sample-email', methods=['POST'])
 def api_sample_email():
-    """
-    API: the notification email of the query form, as the form is now (saved or not),
-    to the addresses given.
-    """
+    """The notification email of the query form, as the form is now (saved or not), to the addresses given."""
     data = request.get_json(silent=True) or {}
     valid, error, recipients = validate_email_list(str(data.get('recipients') or ''))
     if not valid or not recipients:
@@ -639,7 +620,6 @@ def api_sample_email():
 
 @api_bp.route('/stats', methods=['GET'])
 def api_stats():
-    """API: General statistics."""
     return jsonify({
         'total_queries': MonitoredQuery.query.count(),
         'active_queries': MonitoredQuery.query.filter_by(is_active=True).count(),
@@ -654,7 +634,7 @@ def api_stats():
 
 @api_bp.route('/cleanup/run', methods=['POST'])
 def api_run_cleanup():
-    """API: Manually cleans up all records."""
+    """Manually cleans up all records."""
     try:
         result = cleanup_service.run_manual_cleanup()
         return jsonify({
@@ -671,7 +651,6 @@ def api_run_cleanup():
 
 @api_bp.route('/cleanup/stats', methods=['GET'])
 def api_cleanup_stats():
-    """API: Record statistics and retention configuration."""
     try:
         stats = cleanup_service.get_stats()
         return jsonify(stats)
@@ -684,21 +663,17 @@ def api_cleanup_stats():
 @api_bp.route('/health', methods=['GET'])
 def api_health():
     """
-    API: Health check for external monitoring.
-
-    503 if the internal database does not answer or the scheduler is stopped (no round
-    for more than 3 minutes); 200 with status 'degraded' when some queries
-    cannot read their source.
+    Health check for external monitoring: 503 if the internal database does not answer or the scheduler is
+    stopped (no round for more than 3 minutes); 200 with status 'degraded' when some queries cannot read their
+    source.
     """
     try:
-        # Internal database
         db_ok = True
         try:
             MonitoredQuery.query.limit(1).all()
         except Exception:
             db_ok = False
 
-        # Configured database connections
         connections_count = DatabaseConnection.query.filter_by(is_active=True).count() if db_ok else 0
 
         # Scheduler: must be running and have done a round recently
@@ -754,7 +729,6 @@ def api_health():
 
 @api_bp.route('/scheduler/next', methods=['GET'])
 def api_scheduler_next():
-    """API: Returns the time until the next scheduled check."""
     try:
         queries = MonitoredQuery.query.filter_by(is_active=True).all()
         

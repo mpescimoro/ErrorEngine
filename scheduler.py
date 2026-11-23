@@ -161,10 +161,6 @@ def get_scheduler_status() -> dict:
 
 
 def init_scheduler(app):
-    """
-    Initializes the scheduler with the Flask app.
-    """
-    # Avoid initializing twice
     if scheduler.running:
         logger.info("Scheduler: already running, skip")
         return
@@ -181,9 +177,6 @@ def init_scheduler(app):
 
     @scheduler.task('cron', id='cleanup_old_records', hour=3, minute=0, misfire_grace_time=3600)
     def cleanup_old_records():
-        """
-        Every day at 3:00, cleans up old records.
-        """
         with app.app_context():
             from cleanup_service import cleanup_service
 

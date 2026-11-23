@@ -7,16 +7,8 @@ from unittest.mock import patch
 import pytest
 import requests
 
-from models import db, MonitoredQuery, ErrorRecord
-
-
-def make_query(name='Orders', **kwargs):
-    kwargs.setdefault('sql_query', 'SELECT 1')
-    kwargs.setdefault('key_fields', 'ID')
-    query = MonitoredQuery(name=name, **kwargs)
-    db.session.add(query)
-    db.session.commit()
-    return query
+from models import db, ErrorRecord
+from tests.helpers import make_query
 
 
 def http_response(body, status=200):
@@ -31,6 +23,19 @@ def test_api_key_from_the_form_is_sent(app):
     with patch('data_sources.requests.request', return_value=http_response([{'ID': 1}])) as req:
         HttpDataSource().execute({'url': 'https://api.x.com/items', 'auth_type': 'api_key', 'auth_token': 'K-123'})
     assert req.call_args.kwargs['headers']['X-API-Key'] == 'K-123'
+
+
+def test_api_key_in_the_query_string_is_a_parameter(app):
+    """Encoded by requests, and not part of the URL that the form shows."""
+    from data_sources import HttpDataSource
+    with patch('data_sources.requests.request', return_value=http_response([{'ID': 1}])) as req:
+        HttpDataSource().execute({'url': 'https://api.x.com/items?page=1', 'auth_type': 'api_key',
+                                  'auth_token': 'K&1 2', 'api_key_name': 'key', 'api_key_in': 'query'})
+    sent = req.call_args.kwargs
+    assert (sent['url'], sent['params']) == ('https://api.x.com/items?page=1', {'key': 'K&1 2'})
+    assert 'key' not in sent['headers'] and 'X-API-Key' not in sent['headers']
+    prepared = requests.Request('GET', sent['url'], params=sent['params']).prepare()
+    assert prepared.url == 'https://api.x.com/items?page=1&key=K%261+2'
 
 
 def test_rows_that_are_not_objects_are_a_source_failure(app):

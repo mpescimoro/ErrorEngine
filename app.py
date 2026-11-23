@@ -3,11 +3,11 @@ Application Factory - ErrorEngine Monitoring System
 """
 import os
 import logging
+import mimetypes
 from zoneinfo import ZoneInfo
 from flask import Flask
 from config import config, retired_settings_warnings
 
-# Logging setup
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -22,8 +22,7 @@ def create_app(config_name=None):
         config_name = os.environ.get('FLASK_ENV', 'development')
     
     app = Flask(__name__)
-    # An instance, not the class: this way ProductionConfig's SECRET_KEY @property is read
-    app.config.from_object(config[config_name]())
+    app.config.from_object(config[config_name])
 
     try:
         ZoneInfo(app.config['TIMEZONE'] or 'UTC')   # empty: UTC, the default
@@ -33,6 +32,10 @@ def create_app(config_name=None):
                        "dates and schedules use UTC")
     for warning in retired_settings_warnings():
         logger.warning(warning)
+
+    # The key of the passwords saved in the database: without it ErrorEngine stops here
+    from encryption import init_app as init_encryption
+    init_encryption(app)
 
     # SQLite: with the scheduler running in parallel, several threads write to the internal DB,
     # so wait up to 30 s for the lock instead of failing after 5
@@ -44,7 +47,6 @@ def create_app(config_name=None):
     from utils import install_log_redaction
     install_log_redaction()
 
-    # Extensions
     from models import db
     db.init_app(app)
     
@@ -69,28 +71,46 @@ def create_app(config_name=None):
     from notification_service import notification_service
     notification_service.init_app(app)
     
-    # Blueprints
     from routes import main_bp, api_bp
     app.register_blueprint(main_bp)
     app.register_blueprint(api_bp)
     
-    # Login: protects pages and APIs
     from auth import init_auth
     init_auth(app)
+
+    # Python takes file types from the Windows registry, which can say text/plain for .js and .css:
+    # with nosniff the browser would then refuse the scripts and the styles
+    mimetypes.add_type('text/javascript', '.js')
+    mimetypes.add_type('text/css', '.css')
+
+    @app.after_request
+    def security_headers(response):
+        """No frames of other pages (clickjacking), no guessing file types, no page address to other sites."""
+        response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        response.headers.setdefault('X-Frame-Options', 'DENY')
+        response.headers.setdefault('Content-Security-Policy', "frame-ancestors 'none'")
+        response.headers.setdefault('Referrer-Policy', 'same-origin')
+        # No HSTS: it covers every port of the host name, and only the reverse proxy knows what else runs there
+        return response
 
     # Create the database tables (and add new columns to existing ones)
     with app.app_context():
         db.create_all()
-        from models import ensure_schema
+        from models import ensure_schema, allow_writes_where_queries_write
         for column in ensure_schema():
             logger.info(f"Database updated: added column {column}")
+            if column == 'database_connections.allow_writes':
+                for connection, query, keyword in allow_writes_where_queries_write():
+                    logger.info(f"Connection {connection}: statements that change data allowed, "
+                                f"as the query {query} contains {keyword}")
+        from encryption import encrypt_saved_secrets
+        encrypt_saved_secrets()
         if db.engine.dialect.name == 'sqlite' and db.engine.url.database not in (None, '', ':memory:'):
             # WAL: reads do not block writes and vice versa
             with db.engine.connect() as connection:
                 connection.exec_driver_sql('PRAGMA journal_mode=WAL')
         logger.info("Database initialized")
     
-    # Scheduler (not in testing)
     if not app.config.get('TESTING'):
         from scheduler import init_scheduler
         init_scheduler(app)

@@ -211,7 +211,6 @@ var statsPage = {
             document.getElementById('statResolution').textContent =
                 data.avg_resolution_hours > 0 ? data.avg_resolution_hours + 'h' : '-';
 
-            // Trend
             var trendEl = document.getElementById('statTrend');
             if (data.trend_percent !== 0) {
                 var icon = data.trend_direction === 'up' ? '↑' : '↓';
@@ -277,7 +276,6 @@ var statsPage = {
             // Smart label interval
             var showEvery = data.length > 28 ? 4 : (data.length > 14 ? 2 : 1);
 
-            // Build bars
             var barsHtml = '';
             data.forEach(function(d, i) {
                 var barHeight = Math.max(Math.round((d.count / maxCount) * chartHeight), d.count > 0 ? 4 : 0);

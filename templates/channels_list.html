@@ -103,6 +103,7 @@
                             <form method="POST" action="{{ url_for('main.channel_delete', channel_id=channel.id) }}" 
                                   style="display: inline;"
                                   data-confirm="Delete channel {{ channel.name }}?">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <button type="submit" 
                                         class="btn btn-ghost btn-sm btn-icon text-danger"
                                         title="Delete"

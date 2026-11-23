@@ -5,22 +5,20 @@ import logging
 import sqlite3
 import threading
 import time
+from contextlib import closing
+from functools import partial
 from unittest.mock import patch
 
 import pytest
 
 from models import db, MonitoredQuery, DatabaseConnection
 from utils import get_utc_now
+from tests import helpers
+
+
+make_query = partial(helpers.make_query, name='Critical')
 
 OK = {'success': True}
-
-
-def make_query(name='Critical', **kwargs):
-    kwargs.setdefault('sql_query', 'SELECT 1')
-    query = MonitoredQuery(name=name, key_fields='ID', **kwargs)
-    db.session.add(query)
-    db.session.commit()
-    return query
 
 
 class TestTimeouts:
@@ -60,19 +58,20 @@ class TestTimeouts:
     def test_sqlite_stops_the_long_query(self):
         from db_drivers.sqlite import SQLiteDriver
         driver = SQLiteDriver(connect_timeout=5, query_timeout=1)
-        connection = driver.open(None, None, ':memory:', None, None)
         endless = ('WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n) '
                    'SELECT COUNT(*) FROM n')
-        start = time.monotonic()
-        with pytest.raises(TimeoutError):
-            driver.execute_query(connection, endless)
-        assert time.monotonic() - start < 10
-        # The connection stays usable
-        assert driver.execute_query(connection, 'SELECT 1 AS X') == (['X'], [{'X': '1'}])
+        with closing(driver.open(None, None, ':memory:', None, None)) as connection:
+            start = time.monotonic()
+            with pytest.raises(TimeoutError):
+                driver.execute_query(connection, endless)
+            assert time.monotonic() - start < 10
+            # The connection stays usable
+            assert driver.execute_query(connection, 'SELECT 1 AS X') == (['X'], [{'X': '1'}])
 
     def test_real_sqlite_query_with_timeout(self, app, tmp_path):
         source = tmp_path / 'erp.db'
-        with sqlite3.connect(source) as con:
+        # The with of sqlite3 commits but does not close: closing() does
+        with closing(sqlite3.connect(source)) as con, con:
             con.execute('CREATE TABLE errs (ID INTEGER, MSG TEXT)')
             con.execute("INSERT INTO errs VALUES (1, 'stuck')")
         connection = DatabaseConnection(name='ERP', db_type='sqlite', database=str(source))

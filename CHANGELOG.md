@@ -1,5 +1,51 @@
 # Changelog
 
+## 2.5.0
+
+**Upgrading from 2.4.2**
+- Before the first start, make a backup of the database: it is the way back to 2.4.2, and it holds the passwords in clear, so keep it away from the instance and delete it once 2.5.0 works. The first start encrypts them and rebuilds the database file: it needs free space of about twice the database (see Saved passwords and tokens in docs/configuration.md)
+- Add `ERRORENGINE_ENCRYPTION_KEY` to `.env`, and save a copy of it apart: without it ErrorEngine does not start, and the log gives the command that generates it
+- Remove `SECRET_KEY` from `.env`: it is no longer used
+- Sign in again after the upgrade, and after every restart
+- Scripts with the API token: reads, and the actions of the API reference; the other requests get 403
+- HTTP sources and webhooks that answer with a redirect fail, and name the address to put in their URL
+- On Linux and macOS the files ErrorEngine creates from now on, logs included, can be read only by its account: give access to whoever else reads them
+- A connection with a query that changes data gets **Allow statements that change data**, and the log names it: check that it is meant
+
+**Added**
+- `ERRORENGINE_HTTPS`: behind a reverse proxy with HTTPS, the session cookie travels only over HTTPS, and the sign-in page says so when it is opened with `http://`. HSTS is up to the proxy: it covers every port of the host name
+- `ERRORENGINE_TRUSTED_PROXY`: the address of the reverse proxy. From it, the client address (in the log and for the limit on wrong passwords), the host and `https` come from its `X-Forwarded-*` headers; from anyone else the same headers are dropped
+- Connections: **Allow statements that change data**, off for a new connection. Without it, a query with INSERT, UPDATE, DELETE, a procedure (EXEC, CALL) and the like is refused when saved, tested or run, **Run now** included; with it, each save asks to confirm, on the server. The check reads the text of the query: it stops mistakes, not someone set on getting around it, and the guarantee is still a database user that can only read. On upgrade, a connection allows them if one of its queries already uses them, and the log says which
+- Passwords and tokens saved in the database are encrypted with `ERRORENGINE_ENCRYPTION_KEY`, now required, kept in `.env` with the other secrets of the instance: the passwords of the connections and every text of the settings of HTTP sources and channels, except what their forms show (address, method, type of authentication, names). Without the key ErrorEngine does not start, and the log gives the command that generates it. At the first start those saved in clear are encrypted and the database file is rebuilt without them: make a backup before, which holds them in clear. With the wrong key ErrorEngine starts, and the log names what it cannot read. Several keys separated by commas change the key: the first encrypts, all of them read
+- `DATABASE_URL`, already read, is documented: the database can be a SQLite file in another folder or on another disk of the same machine, apart from the instance
+- HTTP sources: the API key can go in the query string (**API key in**), sent as a parameter of the request and saved encrypted, not written in the URL
+
+**Changed**
+- The forms no longer show the saved passwords, tokens, channel addresses and header values: left empty they stay, for the same server only, `(saved)` keeps a header, and Authentication **None** removes the token of an HTTP source. A form that comes back with a problem asks to type them again
+- HTTP sources and webhooks no longer follow redirects, which would take the saved token and headers to another server: a redirect is an error that names the address to put in the URL
+- The API token can read, and send only the requests of the API reference that change something: run or test a query, test its routing, a connection or a channel, resolve an error. Enabling a query, routing rules, SQL or a server typed in a form, test emails and the cleanup need a signed-in session: the token gets 403, and the log says so
+- On Linux and macOS the files ErrorEngine creates, database and logs included, can be read only by the account that runs it; the log names `.env` and the database files when other users can read them
+- `ERRORENGINE_API_TOKEN`, when it is set, needs at least 32 characters: a shorter one is refused, and the log says so at startup. The command in the docs generates 64
+- Deprecated SQLAlchemy calls replaced; the tests now fail on any warning, those of Python 3.13 about connections left open included
+- The check for statements that change data reads the whole query, no longer its first word only: `WITH ... DELETE`, `SELECT ... INTO` and a second statement after `;` count too, `SET NOCOUNT` and `SET TRANSACTION ISOLATION LEVEL` before a SELECT do not
+- **Sign out** ends the session in every browser, copies of the cookie included, and a restart of ErrorEngine ends the open sessions: after one, sign in again
+- `SECRET_KEY` is no longer used: the key that signs the session cookie is new at every start, as a restart ends the sessions anyway. If it is still in `.env`, the log says so at startup
+- Unused code removed: styles no page used, the global names of the page scripts, `black` and `isort` from the development requirements
+- Code comments trimmed to the reasons behind the code; tests that repeated the same cases merged, one helper for the queries the tests create
+
+**Fixed**
+- Cross-site request forgery (CSRF): a page of the same host on another port, or of another host of the same domain, could make a signed-in browser change or delete queries, connections, channels and logs. The forms and the requests of the pages that change something now carry a token of the session, checked by the server; a request the browser marks as coming from another site is refused even with it. Scripts with the API token do not need it
+- Clickjacking: another site could show ErrorEngine in a frame and lead the user to click its buttons. The responses now forbid frames, tell the browser not to guess the type of a file and do not give the page address to other sites. `.js` and `.css` keep their type even where the Windows registry says `text/plain`
+- The responses no longer name the web server (`Server: waitress`)
+- After a wrong password, the request waited a second holding one of the threads of the server, and the attempts had no limit. Now, after 5 wrong passwords in a row from the same address, even sent together, that address waits a minute before the next try, and no thread waits. Behind a reverse proxy, set `ERRORENGINE_TRUSTED_PROXY`: otherwise every attempt seems to come from the proxy, and the wait applies to everyone
+- A user name with a line break, typed at sign-in, could add a line of its own to the log
+- The error of a channel that does not answer, or redirects, no longer shows its address: only the parts that looked like a token were hidden, so an address such as Zapier's or Home Assistant's stayed readable in the database, on the pages and in the log. The address, token and headers of the channel are now hidden exactly, in the messages saved before too, at the first start
+- A query, connection or channel form that cannot be saved comes back as it was sent, passwords, tokens and webhook addresses excepted, and says what to fix. Until now the server saved key fields made of commas only, an interval of 0 or below, days that are not 1 to 7, a channel without its address, and answered with an error page to a connection or channel without a name, a port that is not a number, headers that are not a JSON object or a channel type it does not know
+- Routing rules through the API: an operator sent as a list or a regular expression sent as a number no longer give an error page; a number is kept as text, as the page sends it
+- A query name already in use is said so, instead of an error with the details in the log
+- Days saved as something other than numbers no longer break the dashboard, the list of queries and the form
+- A page left open kept the session alive for ever: what it asks by itself every 30 seconds, and its own reloads, counted as activity. Now only what the user does counts, opening a page or changing something, for the hours of `ERRORENGINE_SESSION_HOURS`
+
 ## 2.4.2
 
 **Added**

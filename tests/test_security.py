@@ -16,6 +16,7 @@ import socket
 import subprocess
 import sys
 import time
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -24,21 +25,42 @@ import requests
 from flask import Flask
 from flask_apscheduler import APScheduler
 
-from config import Config, DevelopmentConfig, ProductionConfig
+from config import Config, DevelopmentConfig, ProductionConfig, TestingConfig
 from models import db, MonitoredQuery, DatabaseConnection, NotificationChannel, QueryLog
 from utils import redact_secrets, RedactSecretsFilter
 from validators import write_statement_keyword
+from tests.helpers import make_query
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def make_query(name='Orders', **kwargs):
-    kwargs.setdefault('sql_query', 'SELECT 1')
-    kwargs.setdefault('key_fields', 'ID')
-    query = MonitoredQuery(name=name, **kwargs)
-    db.session.add(query)
-    db.session.commit()
-    return query
+def project_copy(tmp_path):
+    """A copy of the project, a free port and the settings: serve.py writes its log next to itself
+    and reads the .env there."""
+    project = tmp_path / 'ErrorEngine'
+    shutil.copytree(ROOT, project, ignore=shutil.ignore_patterns(
+        '.git', 'venv', '.venv', 'logs', 'instance', 'lib', 'docs', 'tests', '__pycache__', '*.db', '.env'))
+    with socket.socket() as probe:
+        probe.bind(('127.0.0.1', 0))
+        port = probe.getsockname()[1]
+    env = {name: os.environ[name] for name in ('PATH', 'SYSTEMROOT') if name in os.environ}
+    env.update(ERRORENGINE_HOST='127.0.0.1', ERRORENGINE_PORT=str(port),
+               ERRORENGINE_ENCRYPTION_KEY=TestingConfig.ENCRYPTION_KEY,
+               DATABASE_URL=f"sqlite:///{(tmp_path / 'ee.db').as_posix()}")
+    return project, port, env
+
+
+def start(project, port, env):
+    """serve.py, once its port answers."""
+    server = subprocess.Popen([sys.executable, str(project / 'serve.py')], env=env, stderr=subprocess.DEVNULL)
+    deadline = time.monotonic() + 60
+    while True:
+        try:
+            socket.create_connection(('127.0.0.1', port), timeout=1).close()
+            return server
+        except OSError:
+            assert server.poll() is None and time.monotonic() < deadline
+            time.sleep(0.1)
 
 
 NAME = "Order's errors <script>window.x=1</script>"
@@ -94,7 +116,8 @@ class TestTestQuery:
     def connection(self, app, tmp_path):
         import sqlite3
         path = tmp_path / 'source.db'
-        with sqlite3.connect(path) as c:
+        # The with of sqlite3 commits but does not close: closing() does
+        with closing(sqlite3.connect(path)) as c, c:
             c.execute('CREATE TABLE orders (id INTEGER)')
         conn = DatabaseConnection(name='Source', db_type='sqlite', database=str(path))
         db.session.add(conn)
@@ -103,14 +126,37 @@ class TestTestQuery:
 
     def tables(self, path):
         import sqlite3
-        with sqlite3.connect(path) as c:
+        with closing(sqlite3.connect(path)) as c:
             return [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")]
 
-    def test_write_statement_refused_without_confirmation(self, app, client, connection):
+    def test_write_statement_refused_where_the_connection_does_not_allow_it(self, app, client, connection):
         conn, path = connection
-        response = client.post(f'/api/connections/{conn.id}/test-query', json={'sql': 'DROP TABLE orders'})
-        assert response.status_code == 400
-        assert 'DROP' in response.get_json()['error']
+        result = client.post(f'/api/connections/{conn.id}/test-query',
+                             json={'sql': 'DROP TABLE orders', 'confirm_write': True}).get_json()
+        assert result['valid'] is False and 'contains DROP' in result['error'] and 'does not allow it' in result['error']
+        assert self.tables(path) == ['orders']
+
+    def test_where_allowed_the_test_asks_first(self, app, client, connection):
+        conn, path = connection
+        conn.allow_writes = True
+        db.session.commit()
+        url = f'/api/connections/{conn.id}/test-query'
+        asked = client.post(url, json={'sql': 'DROP TABLE orders'}).get_json()
+        assert asked['valid'] is False and asked['confirm'] == 'DROP' and self.tables(path) == ['orders']
+        client.post(url, json={'sql': 'DROP TABLE orders', 'confirm_write': True})
+        assert self.tables(path) == []
+
+    def test_a_saved_query_runs_only_where_allowed(self, app, client, connection):
+        # Saved when the connection allowed it, or before the check read the whole statement
+        conn, path = connection
+        query = MonitoredQuery(name='Cleanup', sql_query='DROP TABLE orders', key_fields='ID',
+                               db_connection_id=conn.id)
+        db.session.add(query)
+        db.session.commit()
+        run = client.post(f'/api/queries/{query.id}/run').get_json()
+        assert run['status'] == 'error' and 'does not allow it' in run['error_message']
+        test = client.post(f'/api/queries/{query.id}/test').get_json()
+        assert test['success'] is False and 'does not allow it' in test['message']
         assert self.tables(path) == ['orders']
 
     def test_select_still_works(self, app, client, connection):
@@ -118,17 +164,31 @@ class TestTestQuery:
         result = client.post(f'/api/connections/{conn.id}/test-query', json={'sql': 'SELECT * FROM orders'}).get_json()
         assert result['valid'] is True
 
-    def test_keyword_check_like_the_form(self):
-        assert write_statement_keyword('select 1') is None
-        assert write_statement_keyword('  WITH x AS (SELECT 1) SELECT * FROM x') is None
-        assert write_statement_keyword('/* note */ -- line\n delete from orders') == 'DELETE'
-        assert write_statement_keyword('EXEC proc') == 'EXEC'
+    def test_keyword_check_reads_the_whole_statement(self):
+        reads = ['select 1', '  WITH x AS (SELECT 1) SELECT * FROM x', "SELECT 'DELETE' AS a, \"UPDATE\" FROM t",
+                 "SELECT REPLACE(name, 'a', 'b'), last_update FROM t", 'SELECT 1; -- DROP TABLE t',
+                 "SELECT '--', 1 FROM t", 'SELECT 1;', '(SELECT 1) UNION (SELECT 2)',
+                 # The settings SQL Server queries start with, with or without ;
+                 'SET NOCOUNT ON; SELECT 1', 'set nocount on\nselect 1', 'SET NOCOUNT ON',
+                 'SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED\nSELECT 1',
+                 'SET TRANSACTION ISOLATION LEVEL SNAPSHOT SET NOCOUNT OFF; WITH x AS (SELECT 1) SELECT * FROM x']
+        assert [write_statement_keyword(sql) for sql in reads] == [None] * len(reads)
+        writes = {'/* note */ -- line\n delete from orders': 'DELETE', 'EXEC proc': 'EXEC', 'CALL proc()': 'CALL',
+                  'WITH gone AS (DELETE FROM t RETURNING *) SELECT * FROM gone': 'DELETE',
+                  'SELECT 1; DROP TABLE orders': 'DROP', 'SELECT * INTO copy FROM orders': 'INTO',
+                  "SELECT '--', 1; DELETE FROM t": 'DELETE', 'SET NOCOUNT ON DELETE FROM t': 'DELETE',
+                  'SET NOCOUNT ON; UPDATE t SET a = 1': 'UPDATE', 'SET ROWCOUNT 10; SELECT 1': 'SET',
+                  'SET NOCOUNT ONE; SELECT 1': 'SET', 'SET @since = 1; SELECT 1': 'SET',
+                  'REPLACE INTO t VALUES (1)': 'REPLACE', 'SELECT * FROM t FOR UPDATE': 'UPDATE'}
+        assert {sql: write_statement_keyword(sql) for sql in writes} == writes
 
-    def test_button_asks_like_the_save(self):
+    def test_the_button_asks_when_the_server_says_so(self):
         js = (ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
         test = js[js.index('async function testSqlQuery'):]
         test = test[:test.index('\n}\n')]
-        assert 'sqlSafety.confirm(keyword)' in test and 'confirm_write: confirmWrite' in test
+        # One check, on the server: the page no longer guesses from the first word
+        assert 'result.confirm' in test and 'confirm_write: true' in test and 'sqlSafety.check' not in test
+        assert 'dangerousKeywords' not in (ROOT / 'templates' / 'query_form.html').read_text(encoding='utf-8')
 
 
 class TestSecrets:
@@ -167,6 +227,29 @@ class TestSecrets:
             result = notification_service._post_telegram('123456:SECRETtokenSECRETtoken123', '42', 'hi')
         assert result['success'] is False and 'SECRET' not in result['message']
 
+    @pytest.mark.parametrize('path, secret', [('/hooks/catch/1234567/abcde12/', 'abcde12'),
+                                              ('/api/webhook/allarme_unità', 'allarme')])
+    def test_a_channel_error_does_not_show_its_address(self, app, monkeypatch, caplog, path, secret):
+        """Not even where it does not look like a token (Zapier, Home Assistant), as saved or as sent."""
+        from notification_service import notification_service
+        monkeypatch.setenv('NO_PROXY', '127.0.0.1')
+        with closing(socket.socket()) as closed:
+            closed.bind(('127.0.0.1', 0))
+            url = f'http://127.0.0.1:{closed.getsockname()[1]}{path}'
+        channel = NotificationChannel(name='Hook', channel_type='webhook', is_active=True)
+        channel.set_config({'url': url})
+        db.session.add(channel)
+        db.session.commit()
+        query = make_query(channels=[channel])
+        moved = requests.Response()
+        moved.status_code, moved.headers['Location'] = 301, url.replace('http:', 'https:')
+        with patch('notification_service.requests.request', return_value=moved):
+            redirect = notification_service.send_to_channel(channel, query, [{'ID': 1}])['message']
+        no_answer = notification_service.test_channel(channel)['message']
+        notification_service.send_system_message(query, 'query_failing', 'Failing', ['x'])
+        assert 'https://127.0.0.1' in redirect and '127.0.0.1' in no_answer and '/***' in no_answer
+        assert not [text for text in (redirect, no_answer, channel.last_error, caplog.text) if secret in text]
+
     def test_log_lines_hidden(self):
         stream = io.StringIO()
         handler = logging.StreamHandler(stream)
@@ -197,6 +280,49 @@ class TestApiScheduler:
         assert not [r.rule for r in flask_app.url_map.iter_rules() if r.rule.startswith('/scheduler')]
 
 
+class TestHeaders:
+    """What the responses tell the browser."""
+
+    def test_what_every_response_tells_the_browser(self, app, client):
+        assert 'Secure' not in client.get('/').headers['Set-Cookie']
+        for url in ('/', '/api/queries', '/static/css/app.css'):
+            with client.get(url) as response:
+                assert response.status_code == 200, url
+                assert (response.headers['X-Content-Type-Options'], response.headers['X-Frame-Options'],
+                        response.headers['Content-Security-Policy'], response.headers['Referrer-Policy']) == \
+                    ('nosniff', 'DENY', "frame-ancestors 'none'", 'same-origin'), url
+                assert 'Strict-Transport-Security' not in response.headers
+
+    def test_with_https_the_cookie_travels_only_over_https_and_hsts_is_left_to_the_proxy(self):
+        """ERRORENGINE_HTTPS read from the environment, as at startup. HSTS would cover every port of the host
+        name, and only the proxy knows what else runs there."""
+        check = ("from app import create_app\n"
+                 "page = create_app('testing').test_client().get('/login')\n"
+                 "print('Secure' in page.headers['Set-Cookie'], 'Strict-Transport-Security' in page.headers,\n"
+                 "      'id=\"httpsOnly\"' in page.get_data(as_text=True))")
+        env = {name: os.environ[name] for name in ('PATH', 'SYSTEMROOT') if name in os.environ}
+        answers = []
+        for value in ('true', ''):
+            run = subprocess.run([sys.executable, '-c', check], cwd=ROOT, env=dict(env, ERRORENGINE_HTTPS=value),
+                                 capture_output=True, text=True, timeout=120)
+            answers.append(run.stdout.split()[-3:] or run.stderr[-500:])
+        # Secure cookie, HSTS, the warning of the sign-in page for http:// addresses
+        assert answers == [['True', 'False', 'True'], ['False', 'False', 'False']]
+
+    def test_scripts_and_styles_keep_their_type_whatever_the_windows_registry_says(self):
+        import mimetypes
+        from app import create_app
+        # What some Windows registries say, and Python reads it from there
+        mimetypes.add_type('text/plain', '.js')
+        mimetypes.add_type('text/plain', '.css')
+        app = create_app('testing')
+        client = app.test_client()
+        with client.get('/static/js/app.js') as js, client.get('/static/css/app.css') as css:
+            assert (js.mimetype, css.mimetype) == ('text/javascript', 'text/css')
+        with app.app_context():
+            db.engine.dispose()
+
+
 class TestStartup:
 
     @pytest.mark.parametrize('script', ['start.bat', 'start.sh'])
@@ -208,21 +334,37 @@ class TestStartup:
     def test_settings_that_do_not_work_are_named_at_startup(self, caplog, monkeypatch):
         import config
         from app import create_app
-        warnings = ("is not a time zone", "MAIL_USE_TLS is no longer used", "NOTIFY_RETRY_HOURS is no longer used")
-        for name in ('MAIL_USE_TLS', 'NOTIFY_RETRY_HOURS'):
+        warnings = ("is not a time zone", "MAIL_USE_TLS is no longer used", "NOTIFY_RETRY_HOURS is no longer used",
+                    "SECRET_KEY is no longer used")
+        for name in ('MAIL_USE_TLS', 'NOTIFY_RETRY_HOURS', 'SECRET_KEY'):
             monkeypatch.delenv(name, raising=False)
         with caplog.at_level(logging.WARNING, logger='app'):
-            create_app('testing')
+            app = create_app('testing')
+        with app.app_context():
+            db.engine.dispose()
         assert not any(w in caplog.text for w in warnings)
         monkeypatch.setattr(config.TestingConfig, 'TIMEZONE', 'Europe/Rom')
         monkeypatch.setenv('MAIL_USE_TLS', 'true')
         monkeypatch.setenv('NOTIFY_RETRY_HOURS', '24')
+        monkeypatch.setenv('SECRET_KEY', 'k' * 64)
         with caplog.at_level(logging.WARNING, logger='app'):
-            create_app('testing')
+            app = create_app('testing')
+        with app.app_context():
+            db.engine.dispose()
         assert all(w in caplog.text for w in warnings)
 
-    def test_a_number_setting_that_is_not_one_is_named(self, monkeypatch, caplog):
-        from config import whole_number
+    def test_the_session_key_is_new_at_every_start(self):
+        """Not read from .env: SECRET_KEY of older versions, still there, only gets the warning above."""
+        def key():
+            return subprocess.run([sys.executable, '-c', 'import config; print(config.Config.SECRET_KEY)'],
+                                  cwd=ROOT, env=dict(os.environ, SECRET_KEY='k' * 64), capture_output=True,
+                                  text=True, check=True).stdout.strip()
+        first, second = key(), key()
+        assert first != second and len(first) == len(second) == 64
+        assert 'k' * 64 not in (first, second)
+
+    def test_a_setting_with_a_wrong_value_is_named(self, monkeypatch, caplog):
+        from config import flag, whole_number
         for value, expected in (('', 4), (' 12 ', 12), ('0', 0)):
             monkeypatch.setenv('ERRORENGINE_THREADS', value)
             assert whole_number('ERRORENGINE_THREADS', 4) == expected
@@ -233,18 +375,17 @@ class TestStartup:
                 whole_number('ERRORENGINE_PORT', 5000, between)
             assert stop.value.code == 1
             assert f'ERRORENGINE_PORT={value} in .env is not a whole number' in caplog.text
+        for value, expected in (('', False), ('false', False), (' TRUE ', True)):
+            monkeypatch.setenv('ERRORENGINE_HTTPS', value)
+            assert flag('ERRORENGINE_HTTPS') is expected
+        monkeypatch.setenv('ERRORENGINE_HTTPS', 'yes')
+        with pytest.raises(SystemExit):
+            flag('ERRORENGINE_HTTPS')
+        assert 'ERRORENGINE_HTTPS=yes in .env is not true or false' in caplog.text
 
     @pytest.mark.skipif(sys.platform == 'win32', reason='SIGTERM: Windows ends a process without a signal')
     def test_the_server_takes_its_port_before_the_scheduler_and_stops_in_order(self, tmp_path):
-        # A copy of the project: serve.py writes its log next to itself and reads the .env there
-        project = tmp_path / 'ErrorEngine'
-        shutil.copytree(ROOT, project, ignore=shutil.ignore_patterns(
-            '.git', 'venv', '.venv', 'logs', 'instance', 'lib', 'docs', 'tests', '__pycache__', '*.db', '.env'))
-        with socket.socket() as probe:
-            probe.bind(('127.0.0.1', 0))
-            port = probe.getsockname()[1]
-        env = {'PATH': os.environ.get('PATH', ''), 'SECRET_KEY': 's' * 32, 'ERRORENGINE_HOST': '127.0.0.1',
-               'ERRORENGINE_PORT': str(port), 'DATABASE_URL': f"sqlite:///{(tmp_path / 'ee.db').as_posix()}"}
+        project, port, env = project_copy(tmp_path)
         serve = [sys.executable, str(project / 'serve.py')]
 
         def refused(**settings):
@@ -257,21 +398,17 @@ class TestStartup:
 
         assert 'ERRORENGINE_THREADS=abc in .env' in refused(ERRORENGINE_THREADS='abc')
         assert 'MAIL_PORT=2.5 in .env' in refused(MAIL_PORT='2.5')
+        assert 'ERRORENGINE_HTTPS=yes in .env' in refused(ERRORENGINE_HTTPS='yes')
+        assert 'ERRORENGINE_TRUSTED_PROXY=proxy.local in .env' in refused(ERRORENGINE_TRUSTED_PROXY='proxy.local')
+        assert 'ERRORENGINE_ENCRYPTION_KEY is missing' in refused(ERRORENGINE_ENCRYPTION_KEY='')
 
-        first = subprocess.Popen(serve, env=env, stderr=subprocess.DEVNULL)
+        first = start(project, port, env)
         try:
-            deadline = time.monotonic() + 60
-            while True:
-                try:
-                    socket.create_connection(('127.0.0.1', port), timeout=1).close()
-                    break
-                except OSError:
-                    assert first.poll() is None and time.monotonic() < deadline
-                    time.sleep(0.1)
             assert 'Is ErrorEngine already running?' in refused()
             health = http.client.HTTPConnection('127.0.0.1', port, timeout=60)
             health.request('GET', '/api/health')
             assert health.getresponse().status == 200
+            health.close()
             first.send_signal(signal.SIGTERM)
             assert first.wait(timeout=60) == 0
         finally:
@@ -279,6 +416,52 @@ class TestStartup:
         log = (project / 'logs' / 'errorengine.log').read_text(encoding='utf-8')
         assert log.count('Scheduler started') == 1 and log.count('ErrorEngine stopped') == 1, log
         assert 'unexpected error' not in log
+
+    @pytest.mark.skipif(sys.platform == 'win32', reason='On Windows the permissions of the folder decide')
+    def test_its_files_are_for_its_account_only(self, tmp_path):
+        """The files it creates; one that other users can read, as .env copied with cp, is named in the log."""
+        project, port, env = project_copy(tmp_path)
+        (project / '.env').write_text('# copied from .env.example\n', encoding='utf-8')
+        (project / '.env').chmod(0o644)
+        server = start(project, port, env)
+        try:
+            # The port answers before the app is ready: this waits for it
+            health = http.client.HTTPConnection('127.0.0.1', port, timeout=60)
+            health.request('GET', '/api/health')
+            assert health.getresponse().status == 200
+            health.close()
+        finally:
+            server.kill()
+            server.wait()
+        log = (project / 'logs' / 'errorengine.log').read_text(encoding='utf-8')
+        assert f"Other users of this machine can read {project / '.env'}: " in log
+        assert f"chmod 600 {project / '.env'}\n" in log
+        made = [tmp_path / name for name in ('ee.db', 'ee.db-wal', 'ee.db-shm') if (tmp_path / name).exists()]
+        for path in made + [project / 'logs' / 'errorengine.log']:
+            assert path.stat().st_mode & 0o077 == 0, path
+
+    def test_from_the_trusted_proxy_alone_the_client_and_the_host_come_from_its_headers(self, tmp_path):
+        project, port, env = project_copy(tmp_path)
+        forwarded = {'X-Forwarded-For': '203.0.113.9', 'X-Forwarded-Host': 'errorengine.example.com',
+                     'X-Forwarded-Proto': 'https', 'Referer': 'https://errorengine.example.com/queries'}
+        answers = []
+        # No proxy; a proxy that is not who connects (written in full: it becomes ::1); the proxy that connects
+        for proxy in ('', '0:0:0:0:0:0:0:1', '127.0.0.1'):
+            server = start(project, port, dict(env, ERRORENGINE_TRUSTED_PROXY=proxy))
+            try:
+                # A form without its CSRF token: refused, back to its page if the host is the one of the form
+                request = http.client.HTTPConnection('127.0.0.1', port, timeout=60)
+                request.request('POST', '/login', body='', headers=forwarded)
+                response = request.getresponse()
+                answers.append((response.getheader('Location'), response.getheader('Server')))
+                request.close()
+            finally:
+                server.kill()
+                server.wait()
+        assert answers == [('/', None), ('/', None), ('/queries', None)]
+        log = (project / 'logs' / 'errorengine.log').read_text(encoding='utf-8')
+        assert 'Trusted reverse proxy: ::1' in log
+        assert log.count("Refused POST '/login' from 127.0.0.1") == 2 and log.count('from 203.0.113.9') == 1
 
     def test_waitress_on_every_platform_and_no_gunicorn(self):
         lines = [l.strip() for l in (ROOT / 'requirements.txt').read_text(encoding='utf-8').splitlines()

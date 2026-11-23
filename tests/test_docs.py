@@ -14,7 +14,7 @@ DOCS = sorted((ROOT / 'docs').glob('*.md'))
 CONFIGURATION = (ROOT / 'docs' / 'configuration.md').read_text(encoding='utf-8')
 
 # Read by the code but not meant for users: development, tests, internal database URL
-NOT_DOCUMENTED = {'DATABASE_URL', 'FLASK_ENV', 'FLASK_DEBUG', 'PATH', 'EE_SECRET_MARKER'}
+NOT_DOCUMENTED = {'FLASK_ENV', 'FLASK_DEBUG', 'PATH', 'EE_SECRET_MARKER'}
 # Only for scripts/check_ibmi.py, documented in docs/ibmi-driver.md
 IBMI_SCRIPT = {'IBMI_HOST', 'IBMI_USER', 'IBMI_PASSWORD', 'IBMI_LIBRARY'}
 
@@ -25,7 +25,7 @@ def variables_read_by_the_code():
         if any(part in ('tests', 'venv', '.venv') for part in path.relative_to(ROOT).parts):
             continue
         source = path.read_text(encoding='utf-8')
-        found |= set(re.findall(r"(?:environ\.get|getenv|environ\[|whole_number)\(?\s*['\"]([A-Z_]{3,})['\"]",
+        found |= set(re.findall(r"(?:environ\.get|getenv|environ\[|whole_number|flag)\(?\s*['\"]([A-Z_]{3,})['\"]",
                                 source))
     return found
 
@@ -45,7 +45,7 @@ def test_every_setting_is_documented():
     # Settings of older versions: no longer in the table or in .env.example, only named as retired
     assert not set(RETIRED_SETTINGS) & (documented | example)
     assert all(f'`{name}`' in CONFIGURATION for name in RETIRED_SETTINGS)
-    assert {'SECRET_KEY', 'ERRORENGINE_PASSWORD_HASH', 'TIMEZONE', 'MAIL_SERVER'} <= example
+    assert {'ERRORENGINE_PASSWORD_HASH', 'ERRORENGINE_ENCRYPTION_KEY', 'TIMEZONE', 'MAIL_SERVER'} <= example
     assert 'docs/configuration.md' in example_text
     assert IBMI_SCRIPT <= set(re.findall(r'`(IBMI_[A-Z]+)`', (ROOT / 'docs' / 'ibmi-driver.md').read_text(encoding='utf-8')))
 
@@ -75,6 +75,15 @@ def test_api_reference_lists_existing_endpoints(app):
     assert len(rows) >= 10
     for method, path in rows:
         assert method in rules.get(path, set()), f'{method} {path}'
+
+
+def test_the_api_reference_lists_what_the_token_can_change(app):
+    from auth import TOKEN_ACTIONS
+    reference = (ROOT / 'docs' / 'api-reference.md').read_text(encoding='utf-8')
+    documented = set(re.findall(r'^\| (POST|PUT|DELETE) \| `([^`?]+)', reference, re.M))
+    actions = {(method, re.sub(r'<(?:\w+:)?\w+>', '{id}', rule.rule)) for rule in app.url_map.iter_rules()
+               if rule.endpoint in TOKEN_ACTIONS for method in rule.methods - {'HEAD', 'OPTIONS'}}
+    assert len(documented) == len(TOKEN_ACTIONS) and documented == actions
 
 
 def test_routing_operators_match_the_code():

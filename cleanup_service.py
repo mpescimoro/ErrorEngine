@@ -12,16 +12,11 @@ logger = logging.getLogger(__name__)
 
 
 class CleanupService:
-    """
-    Periodic database cleanup service.
-    Deletes old records according to the configured retention.
-    """
-    
+
     def __init__(self, app=None):
         self.app = app
     
     def init_app(self, app):
-        """Initializes the Flask extension."""
         self.app = app
         app.extensions['cleanup'] = self
     
@@ -162,14 +157,11 @@ class CleanupService:
             'resolved_errors_retention_days': current_app.config.get('RESOLVED_ERRORS_RETENTION_DAYS', 60)
         }
         
-        # Total counts
         total_query_logs = QueryLog.query.count()
         total_email_logs = EmailLog.query.count()
         total_errors = ErrorRecord.query.count()
         resolved_errors = ErrorRecord.query.filter(ErrorRecord.resolved_at.isnot(None)).count()
         active_errors = total_errors - resolved_errors
-        
-        # Oldest records
         oldest_query_log = QueryLog.query.order_by(QueryLog.executed_at.asc()).first()
         oldest_email_log = EmailLog.query.order_by(EmailLog.sent_at.asc()).first()
         

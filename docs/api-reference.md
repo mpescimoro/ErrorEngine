@@ -2,6 +2,10 @@
 
 All endpoints return JSON and need a login: the browser session, or for scripts the token set in `ERRORENGINE_API_TOKEN` (see [Configuration](configuration.md#sign-in)). Only `/api/health` is open, for external monitors.
 
+With the token, scripts can read and send the POST requests in the table below, which run and test what is saved and resolve errors. The other requests that change something are made by the pages, to change the configuration, try SQL or a server typed in a form, send test emails or clean up: they need the browser session, and the token gets 403.
+
+With the browser session, the requests that change something also need the CSRF token of the page, in the `X-CSRF-Token` header: the pages of ErrorEngine send it. With the API token it is not needed.
+
 ## Endpoints
 
 | Method | Endpoint | Description |

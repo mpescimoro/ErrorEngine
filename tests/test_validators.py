@@ -1,142 +1,61 @@
 """
-Tests for the validators module.
+Validators: email addresses, routing rules, text from the forms.
 """
-from validators import (
-    validate_email, validate_email_list, validate_routing_rule, sanitize_string
-)
+import pytest
+
+from validators import validate_email, validate_email_list, validate_routing_rule, sanitize_string
 
 
-class TestValidateEmail:
-    """Tests for validate_email."""
-    
-    def test_valid_email(self):
-        is_valid, error = validate_email('test@example.com')
-        assert is_valid is True
-        assert error == ''
-    
-    def test_valid_email_with_subdomain(self):
-        is_valid, error = validate_email('user@mail.example.com')
-        assert is_valid is True
-    
-    def test_empty_email(self):
-        is_valid, error = validate_email('')
-        assert is_valid is False
-        assert 'empty' in error.lower()
-    
-    def test_invalid_format(self):
-        is_valid, error = validate_email('not-an-email')
-        assert is_valid is False
-        assert 'format' in error.lower()
-    
-    def test_email_too_long(self):
-        long_email = 'a' * 250 + '@example.com'
-        is_valid, error = validate_email(long_email)
-        assert is_valid is False
-        assert 'long' in error.lower()
+@pytest.mark.parametrize('address, problem', [
+    ('test@example.com', ''), ('user@mail.example.com', ''),
+    ('', 'empty'), ('not-an-email', 'format'), ('a' * 250 + '@example.com', 'long'),
+])
+def test_email_address(address, problem):
+    valid, message = validate_email(address)
+    if problem:
+        assert not valid and problem in message.lower()
+    else:
+        assert valid and message == ''
 
 
-class TestValidateEmailList:
-    """Tests for validate_email_list."""
-    
-    def test_single_email(self):
-        is_valid, error, emails = validate_email_list('test@example.com')
-        assert is_valid is True
-        assert emails == ['test@example.com']
-    
-    def test_multiple_emails(self):
-        is_valid, error, emails = validate_email_list('a@test.com, b@test.com, c@test.com')
-        assert is_valid is True
-        assert len(emails) == 3
-    
-    def test_empty_string(self):
-        is_valid, error, emails = validate_email_list('')
-        assert is_valid is True
-        assert emails == []
-    
-    def test_one_invalid(self):
-        is_valid, error, emails = validate_email_list('valid@test.com, invalid')
-        assert is_valid is False
+def test_email_lists():
+    for text, addresses in (('test@example.com', ['test@example.com']), ('', []),
+                            ('a@test.com, b@test.com, c@test.com', ['a@test.com', 'b@test.com', 'c@test.com'])):
+        valid, _, found = validate_email_list(text)
+        assert valid and found == addresses, text
+    assert validate_email_list('valid@test.com, invalid')[0] is False
 
 
-class TestValidateRoutingRule:
-    """Tests for validate_routing_rule."""
-    
-    def test_valid_rule(self):
-        data = {
-            'name': 'Test Rule',
-            'recipients': 'test@example.com',
-            'condition_logic': 'AND',
-            'priority': 0,
-            'conditions': [
-                {'field_name': 'STATUS', 'operator': 'equals', 'value': 'ERROR'}
-            ]
-        }
-        is_valid, error = validate_routing_rule(data)
-        assert is_valid is True
-    
-    def test_missing_recipients(self):
-        data = {
-            'name': 'Test Rule',
-            'recipients': '',
-            'condition_logic': 'AND'
-        }
-        is_valid, error = validate_routing_rule(data)
-        assert is_valid is False
-    
-    def test_invalid_logic(self):
-        data = {
-            'recipients': 'test@example.com',
-            'condition_logic': 'INVALID'
-        }
-        is_valid, error = validate_routing_rule(data)
-        assert is_valid is False
-    
-    def test_invalid_priority(self):
-        data = {
-            'recipients': 'test@example.com',
-            'priority': 'not a number'
-        }
-        is_valid, error = validate_routing_rule(data)
-        assert is_valid is False
-
-    def test_invalid_regex_is_refused(self):
-        ok, message = validate_routing_rule({'recipients': 'a@x.it', 'conditions': [
-            {'field_name': 'CODE', 'operator': 'regex', 'value': '([a-z'}]})
-        assert not ok and 'regular expression' in message
-
-    def test_unknown_operator_and_wrong_shape_are_refused(self):
-        # An unknown operator, saved, would never match
-        ok, message = validate_routing_rule({'recipients': 'a@x.it', 'conditions': [
-            {'field_name': 'CODE', 'operator': 'equal', 'value': 'X'}]})
-        assert not ok and "unknown operator 'equal'" in message
-        for data in (['a@x.it'], {'recipients': ['a@x.it']}, {'recipients': 'a@x.it', 'conditions': 'CODE'},
-                     {'recipients': 'a@x.it', 'conditions': ['CODE']}):
-            ok, message = validate_routing_rule(data)
-            assert not ok and message, data
+def test_a_valid_rule():
+    ok, _ = validate_routing_rule({'name': 'Test Rule', 'recipients': 'test@example.com', 'condition_logic': 'AND',
+                                   'priority': 0,
+                                   'conditions': [{'field_name': 'STATUS', 'operator': 'equals', 'value': 'ERROR'}]})
+    assert ok
 
 
-class TestSanitizeString:
-    """Tests for sanitize_string."""
-    
-    def test_normal_string(self):
-        result = sanitize_string('Hello World')
-        assert result == 'Hello World'
-    
-    def test_trim_whitespace(self):
-        result = sanitize_string('  Hello  ')
-        assert result == 'Hello'
-    
-    def test_max_length(self):
-        result = sanitize_string('a' * 1000, max_length=100)
-        assert len(result) == 100
-    
-    def test_empty_string(self):
-        result = sanitize_string('')
-        assert result == ''
-    
-    def test_none(self):
-        result = sanitize_string(None)
-        assert result == ''
+@pytest.mark.parametrize('rule, says', [
+    ({'name': 'Test Rule', 'recipients': '', 'condition_logic': 'AND'}, ''),
+    ({'recipients': 'test@example.com', 'condition_logic': 'INVALID'}, ''),
+    ({'recipients': 'test@example.com', 'priority': 'not a number'}, ''),
+    ({'recipients': 'a@x.it', 'conditions': [{'field_name': 'CODE', 'operator': 'regex', 'value': '([a-z'}]},
+     'regular expression'),
+    # Saved, an unknown operator would never match
+    ({'recipients': 'a@x.it', 'conditions': [{'field_name': 'CODE', 'operator': 'equal', 'value': 'X'}]},
+     "unknown operator 'equal'"),
+    (['a@x.it'], ''), ({'recipients': ['a@x.it']}, ''), ({'recipients': 'a@x.it', 'conditions': 'CODE'}, ''),
+    ({'recipients': 'a@x.it', 'conditions': ['CODE']}, ''),
+])
+def test_rules_that_cannot_be_saved(rule, says):
+    ok, message = validate_routing_rule(rule)
+    assert not ok and message and says in message
 
-    def test_control_characters_removed(self):
-        assert sanitize_string('a\x00b\x07c\td\n') == 'abc\td'
+
+@pytest.mark.parametrize('text, clean', [
+    ('Hello World', 'Hello World'), ('  Hello  ', 'Hello'), ('', ''), (None, ''), ('a\x00b\x07c\td\n', 'abc\td'),
+])
+def test_text_from_the_forms(text, clean):
+    assert sanitize_string(text) == clean
+
+
+def test_text_cut_to_the_maximum_length():
+    assert sanitize_string('a' * 1000, max_length=100) == 'a' * 100

@@ -35,14 +35,14 @@ cp .env.example .env        # Windows: copy .env.example .env
 ```
 
 1. Start it once, so it creates the virtual environment and installs the dependencies: `start.bat` on Windows, `bash start.sh` on Linux/macOS. Then stop it with Ctrl+C.
-2. Generate a secret key and the hash of your password (on Windows use `venv\Scripts\python.exe`):
+2. Generate the key that encrypts the passwords saved in the database, and the hash of your password (on Windows use `venv\Scripts\python.exe`):
 
    ```bash
-   venv/bin/python -c "import secrets; print(secrets.token_hex(32))"
+   venv/bin/python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
    venv/bin/python -c "import getpass; from werkzeug.security import generate_password_hash as h; print(h(getpass.getpass('Password: ')))"
    ```
 
-3. Put them in `.env` as `SECRET_KEY` and `ERRORENGINE_PASSWORD_HASH`, together with your email settings: an SMTP server, Microsoft 365, or nothing to notify only through channels (see [Email](docs/configuration.md#email)).
+3. Put them in `.env` as `ERRORENGINE_ENCRYPTION_KEY` and `ERRORENGINE_PASSWORD_HASH`, together with your email settings: an SMTP server, Microsoft 365, or nothing to notify only through channels (see [Email](docs/configuration.md#email)). Save a copy of the encryption key apart: without it the saved passwords cannot be read (see [Saved passwords and tokens](docs/configuration.md#saved-passwords-and-tokens)).
 4. Start it again and open **http://localhost:5000**. The user is `admin`.
 
 The start scripts run `serve.py`, the production server. Windows service, log file and every setting: see [Configuration](docs/configuration.md).

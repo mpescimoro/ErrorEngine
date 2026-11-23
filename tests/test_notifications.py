@@ -8,28 +8,11 @@ import pytest
 from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
-from models import db, MonitoredQuery, RoutingRule, RoutingCondition, ErrorRecord, NotificationChannel
+from models import db, RoutingRule, ErrorRecord, NotificationChannel
 from utils import get_utc_now
+from tests.helpers import make_query
 
 CHANNELS_OK = {'total': 1, 'success': 1, 'failed': 0, 'results': []}
-
-
-def make_query(channel=None, rules=(), **kwargs):
-    query = MonitoredQuery(name='Notifications', sql_query='SELECT 1', key_fields='ID', **kwargs)
-    if channel:
-        query.notification_channels.append(channel)
-    db.session.add(query)
-    db.session.flush()
-    for i, (recipients, conditions) in enumerate(rules):
-        rule = RoutingRule(query_id=query.id, name=f'Rule {i}', recipients=recipients,
-                           priority=i, is_active=True, condition_logic='OR')
-        db.session.add(rule)
-        db.session.flush()
-        for field, value in conditions:
-            db.session.add(RoutingCondition(rule_id=rule.id, field_name=field,
-                                            operator='equals', value=value))
-    db.session.commit()
-    return query
 
 
 def emails_sent(mock_send):
@@ -203,7 +186,7 @@ class TestRecordedRecipients:
     @patch('monitor_service.execute_query_source')
     def test_channel_only_no_address(self, mock_execute, app, channel, send_email, send_channels):
         from monitor_service import monitor_service
-        query = make_query(channel=channel, email_recipients='')
+        query = make_query(channels=[channel], email_recipients='')
         mock_execute.return_value = (['ID', 'TEAM'], [ERRORS[0]])
 
         monitor_service.check_query(query, force=True)
@@ -221,7 +204,7 @@ class TestChannels:
 
     def test_channel_sent_once_with_several_recipients(self, app, channel, send_email, send_channels):
         from monitor_service import monitor_service
-        query = make_query(channel=channel, **ROUTING_HELPDESK)
+        query = make_query(channels=[channel], **ROUTING_HELPDESK)
 
         emails, channels, _ = monitor_service._send_notifications(query, ERRORS, ['ID'])
         assert (emails, channels) == (4, 1)
@@ -230,7 +213,7 @@ class TestChannels:
 
     def test_channel_only_without_email_recipients(self, app, channel, send_email, send_channels):
         from monitor_service import monitor_service
-        query = make_query(channel=channel, email_recipients='')
+        query = make_query(channels=[channel], email_recipients='')
 
         emails, channels, _ = monitor_service._send_notifications(query, ERRORS, ['ID'])
         assert (emails, channels) == (0, 1)
@@ -241,7 +224,7 @@ class TestChannels:
     def test_no_delivery_errors_not_notified(self, mock_execute, app, channel, send_email):
         """If the channel fails, the error is not marked as notified."""
         from monitor_service import monitor_service
-        query = make_query(channel=channel, email_recipients='')
+        query = make_query(channels=[channel], email_recipients='')
         mock_execute.return_value = (['ID', 'TEAM'], [ERRORS[0]])
 
         with patch('notification_service.notification_service.send_to_all_channels',
@@ -282,7 +265,7 @@ class TestChannels:
 
     def test_new_errors_reach_the_channels_with_their_ids(self, app, channel, send_email, send_channels):
         from monitor_service import monitor_service
-        query = make_query(channel=channel, email_recipients='')
+        query = make_query(channels=[channel], email_recipients='')
         with patch('monitor_service.execute_query_source', return_value=(['ID', 'TEAM'], ERRORS[:2])):
             monitor_service.check_query(query, force=True)
         ids = [e.id for e in ErrorRecord.query.filter_by(query_id=query.id).order_by(ErrorRecord.id)]
@@ -379,7 +362,7 @@ class TestChannelMessages:
 
     def test_reminders_reach_the_channels_as_reminders(self, app, channel, send_email, send_channels):
         from monitor_service import monitor_service
-        query = make_query(channel=channel, email_recipients='', reminder_enabled=True,
+        query = make_query(channels=[channel], email_recipients='', reminder_enabled=True,
                            reminder_interval_minutes=60, reminder_max_count=3)
         error = make_old_error(query)
         monitor_service._process_reminders(query, ['ID'])
@@ -413,7 +396,7 @@ class TestReminders:
     def test_channel_only_reminder_updates_the_counters(self, app, channel, send_email, send_channels):
         """Without updating the counters the reminder would go out at every check."""
         from monitor_service import monitor_service
-        query = make_query(channel=channel, email_recipients='', reminder_enabled=True,
+        query = make_query(channels=[channel], email_recipients='', reminder_enabled=True,
                            reminder_interval_minutes=60, reminder_max_count=3)
         error = make_old_error(query)
 
@@ -428,7 +411,7 @@ class TestReminders:
     @patch('monitor_service.execute_query_source')
     def test_reminders_counted_in_the_log(self, mock_execute, app, channel, send_email, send_channels):
         from monitor_service import monitor_service
-        query = make_query(channel=channel, email_recipients='a@x.it', reminder_enabled=True,
+        query = make_query(channels=[channel], email_recipients='a@x.it', reminder_enabled=True,
                            reminder_interval_minutes=60, reminder_max_count=3)
         make_old_error(query)
         mock_execute.return_value = (['ID', 'TEAM'], [ERRORS[0]])

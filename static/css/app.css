@@ -61,11 +61,9 @@
     /* Transitions */
     --transition-fast: 150ms ease;
     --transition-base: 200ms ease;
-    --transition-slow: 300ms ease;
     
     /* Sidebar width */
     --sidebar-width: 260px;
-    --sidebar-collapsed-width: 70px;
 }
 
 /* ============================================
@@ -111,8 +109,6 @@ h3 { font-size: 1.25rem; }
 h4 { font-size: 1.125rem; }
 
 .text-muted { color: var(--color-text-muted); }
-.text-light { color: var(--color-text-light); }
-.text-primary { color: var(--color-primary) !important; }
 .text-success { color: var(--color-success) !important; }
 .text-warning { color: var(--color-warning) !important; }
 .text-danger { color: var(--color-danger) !important; }
@@ -485,15 +481,6 @@ h4 { font-size: 1.125rem; }
     border-color: var(--color-text-light);
 }
 
-.btn-danger {
-    background: var(--color-danger);
-    color: white;
-}
-
-.btn-danger:hover:not(:disabled) {
-    background: #dc2626;
-}
-
 /* Actions to think twice about (cleanup, confirming a write query) */
 .btn-warning {
     background: #b45309;
@@ -517,11 +504,6 @@ h4 { font-size: 1.125rem; }
 .btn-sm {
     padding: 0.375rem 0.75rem;
     font-size: 0.8125rem;
-}
-
-.btn-lg {
-    padding: 0.75rem 1.5rem;
-    font-size: 1rem;
 }
 
 .btn-icon {
@@ -1174,60 +1156,8 @@ a.badge:hover {
     animation: spin 0.8s linear infinite;
 }
 
-.spinner-sm {
-    width: 16px;
-    height: 16px;
-}
-
-.spinner-lg {
-    width: 40px;
-    height: 40px;
-    border-width: 3px;
-}
-
 @keyframes spin {
     to { transform: rotate(360deg); }
-}
-
-.skeleton {
-    background: linear-gradient(90deg, var(--color-border-light) 25%, var(--color-border) 50%, var(--color-border-light) 75%);
-    background-size: 200% 100%;
-    animation: shimmer 1.5s infinite;
-    border-radius: var(--radius-sm);
-}
-
-@keyframes shimmer {
-    0% { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
-}
-
-/* ============================================
-   Tabs
-   ============================================ */
-.tabs {
-    display: flex;
-    gap: var(--space-xs);
-    border-bottom: 1px solid var(--color-border);
-    margin-bottom: var(--space-lg);
-}
-
-.tab {
-    padding: var(--space-sm) var(--space-md);
-    font-weight: 500;
-    color: var(--color-text-muted);
-    text-decoration: none;
-    border-bottom: 2px solid transparent;
-    margin-bottom: -1px;
-    transition: all var(--transition-fast);
-}
-
-.tab:hover {
-    color: var(--color-text);
-}
-
-.tab.active {
-    color: var(--color-primary);
-    border-bottom-color: var(--color-primary);
 }
 
 /* ============================================
@@ -1263,22 +1193,9 @@ a.badge:hover {
 }
 
 /* ============================================
-   Progress Ring
-   ============================================ */
-.progress-ring {
-    transform: rotate(-90deg);
-}
-
-.progress-ring-circle {
-    transition: stroke-dashoffset var(--transition-slow);
-    stroke-linecap: round;
-}
-
-/* ============================================
    Utility Classes
    ============================================ */
 .flex { display: flex; }
-.flex-col { flex-direction: column; }
 .items-center { align-items: center; }
 .items-start { align-items: flex-start; }
 .justify-center { justify-content: center; }
@@ -1306,7 +1223,6 @@ a.badge:hover {
 }
 
 .w-full { width: 100%; }
-.h-full { height: 100%; }
 
 .mt-xs { margin-top: var(--space-xs); }
 .mt-sm { margin-top: var(--space-sm); }
@@ -1322,10 +1238,6 @@ a.badge:hover {
 
 .p-md { padding: var(--space-md); }
 .p-lg { padding: var(--space-lg); }
-
-.rounded-md { border-radius: var(--radius-md); }
-.rounded-lg { border-radius: var(--radius-lg); }
-.rounded-full { border-radius: var(--radius-full); }
 
 .truncate {
     overflow: hidden;
@@ -1410,17 +1322,6 @@ a.badge:hover {
     word-break: break-word;
 }
 
-.sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    border: 0;
-}
-
 /* ============================================
    Page Specific - Dashboard
    ============================================ */
@@ -1489,25 +1390,6 @@ a.badge:hover {
 /* ============================================
    Page Specific - Query Form
    ============================================ */
-.form-section {
-    margin-bottom: var(--space-xl);
-}
-
-.form-section-title {
-    font-size: 1rem;
-    font-weight: 600;
-    margin-bottom: var(--space-md);
-    padding-bottom: var(--space-sm);
-    border-bottom: 1px solid var(--color-border-light);
-    display: flex;
-    align-items: center;
-    gap: var(--space-sm);
-}
-
-.form-section-title i {
-    color: var(--color-primary);
-}
-
 /* SQL Editor */
 .sql-editor {
     font-family: var(--font-mono);
@@ -1515,15 +1397,6 @@ a.badge:hover {
     line-height: 1.6;
     min-height: 200px;
     tab-size: 2;
-}
-
-/* Test results */
-.test-results {
-    margin-top: var(--space-md);
-    padding: var(--space-md);
-    background: var(--color-bg);
-    border-radius: var(--radius-md);
-    border: 1px solid var(--color-border-light);
 }
 
 /* Routing rule card */
@@ -1579,22 +1452,6 @@ a.badge:hover {
     from { opacity: 0; transform: translateY(-10px); }
     to { opacity: 1; transform: translateY(0); }
 }
-
-.fade-in {
-    animation: fadeIn 0.3s ease forwards;
-}
-
-/* Stagger animation for lists */
-.stagger-in > * {
-    opacity: 0;
-    animation: fadeIn 0.3s ease forwards;
-}
-
-.stagger-in > *:nth-child(1) { animation-delay: 0.05s; }
-.stagger-in > *:nth-child(2) { animation-delay: 0.1s; }
-.stagger-in > *:nth-child(3) { animation-delay: 0.15s; }
-.stagger-in > *:nth-child(4) { animation-delay: 0.2s; }
-.stagger-in > *:nth-child(5) { animation-delay: 0.25s; }
 
 /* Pulse animation for active indicators */
 @keyframes pulse {

@@ -1,6 +1,5 @@
 """
-Utility functions for ErrorEngine.
-Centralized timezone handling that works everywhere (with or without Flask context).
+Helpers: the configured time zone, secrets out of messages, the server log file.
 """
 import logging
 import os
@@ -9,26 +8,19 @@ from datetime import datetime, timezone, time, timedelta
 from urllib.parse import urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
+from requests.utils import requote_uri
+
 # Cache to avoid repeated lookups
 _cached_tz = None
 _cached_tz_name = None
 
 
 def get_configured_timezone():
-    """
-    Returns the configured ZoneInfo timezone.
-    Works both inside and outside Flask context.
-    
-    Priority:
-    1. Flask current_app.config['TIMEZONE']
-    2. os.environ['TIMEZONE']
-    3. 'UTC' (fallback)
-    """
+    """The ZoneInfo of TIMEZONE (Flask configuration, else environment); UTC when missing or not a time zone."""
     global _cached_tz, _cached_tz_name
     
     tz_name = None
     
-    # Try the Flask context
     try:
         from flask import current_app
         if current_app and current_app.config:
@@ -36,11 +28,9 @@ def get_configured_timezone():
     except RuntimeError:
         pass  # Outside the Flask context
     
-    # Fall back to the environment
     if not tz_name:
         tz_name = os.environ.get('TIMEZONE', 'UTC')
     
-    # Use the cache if the time zone has not changed
     if tz_name == _cached_tz_name and _cached_tz is not None:
         return _cached_tz
     
@@ -74,10 +64,7 @@ def utc_to_local(utc_dt):
     
     tz = get_configured_timezone()
     
-    # Assume input is naive UTC, make it aware
     utc_aware = utc_dt.replace(tzinfo=timezone.utc)
-    
-    # Convert to local and strip tzinfo
     return utc_aware.astimezone(tz).replace(tzinfo=None)
 
 
@@ -88,10 +75,7 @@ def local_to_utc(local_dt):
     
     tz = get_configured_timezone()
     
-    # Assume input is naive local, make it aware
     local_aware = local_dt.replace(tzinfo=tz)
-    
-    # Convert to UTC and strip tzinfo
     return local_aware.astimezone(timezone.utc).replace(tzinfo=None)
 
 
@@ -149,15 +133,40 @@ def _redact_url(url: str) -> str:
     return urlunsplit((parts.scheme, netloc, path, query, '***' if parts.fragment else ''))
 
 
-def redact_secrets(text):
+def _known_texts(values) -> list:
+    """
+    Each value and, of an address, its path and query, as saved and as sent (percent-encoded): the longest first,
+    an address before its path. Under 4 characters a text holds no secret, and would mask pieces of the message.
+    """
+    texts = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        texts.add(value)
+        for form in (value, requote_uri(value)):
+            try:
+                parts = urlsplit(form)
+            except ValueError:
+                continue
+            if parts.scheme and parts.netloc:
+                texts.update((form, parts.path, parts.query))
+    return sorted((text for text in texts if len(text) >= 4), key=len, reverse=True)
+
+
+def redact_secrets(text, known=()):
     """
     Hides what may be a secret in the URLs inside a text: query string values,
     user and password, the Telegram bot token, long tokens in the path.
     The host and the rest of the path stay, so the message still says what failed.
+    known: the secrets in hand (the address, token and headers of a channel), hidden first and exactly, as the
+    guesses miss what does not look like a token: /hooks/catch/1234567/abcde12/ becomes /***.
     """
     if not text:
         return text
-    text = _URL_RE.sub(lambda m: _redact_url(m.group(0)), str(text))
+    text = str(text)
+    for secret in _known_texts(known):
+        text = text.replace(secret, '/***' if secret.startswith('/') else '***')
+    text = _URL_RE.sub(lambda m: _redact_url(m.group(0)), text)
     # Paths without the host, as in "Max retries exceeded with url: /path?key=..."
     text = re.sub(r"(url: )(/[^\s'\"]+)", lambda m: m.group(1) + _redact_url(m.group(2)), text)
     # Telegram bot token anywhere (123456789:AA...)

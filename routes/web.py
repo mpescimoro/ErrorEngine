@@ -4,14 +4,18 @@ Web routes — HTML pages and form handling.
 import logging
 from flask import Blueprint, render_template, request, redirect, url_for, flash
 from datetime import time
+from sqlalchemy import inspect
 from db_drivers import get_available_drivers, DRIVER_LABELS
 from models import (db, MonitoredQuery, ErrorRecord, QueryLog, EmailLog,
-                    DatabaseConnection, NotificationChannel)
+                    DatabaseConnection, NotificationChannel, CHANNEL_SECRETS, SOURCE_CLEAR)
+from encryption import decrypt
 from routing_service import get_operators_list
 from utils import local_day_start_utc, server_log_info
 from email_service import email_service, subject_warning
+from validators import write_statement_keyword
 
 import json
+from urllib3.util import parse_url
 
 logger = logging.getLogger(__name__)
 main_bp = Blueprint('main', __name__)
@@ -21,7 +25,6 @@ main_bp = Blueprint('main', __name__)
 
 @main_bp.app_context_processor
 def inject_global_data():
-    """Injects global data into every template."""
     summary = ErrorRecord.active_summary()
     return {
         'error_count': summary['active'],
@@ -33,7 +36,6 @@ def inject_global_data():
 # --- Helpers ---
 
 def parse_time(time_str):
-    """Converts an HH:MM string to a time object."""
     if not time_str:
         return None
     try:
@@ -57,29 +59,223 @@ def form_choices(query=None) -> tuple:
     return connections, channels
 
 
-def http_source_config(form, saved: dict) -> dict:
+def json_object(text: str):
+    """The JSON object typed in a form field ({} when empty); None when the text is not one."""
+    try:
+        value = json.loads(text) if text else {}
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+# In the forms in place of a saved header value, which does not go back to the browser: sent back, it keeps it
+SAVED = '(saved)'
+
+
+def masked_headers(headers) -> str:
+    """The saved headers as the form shows them: the names, every value (saved)."""
+    if not isinstance(headers, dict) or not headers:
+        return ''
+    return json.dumps({name: SAVED for name in headers}, ensure_ascii=False)
+
+
+def server_of(url) -> tuple:
     """
-    HTTP settings from the query form, over the saved ones: a setting the form
-    does not show (e.g. a timeout) stays as it is.
+    Scheme, host and port of an address as requests reads it to connect: a saved secret goes only to the server
+    it was typed for. urlsplit reads some addresses otherwise: http://B\\@A/ is A for it, B for requests.
     """
-    config = dict(saved or {})
+    try:
+        parts = parse_url((url or '').strip())
+    except ValueError:   # a port that is not a number, an address that cannot be read
+        return '', url, None
+    scheme = (parts.scheme or '').lower()
+    return scheme, (parts.host or '').lower(), parts.port or {'http': 80, 'https': 443}.get(scheme)
+
+
+def holds_text(value) -> bool:
+    """Whether a saved setting outside the fields in clear holds a text, that is a secret."""
+    if isinstance(value, str):
+        return value != ''
+    if isinstance(value, dict):
+        value = list(value.values())
+    return isinstance(value, list) and any(holds_text(item) for item in value)
+
+
+def headers_from_form(text: str, kept, problems: list, example: str, elsewhere=()):
+    """
+    The headers typed, a JSON object, in which (saved) keeps the value saved under that name, encrypted as it
+    is: kept has the saved ones, elsewhere the names of those left behind as the address went to another
+    server. Text that is not a JSON object: a problem, and the saved headers.
+    """
+    kept = kept if isinstance(kept, dict) else {}
+    headers = json_object(text)
+    if headers is None:
+        problems.append(f'Headers must be a JSON object, e.g. {example}')
+        return kept
+    for name, value in headers.items():
+        if value != SAVED:
+            continue
+        if name in kept:
+            headers[name] = kept[name]
+        elif name in elsewhere:
+            problems.append(f'Header {name}: the address is on another server, type its value again')
+        else:
+            problems.append(f'Header {name}: no value saved under this name, type it')
+    return headers
+
+
+def http_source_config(form, saved: dict, problems: list) -> dict:
+    """
+    HTTP settings from the query form, over the saved ones (as saved, secrets encrypted): a setting the
+    form does not show (e.g. a timeout) stays as it is. The saved token and header values are not in the
+    form: left so they stay, for the same server only; Authentication None removes the token.
+    """
+    saved = saved or {}
+    config = dict(saved)
     for key, field in (('url', 'source_url'), ('method', 'source_method'),
                        ('response_path', 'source_response_path'), ('auth_type', 'source_auth_type'),
-                       ('api_key_name', 'source_api_key_name')):
+                       ('api_key_name', 'source_api_key_name'), ('api_key_in', 'source_api_key_in')):
         if field in form:
             config[key] = form.get(field, '').strip()
-    if 'source_auth_token' in form:
-        config['auth_token'] = form.get('source_auth_token', '')
+    if not config.get('api_key_in'):
+        config.pop('api_key_in', None)   # in a header, the default
+    moved = server_of(config.get('url')) != server_of(saved.get('url'))
+    if moved:
+        # The saved secrets go only to the server they were typed for: for another one, typed again
+        config = {field: value for field, value in config.items() if field in SOURCE_CLEAR or not holds_text(value)}
+    if 'source_auth_type' in form and not config['auth_type']:
+        config['auth_token'] = ''
+    elif form.get('source_auth_token'):
+        config['auth_token'] = form['source_auth_token']
+    elif moved and saved.get('auth_token'):
+        problems.append('Token/Key: the URL is on another server, type it again')
     if 'source_headers' in form:
-        text = form.get('source_headers', '').strip()
-        try:
-            headers = json.loads(text) if text else {}
-        except ValueError:
-            headers = None
-        if not isinstance(headers, dict):
-            raise ValueError('Headers must be a JSON object, e.g. {"Accept": "application/json"}')
-        config['headers'] = headers
+        saved_headers = saved.get('headers') if isinstance(saved.get('headers'), dict) else {}
+        config['headers'] = headers_from_form(form.get('source_headers', '').strip(), {} if moved else saved_headers,
+                                              problems, '{"Accept": "application/json"}',
+                                              elsewhere=saved_headers if moved else ())
     return config
+
+
+def form_number(text, lowest: int, highest: int = None):
+    """A whole number typed in a form, within the limits; None otherwise."""
+    text = (text or '').strip()
+    if not text.lstrip('-').isdigit():
+        return None
+    value = int(text)
+    return value if value >= lowest and (highest is None or value <= highest) else None
+
+
+def statement_that_writes(query) -> tuple:
+    """(keyword, connection) when the query reads a database with a statement that can change data."""
+    keyword = write_statement_keyword(query.sql_query) if query.source_type != 'http' else None
+    if not keyword:
+        return None, None
+    return keyword, db.session.get(DatabaseConnection, query.db_connection_id) if query.db_connection_id else None
+
+
+def query_from_form(query, form) -> list:
+    """
+    The fields of the query form on the query, as typed; returns what is wrong with them. With anything
+    wrong the caller saves nothing and shows the form again as sent, so nothing typed is lost.
+    """
+    problems = []
+    saved_config = query.stored_source_config()
+    query.name = form.get('name', '').strip()
+    if not query.name:
+        problems.append('Name: required')
+    elif MonitoredQuery.query.filter(MonitoredQuery.name == query.name, MonitoredQuery.id != query.id).first():
+        problems.append(f'Name: another query is already called {query.name}')
+    query.description = form.get('description', '')
+    query.source_type = form.get('source_type', 'database')
+    # An HTTP query has no database connection: a leftover one would hide the HTTP source
+    connection_id = form.get('db_connection_id', '')
+    query.db_connection_id = int(connection_id) if connection_id.isdigit() and query.source_type != 'http' else None
+    query.sql_query = form.get('sql_query', '')
+    query.key_fields = form.get('key_fields', '')
+    if not query.get_key_fields_list():
+        problems.append('Key fields: at least one column name')
+    query.is_active = form.get('is_active') == 'on'
+    if query.source_type == 'http':
+        query.set_source_config(http_source_config(form, saved_config, problems))
+
+    query.email_subject = form.get('email_subject', query.email_subject)
+    query.email_recipients = form.get('email_recipients', '')
+    query.email_template = form.get('email_template', '')
+
+    interval = form_number(form.get('check_interval_value', '15'), 1)
+    if interval and form.get('check_interval_unit') == 'hours':
+        interval *= 60
+    if interval and interval <= 1440:
+        query.check_interval_minutes = interval
+    else:
+        problems.append('Interval: a whole number, from 1 minute to 24 hours')
+    query.schedule_start_time = parse_time(form.get('schedule_start_time'))
+    query.schedule_end_time = parse_time(form.get('schedule_end_time'))
+    days = form.get('schedule_days', '')
+    if all(day.strip() in ('1', '2', '3', '4', '5', '6', '7') for day in days.split(',') if day.strip()):
+        query.schedule_days = days
+    else:
+        problems.append('Days: numbers from 1 (Monday) to 7 (Sunday)')
+    query.schedule_reference_time = parse_time(form.get('schedule_reference_time'))
+
+    query.reminder_enabled = form.get('reminder_enabled') == 'on'
+    every = form_number(form.get('reminder_interval_minutes', '60'), 1)
+    count = form_number(form.get('reminder_max_count', '5'), 1)
+    if every and count:
+        query.reminder_interval_minutes, query.reminder_max_count = every, count
+    else:
+        problems.append('Reminders: whole numbers from 1')
+
+    # Basic routing, only in the form of a saved query (the rules are managed through the API)
+    query.routing_enabled = form.get('routing_enabled') == 'on'
+    for field in ('routing_default_recipients', 'routing_aggregation', 'routing_no_match_action'):
+        if field in form:
+            setattr(query, field, form[field])
+
+    channel_ids = [int(i) for i in form.getlist('notification_channels') if i.isdigit()]
+    query.notification_channels = NotificationChannel.query.filter(
+        NotificationChannel.id.in_(channel_ids)).all() if channel_ids else []
+    query.tags = form.get('tags', '')
+
+    keyword, connection = statement_that_writes(query)
+    if keyword and connection is None:
+        problems.append(f'The query contains {keyword}, which can change data: choose a connection that allows it')
+    elif keyword and not connection.allow_writes:
+        problems.append(connection.write_refusal(query.sql_query))
+    elif keyword and form.get('confirm_write') != 'on':
+        problems.append(f'The query contains {keyword}, which can change data: confirm it below the query to save it')
+
+    return problems
+
+
+def secret_hint(typed: bool, saved: bool):
+    """What a secret field says next to its name: typed in a form that came back, it is to be typed again."""
+    return 'typed' if typed else 'saved' if saved else None
+
+
+def render_query_form(query, form=None):
+    """
+    The query form: empty for a new query, or the query as saved or as just typed (form). Not the saved token
+    and header values: whether a token is saved, and the header names.
+    """
+    keyword, connection = statement_that_writes(query) if query is not None else (None, None)
+    connections, channels = form_choices(query)
+    editing = query is not None and inspect(query).persistent
+    source_config = query.stored_source_config() if query is not None else {}
+    # As in the database: the object holds what was just typed
+    text = db.session.query(MonitoredQuery.source_config).filter_by(id=query.id).scalar() if editing else None
+    saved = json.loads(text) if text else {}
+    same_server = form is None or server_of(form.get('source_url')) == server_of(saved.get('url'))
+    headers = form.get('source_headers', '') if form is not None else masked_headers(saved.get('headers'))
+    return render_template('query_form.html', query=query, editing=editing, source_config=source_config,
+                           token_hint=secret_hint(form is not None and bool(form.get('source_auth_token')),
+                                                  bool(saved.get('auth_token')) and same_server),
+                           headers=headers,
+                           # The confirmation, where the connection allows the statement: asked at every save
+                           write_keyword=keyword if connection is not None and connection.allow_writes else None,
+                           operators=get_operators_list(), connections=connections, channels=channels,
+                           email_on=email_service.is_enabled())
 
 
 def report_failure(action: str, error: Exception):
@@ -155,7 +351,6 @@ def dashboard():
         .all()
     )
 
-    # General statistics
     stats = {
         'total_queries': len(queries),
         'active_queries': sum(1 for q in queries if q.is_active),
@@ -195,77 +390,33 @@ def queries_list():
 
 @main_bp.route('/queries/new', methods=['GET', 'POST'])
 def query_create():
-    """Creates a new query."""
-    if request.method == 'POST':
-        try:
-            # Basic data
-            source_type = request.form.get('source_type', 'database')
-            db_conn_id = request.form.get('db_connection_id')
-            
-            query = MonitoredQuery(
-                name=request.form['name'],
-                description=request.form.get('description', ''),
-                source_type=source_type,
-                db_connection_id=int(db_conn_id) if db_conn_id and source_type != 'http' else None,
-                sql_query=request.form.get('sql_query', ''),
-                key_fields=request.form['key_fields'],
-                is_active=request.form.get('is_active') == 'on'
-            )
-            
-            if source_type == 'http':
-                query.set_source_config(http_source_config(request.form, {}))
-            
-            # Email
-            query.email_subject = request.form.get('email_subject', '[ErrorEngine] New errors: {query_name}')
-            query.email_recipients = request.form.get('email_recipients', '')
-            query.email_template = request.form.get('email_template', '')
-            
-            # Scheduling
-            interval_value = int(request.form.get('check_interval_value', 15))
-            interval_unit = request.form.get('check_interval_unit', 'minutes')
-            if interval_unit == 'hours':
-                query.check_interval_minutes = interval_value * 60
-            else:  # minutes
-                query.check_interval_minutes = interval_value
-            # Limit to 24 h at most
-            if query.check_interval_minutes > 1440:
-                query.check_interval_minutes = 1440
-            query.schedule_start_time = parse_time(request.form.get('schedule_start_time'))
-            query.schedule_end_time = parse_time(request.form.get('schedule_end_time'))
-            query.schedule_days = request.form.get('schedule_days', '')
-            query.schedule_reference_time = parse_time(request.form.get('schedule_reference_time'))
-            
-            # Reminder
-            query.reminder_enabled = request.form.get('reminder_enabled') == 'on'
-            query.reminder_interval_minutes = int(request.form.get('reminder_interval_minutes', 60))
-            query.reminder_max_count = int(request.form.get('reminder_max_count', 5))
-            
-            query.tags = request.form.get('tags', '')
-
-            db.session.add(query)
-            db.session.flush()  # To get the ID
-            
-            channel_ids = request.form.getlist('notification_channels')
-            if channel_ids:
-                channels = NotificationChannel.query.filter(NotificationChannel.id.in_(channel_ids)).all()
-                query.notification_channels = channels
-            
-            db.session.commit()
-            flash(f'Query "{query.name}" created!', 'success')
-            warn_about_the_subject(query)
-            return redirect(url_for('main.query_detail', query_id=query.id))
-        except Exception as e:
-            report_failure('creating', e)
-    
-    connections, channels = form_choices()
-    return render_template('query_form.html', query=None, operators=get_operators_list(),
-                           connections=connections, channels=channels, email_on=email_service.is_enabled())
+    if request.method == 'GET':
+        return render_query_form(None)
+    query = MonitoredQuery(check_interval_minutes=15, reminder_interval_minutes=60, reminder_max_count=5,
+                           email_subject='[ErrorEngine] New errors: {query_name}')
+    # Not in the session yet: the channels ticked would try to save it along with them
+    with db.session.no_autoflush:
+        problems = query_from_form(query, request.form)
+        if problems:
+            for problem in problems:
+                flash(problem, 'danger')
+            page = render_query_form(query, request.form)
+            db.session.rollback()
+            return page
+    try:
+        db.session.add(query)
+        db.session.commit()
+        flash(f'Query "{query.name}" created!', 'success')
+        warn_about_the_subject(query)
+        return redirect(url_for('main.query_detail', query_id=query.id))
+    except Exception as e:
+        report_failure('creating', e)
+        return render_query_form(query, request.form)
 
 
 @main_bp.route('/queries/<int:query_id>')
 def query_detail(query_id):
-    """Query detail."""
-    query = MonitoredQuery.query.get_or_404(query_id)
+    query = db.get_or_404(MonitoredQuery, query_id)
 
     # Active errors: the real count, the 10 most recent on the page (the rest on the Errors page)
     active = ErrorRecord.query.filter_by(query_id=query_id, resolved_at=None)
@@ -273,7 +424,6 @@ def query_detail(query_id):
     active_errors = active.order_by(ErrorRecord.first_seen_at.desc()).limit(10).all()
     undelivered_count = active.filter(ErrorRecord.undeliverable.isnot(None)).count()
 
-    # Latest logs
     recent_logs = QueryLog.query.filter_by(
         query_id=query_id
     ).order_by(QueryLog.executed_at.desc()).limit(20).all()
@@ -292,81 +442,32 @@ def query_detail(query_id):
 
 @main_bp.route('/queries/<int:query_id>/edit', methods=['GET', 'POST'])
 def query_edit(query_id):
-    """Edits an existing query."""
-    query = MonitoredQuery.query.get_or_404(query_id)
-    
-    if request.method == 'POST':
-        try:
-            # Basic data
-            query.name = request.form['name']
-            query.description = request.form.get('description', '')
-            query.source_type = request.form.get('source_type', 'database')
-            
-            # An HTTP query has no database connection: a leftover one would hide the HTTP source
-            db_conn_id = request.form.get('db_connection_id')
-            query.db_connection_id = int(db_conn_id) if db_conn_id and query.source_type != 'http' else None
-            
-            query.sql_query = request.form.get('sql_query', '')
-            query.key_fields = request.form['key_fields']
-            query.is_active = request.form.get('is_active') == 'on'
-            
-            if query.source_type == 'http':
-                query.set_source_config(http_source_config(request.form, query.get_source_config()))
-            
-            # Email
-            query.email_subject = request.form.get('email_subject', query.email_subject)
-            query.email_recipients = request.form.get('email_recipients', '')
-            query.email_template = request.form.get('email_template', '')
-            
-            # Scheduling
-            interval_value = int(request.form.get('check_interval_value', 15))
-            interval_unit = request.form.get('check_interval_unit', 'minutes')
-            if interval_unit == 'hours':
-                query.check_interval_minutes = interval_value * 60
-            else:  # minutes
-                query.check_interval_minutes = interval_value
-            # Limit to 24 h at most
-            if query.check_interval_minutes > 1440:
-                query.check_interval_minutes = 1440
-            query.schedule_start_time = parse_time(request.form.get('schedule_start_time'))
-            query.schedule_end_time = parse_time(request.form.get('schedule_end_time'))
-            query.schedule_days = request.form.get('schedule_days', '')
-            query.schedule_reference_time = parse_time(request.form.get('schedule_reference_time'))
-
-            # Reminder
-            query.reminder_enabled = request.form.get('reminder_enabled') == 'on'
-            query.reminder_interval_minutes = int(request.form.get('reminder_interval_minutes', 60))
-            query.reminder_max_count = int(request.form.get('reminder_max_count', 5))
-            
-            # Basic routing (the rules are managed through the API)
-            query.routing_enabled = request.form.get('routing_enabled') == 'on'
-            query.routing_default_recipients = request.form.get('routing_default_recipients',
-                                                                query.routing_default_recipients)
-            query.routing_aggregation = request.form.get('routing_aggregation', query.routing_aggregation)
-            query.routing_no_match_action = request.form.get('routing_no_match_action',
-                                                             query.routing_no_match_action)
-            
-            channel_ids = request.form.getlist('notification_channels')
-            query.notification_channels = NotificationChannel.query.filter(NotificationChannel.id.in_(channel_ids)).all() if channel_ids else []
-            
-            query.tags = request.form.get('tags', '')
-            
-            db.session.commit()
-            flash('Query updated!', 'success')
-            warn_about_the_subject(query)
-            return redirect(url_for('main.query_detail', query_id=query.id))
-        except Exception as e:
-            report_failure('updating', e)
-    
-    connections, channels = form_choices(query)
-    return render_template('query_form.html', query=query, action='edit', operators=get_operators_list(),
-                           connections=connections, channels=channels, email_on=email_service.is_enabled())
+    query = db.get_or_404(MonitoredQuery, query_id)
+    if request.method == 'GET':
+        return render_query_form(query)
+    # Nothing reaches the database before the commit: with problems, the page shows what was typed,
+    # then it is dropped
+    with db.session.no_autoflush:
+        problems = query_from_form(query, request.form)
+        if problems:
+            for problem in problems:
+                flash(problem, 'danger')
+            page = render_query_form(query, request.form)
+            db.session.rollback()
+            return page
+    try:
+        db.session.commit()
+        flash('Query updated!', 'success')
+        warn_about_the_subject(query)
+        return redirect(url_for('main.query_detail', query_id=query.id))
+    except Exception as e:
+        report_failure('updating', e)
+        return render_query_form(query, request.form)
 
 
 @main_bp.route('/queries/<int:query_id>/delete', methods=['POST'])
 def query_delete(query_id):
-    """Deletes a query."""
-    query = MonitoredQuery.query.get_or_404(query_id)
+    query = db.get_or_404(MonitoredQuery, query_id)
     name = query.name
     
     try:
@@ -384,7 +485,6 @@ def query_delete(query_id):
 
 @main_bp.route('/errors')
 def errors_list():
-    """List of all active errors."""
     query_id = request.args.get('query_id', type=int)
     delivery = request.args.get('delivery', '')
     
@@ -428,7 +528,6 @@ def errors_list():
 
 @main_bp.route('/logs')
 def logs_list():
-    """Run logs."""
     query_id = request.args.get('query_id', type=int)
     
     logs_query = QueryLog.query
@@ -477,70 +576,99 @@ def settings():
 
 @main_bp.route('/connections')
 def connections_list():
-    """List of database connections."""
     connections = DatabaseConnection.query.order_by(DatabaseConnection.name).all()
     return render_template('connections_list.html', 
                            connections=connections,
                            driver_labels=DRIVER_LABELS)
 
 
+def database_server(conn) -> tuple:
+    """Host and port of a connection: its saved password goes only there."""
+    return (conn.host or '').strip().lower(), conn.port
+
+
+def connection_from_form(conn, form) -> list:
+    """The fields of the connection form on the connection, as typed; returns what is wrong with them."""
+    problems = []
+    saved_server = database_server(conn)
+    conn.name = form.get('name', '').strip()
+    if not conn.name:
+        problems.append('Name: required')
+    conn.db_type = form.get('db_type', '')
+    if conn.db_type not in DRIVER_LABELS:
+        problems.append('Type: one of those in the list')
+    conn.host = form.get('host')
+    port = form.get('port', '').strip()
+    if not port:
+        conn.port = None
+    elif form_number(port, 1, 65535):
+        conn.port = int(port)
+    else:
+        problems.append('Port: a number from 1 to 65535, or empty for the usual one')
+    conn.database = form.get('database')
+    conn.username = form.get('username')
+    # Editing, an empty password keeps the saved one, for the same server only
+    if form.get('password'):
+        conn.password = form['password']
+    elif conn._password and database_server(conn) != saved_server:
+        problems.append('Password: the server changed, type it again')
+    conn.is_active = form.get('is_active') == 'on'
+    conn.allow_writes = form.get('allow_writes') == 'on'
+    return problems
+
+
+def render_connection_form(conn, form=None):
+    """The connection form: empty, or the connection as saved or as just typed (form); never its password."""
+    editing = conn is not None and inspect(conn).persistent
+    saved = None
+    if editing:
+        # As in the database: the object holds what was just typed
+        saved = db.session.query(DatabaseConnection.host, DatabaseConnection.port,
+                                 DatabaseConnection._password).filter_by(id=conn.id).one()
+    keeps = (saved is not None and bool(saved[2])
+             and ((saved[0] or '').strip().lower(), saved[1]) == database_server(conn))
+    return render_template('connection_form.html', connection=conn, editing=editing, drivers=get_available_drivers(),
+                           password_hint=secret_hint(form is not None and bool(form.get('password')), keeps))
+
+
 @main_bp.route('/connections/new', methods=['GET', 'POST'])
 def connection_create():
-    """Creates a new connection."""
-    if request.method == 'POST':
-        conn = DatabaseConnection(
-            name=request.form.get('name'),
-            db_type=request.form.get('db_type'),
-            host=request.form.get('host'),
-            port=int(request.form.get('port') or 0) or None,
-            database=request.form.get('database'),
-            username=request.form.get('username'),
-            password=request.form.get('password'),
-            is_active=request.form.get('is_active') == 'on'
-        )
-        db.session.add(conn)
-        db.session.commit()
-        flash('Connection created!', 'success')
-        return redirect(url_for('main.connections_list'))
-    
-    return render_template('connection_form.html', 
-                           connection=None,
-                           drivers=get_available_drivers())
+    if request.method == 'GET':
+        return render_connection_form(None)
+    conn = DatabaseConnection()
+    problems = connection_from_form(conn, request.form)
+    if problems:
+        for problem in problems:
+            flash(problem, 'danger')
+        return render_connection_form(conn, request.form)
+    db.session.add(conn)
+    db.session.commit()
+    flash('Connection created!', 'success')
+    return redirect(url_for('main.connections_list'))
 
 
 @main_bp.route('/connections/<int:conn_id>/edit', methods=['GET', 'POST'])
 def connection_edit(conn_id):
-    """Edits an existing connection."""
-    conn = DatabaseConnection.query.get_or_404(conn_id)
-    
-    if request.method == 'POST':
-        conn.name = request.form.get('name')
-        conn.db_type = request.form.get('db_type')
-        conn.host = request.form.get('host')
-        conn.port = int(request.form.get('port') or 0) or None
-        conn.database = request.form.get('database')
-        conn.username = request.form.get('username')
-        # Update the password only if one is given
-        new_password = request.form.get('password')
-        if new_password:
-            conn.password = new_password
-        conn.is_active = request.form.get('is_active') == 'on'
-        
-        db.session.commit()
-        flash('Connection updated!', 'success')
-        return redirect(url_for('main.connections_list'))
-    
-    return render_template('connection_form.html', 
-                           connection=conn,
-                           drivers=get_available_drivers())
+    conn = db.get_or_404(DatabaseConnection, conn_id)
+    if request.method == 'GET':
+        return render_connection_form(conn)
+    with db.session.no_autoflush:
+        problems = connection_from_form(conn, request.form)
+        if problems:
+            for problem in problems:
+                flash(problem, 'danger')
+            page = render_connection_form(conn, request.form)
+            db.session.rollback()
+            return page
+    db.session.commit()
+    flash('Connection updated!', 'success')
+    return redirect(url_for('main.connections_list'))
 
 
 @main_bp.route('/connections/<int:conn_id>/delete', methods=['POST'])
 def connection_delete(conn_id):
-    """Deletes a connection."""
-    conn = DatabaseConnection.query.get_or_404(conn_id)
+    conn = db.get_or_404(DatabaseConnection, conn_id)
     
-    # Is it used by any query
     if conn.queries.count() > 0:
         flash(f'Cannot delete: the connection is used by {conn.queries.count()} queries.', 'danger')
         return redirect(url_for('main.connections_list'))
@@ -565,77 +693,123 @@ def channels_list():
     return render_template('channels_list.html', channels=channels, channel_types=CHANNEL_TYPES)
 
 
+def saved_server(encrypted_url):
+    """The server of a saved address; None when it cannot be read."""
+    try:
+        return server_of(decrypt(encrypted_url))
+    except ValueError:
+        return None
+
+
+def channel_from_form(channel, form) -> list:
+    """
+    The fields of the channel form on the channel, as typed; returns what is wrong with them. The saved
+    addresses, token and header values are not in the form: left empty they stay, (saved) keeps a header
+    for the same server only.
+    """
+    problems = []
+    # The saved secrets count for the same type only
+    kept = channel.stored_config() if channel.config and channel.channel_type == form.get('channel_type') else {}
+    channel.name = form.get('name', '').strip()
+    if not channel.name:
+        problems.append('Name: required')
+    channel.channel_type = form.get('channel_type', '')
+    channel.is_active = form.get('is_active') == 'on'
+    # A secret field left empty keeps the saved value, encrypted as it is
+    if channel.channel_type == 'webhook':
+        typed = form.get('webhook_url', '').strip()
+        config = {'url': typed or kept.get('url', ''), 'method': form.get('webhook_method', 'POST')}
+        if not config['url'] or (typed and not typed.startswith(('http://', 'https://'))):
+            problems.append('URL: an address that starts with http:// or https://')
+        saved_headers = kept.get('headers') if isinstance(kept.get('headers'), dict) else {}
+        # A new address on another server: the saved header values do not go there
+        moved = bool(typed) and server_of(typed) != saved_server(kept.get('url'))
+        config['headers'] = headers_from_form(form.get('webhook_headers', '').strip(),
+                                              {} if moved else saved_headers, problems,
+                                              '{"Authorization": "Bearer xxx"}',
+                                              elsewhere=saved_headers if moved else ())
+    elif channel.channel_type == 'telegram':
+        config = {'bot_token': form.get('telegram_bot_token', '').strip() or kept.get('bot_token', ''),
+                  'chat_id': form.get('telegram_chat_id', '').strip()}
+        if not (config['bot_token'] and config['chat_id']):
+            problems.append('Telegram: bot token and chat ID are both required')
+    elif channel.channel_type == 'teams':
+        typed = form.get('teams_webhook_url', '').strip()
+        config = {'webhook_url': typed or kept.get('webhook_url', '')}
+        if not config['webhook_url'] or (typed and not typed.startswith(('http://', 'https://'))):
+            problems.append('Teams: the webhook URL, which starts with https://')
+    else:
+        config = {}
+        problems.append('Type: one of those in the list')
+    channel.set_config(config)
+    return problems
+
+
+# The field of the form of each secret of a channel that has one
+SECRET_INPUTS = {'url': 'webhook_url', 'bot_token': 'telegram_bot_token', 'webhook_url': 'teams_webhook_url'}
+
+
+def render_channel_form(channel, form=None):
+    """
+    The channel form: empty, or the channel as saved or as just typed (form). Not the saved addresses, token
+    and header values: which of them are saved, and the header names.
+    """
+    editing = channel is not None and inspect(channel).persistent
+    stored = channel.stored_config() if channel is not None and channel.config else {}
+    saved_type, saved = None, {}
+    if editing:
+        # As in the database: the object holds what was just typed
+        saved_type, text = db.session.query(NotificationChannel.channel_type,
+                                            NotificationChannel.config).filter_by(id=channel.id).one()
+        saved = json.loads(text) if text else {}
+    hints = {field: secret_hint(form is not None and bool(form.get(SECRET_INPUTS[field], '').strip()),
+                                saved_type == kind and bool(saved.get(field)))
+             for kind, fields in CHANNEL_SECRETS.items() for field in fields if field in SECRET_INPUTS}
+    if form is not None:
+        headers = form.get('webhook_headers', '')
+    else:
+        headers = masked_headers(saved.get('headers')) if saved_type == 'webhook' else ''
+    return render_template('channel_form.html', channel=channel, channel_types=CHANNEL_TYPES, editing=editing,
+                           stored=stored, hints=hints, headers=headers)
+
+
 @main_bp.route('/channels/new', methods=['GET', 'POST'])
 def channel_create():
-    if request.method == 'POST':
-        channel_type = request.form.get('channel_type')
-        
-        if channel_type == 'webhook':
-            config = {
-                'url': request.form.get('webhook_url', ''),
-                'method': request.form.get('webhook_method', 'POST'),
-                'headers': json.loads(request.form.get('webhook_headers', '{}') or '{}')
-            }
-        elif channel_type == 'telegram':
-            config = {
-                'bot_token': request.form.get('telegram_bot_token', ''),
-                'chat_id': request.form.get('telegram_chat_id', '')
-            }
-        elif channel_type == 'teams':
-            config = {'webhook_url': request.form.get('teams_webhook_url', '')}
-        else:
-            flash('Invalid channel type', 'danger')
-            return redirect(url_for('main.channels_list'))
-        
-        channel = NotificationChannel(
-            name=request.form.get('name'),
-            channel_type=channel_type,
-            is_active=request.form.get('is_active') == 'on'
-        )
-        channel.set_config(config)
-        
-        db.session.add(channel)
-        db.session.commit()
-        flash('Channel created!', 'success')
-        return redirect(url_for('main.channels_list'))
-    
-    return render_template('channel_form.html', channel=None, channel_types=CHANNEL_TYPES)
+    if request.method == 'GET':
+        return render_channel_form(None)
+    channel = NotificationChannel()
+    problems = channel_from_form(channel, request.form)
+    if problems:
+        for problem in problems:
+            flash(problem, 'danger')
+        return render_channel_form(channel, request.form)
+    db.session.add(channel)
+    db.session.commit()
+    flash('Channel created!', 'success')
+    return redirect(url_for('main.channels_list'))
 
 
 @main_bp.route('/channels/<int:channel_id>/edit', methods=['GET', 'POST'])
 def channel_edit(channel_id):
-    channel = NotificationChannel.query.get_or_404(channel_id)
-    
-    if request.method == 'POST':
-        channel.name = request.form.get('name')
-        channel.channel_type = request.form.get('channel_type')
-        channel.is_active = request.form.get('is_active') == 'on'
-        
-        if channel.channel_type == 'webhook':
-            config = {
-                'url': request.form.get('webhook_url', ''),
-                'method': request.form.get('webhook_method', 'POST'),
-                'headers': json.loads(request.form.get('webhook_headers', '{}') or '{}')
-            }
-        elif channel.channel_type == 'telegram':
-            config = {
-                'bot_token': request.form.get('telegram_bot_token', ''),
-                'chat_id': request.form.get('telegram_chat_id', '')
-            }
-        elif channel.channel_type == 'teams':
-            config = {'webhook_url': request.form.get('teams_webhook_url', '')}
-        
-        channel.set_config(config)
-        db.session.commit()
-        flash('Channel updated!', 'success')
-        return redirect(url_for('main.channels_list'))
-    
-    return render_template('channel_form.html', channel=channel, channel_types=CHANNEL_TYPES)
+    channel = db.get_or_404(NotificationChannel, channel_id)
+    if request.method == 'GET':
+        return render_channel_form(channel)
+    with db.session.no_autoflush:
+        problems = channel_from_form(channel, request.form)
+        if problems:
+            for problem in problems:
+                flash(problem, 'danger')
+            page = render_channel_form(channel, request.form)
+            db.session.rollback()
+            return page
+    db.session.commit()
+    flash('Channel updated!', 'success')
+    return redirect(url_for('main.channels_list'))
 
 
 @main_bp.route('/channels/<int:channel_id>/delete', methods=['POST'])
 def channel_delete(channel_id):
-    channel = NotificationChannel.query.get_or_404(channel_id)
+    channel = db.get_or_404(NotificationChannel, channel_id)
     if channel.queries:
         flash(f'Cannot delete: the channel is used by {len(channel.queries)} queries.', 'danger')
         return redirect(url_for('main.channels_list'))

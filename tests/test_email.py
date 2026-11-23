@@ -11,6 +11,7 @@ import re
 import ssl
 import subprocess
 import sys
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -18,21 +19,14 @@ from unittest.mock import patch
 import pytest
 import requests
 
-from models import db, MonitoredQuery, ErrorRecord, EmailLog, NotificationChannel
+from models import db, ErrorRecord, EmailLog, NotificationChannel
+from tests import helpers
+
+
+make_query = partial(helpers.make_query, email_recipients='ops@x.it')
 
 ROOT = Path(__file__).resolve().parent.parent
 ROWS = (['ID'], [{'ID': 1}])
-
-
-def make_query(**kwargs):
-    kwargs.setdefault('name', 'Orders')
-    kwargs.setdefault('sql_query', 'SELECT 1')
-    kwargs.setdefault('key_fields', 'ID')
-    kwargs.setdefault('email_recipients', 'ops@x.it')
-    query = MonitoredQuery(**kwargs)
-    db.session.add(query)
-    db.session.commit()
-    return query
 
 
 def config_from_env(**env):
@@ -226,7 +220,6 @@ class TestSmtpTls:
     def test_public_servers_keep_the_default_checks(self, app):
         _, smtp_ssl = self.send_test(app, MAIL_SECURITY='ssl', MAIL_CA_FILE='')
         assert smtp_ssl.call_args.kwargs['context'].verify_flags == ssl.create_default_context().verify_flags
-
 
 
 # --- Subject ---

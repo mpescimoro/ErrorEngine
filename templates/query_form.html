@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}{{ 'Edit' if query else 'New' }} query - ErrorEngine{% endblock %}
+{% block title %}{{ 'Edit' if editing else 'New' }} query - ErrorEngine{% endblock %}
 
 {% block content %}
 <!-- Breadcrumb -->
@@ -8,19 +8,20 @@
     <ol class="flex items-center gap-sm text-muted" style="list-style: none; padding: 0; margin: 0;">
         <li><a href="{{ url_for('main.queries_list') }}" class="text-muted">Queries</a></li>
         <li><i class="bi bi-chevron-right"></i></li>
-        <li aria-current="page">{{ 'Edit' if query else 'New' }}</li>
+        <li aria-current="page">{{ 'Edit' if editing else 'New' }}</li>
     </ol>
 </nav>
 
 <!-- Page Header -->
 <div class="page-header">
     <h1 class="page-title">
-        <i class="bi bi-{{ 'pencil' if query else 'plus-lg' }}"></i>
-        {{ 'Edit query' if query else 'New query' }}
+        <i class="bi bi-{{ 'pencil' if editing else 'plus-lg' }}"></i>
+        {{ 'Edit query' if editing else 'New query' }}
     </h1>
 </div>
 
-<form method="POST" id="queryForm" data-validate data-query-id="{{ query.id if query else '' }}">
+<form method="POST" id="queryForm" data-validate data-query-id="{{ query.id if editing else '' }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="grid" style="grid-template-columns: 2fr 1fr; gap: var(--space-xl); align-items: start;">
         
         <!-- Main Column -->
@@ -157,8 +158,21 @@
                         <div class="form-text">
                             SELECT query to run. The SQL dialect depends on the selected database.
                         </div>
+                        {% if write_keyword %}
+                        <div class="alert alert-warning mt-sm" role="alert">
+                            <i class="alert-icon bi bi-shield-exclamation"></i>
+                            <div class="alert-content">
+                                <div class="alert-title">The query contains {{ write_keyword }}: it can change data</div>
+                                The connection allows it, and ErrorEngine runs it at every check.
+                                <label class="form-check mt-sm mb-xs">
+                                    <input type="checkbox" class="form-check-input" name="confirm_write">
+                                    <span class="form-check-label">I know what it does: save it</span>
+                                </label>
+                            </div>
+                        </div>
+                        {% endif %}
                     </div>
-                    
+
                     <div id="testResults" class="hidden"></div>
                 </div>
             </div>
@@ -170,8 +184,6 @@
                     HTTP/API configuration
                 </div>
                 <div class="card-body">
-                    {% set source_config = query.get_source_config() if query else {} %}
-                    
                     <div class="grid grid-cols-2 gap-md">
                         <div class="form-group" style="grid-column: span 2;">
                             <label for="source_url" class="form-label">URL</label>
@@ -181,6 +193,7 @@
                                    name="source_url"
                                    value="{{ source_config.get('url', '') }}"
                                    placeholder="https://api.example.com/errors">
+                            <div class="form-text">Shown in this form: a key goes in Token/Key or in the headers, not in the URL.</div>
                         </div>
                         
                         <div class="form-group">
@@ -201,25 +214,37 @@
                         </div>
                         
                         <div class="form-group" style="grid-column: span 2;">
-                            <label for="source_auth_token" class="form-label">Token/Key</label>
-                            <input type="password" 
-                                   class="form-control" 
-                                   id="source_auth_token" 
+                            <label for="source_auth_token" class="form-label">
+                                Token/Key
+                                {% if token_hint == 'typed' %}<span class="text-muted">(type it again)</span>
+                                {% elif token_hint == 'saved' %}<span class="text-muted">(saved: leave empty to keep it)</span>{% endif %}
+                            </label>
+                            <input type="password"
+                                   class="form-control"
+                                   id="source_auth_token"
                                    name="source_auth_token"
-                                   value="{{ source_config.get('auth_token', '') }}"
-                                   autocomplete="off">
-                            <div class="form-text">Bearer Token: sent as <code>Authorization: Bearer …</code>. API Key: sent in the header below.</div>
+                                   autocomplete="new-password">
+                            <div class="form-text">Bearer Token: sent as <code>Authorization: Bearer …</code>. API Key: sent as below.{% if token_hint == 'saved' %} Authentication None removes the saved one.{% endif %}</div>
                         </div>
 
-                        <div class="form-group" style="grid-column: span 2;">
-                            <label for="source_api_key_name" class="form-label">API key header</label>
+                        <div class="form-group">
+                            <label for="source_api_key_name" class="form-label">API key name</label>
                             <input type="text"
                                    class="form-control"
                                    id="source_api_key_name"
                                    name="source_api_key_name"
                                    value="{{ source_config.get('api_key_name', '') }}"
                                    placeholder="X-API-Key">
-                            <div class="form-text">Name of the header that carries the API key; empty: <code>X-API-Key</code>.</div>
+                            <div class="form-text">Of the header or of the query string parameter; empty: <code>X-API-Key</code>.</div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="source_api_key_in" class="form-label">API key in</label>
+                            <select class="form-control form-select" id="source_api_key_in" name="source_api_key_in">
+                                <option value="">Header</option>
+                                <option value="query" {{ 'selected' if source_config.get('api_key_in') == 'query' }}>Query string</option>
+                            </select>
+                            <div class="form-text">Query string: added to the URL when the request is sent, saved encrypted as the token.</div>
                         </div>
 
                         <div class="form-group" style="grid-column: span 2;">
@@ -228,8 +253,8 @@
                                       id="source_headers"
                                       name="source_headers"
                                       rows="2"
-                                      placeholder='{"Accept": "application/json"}'>{{ source_config.get('headers')|tojson if source_config.get('headers') else '' }}</textarea>
-                            <div class="form-text">Other headers to send, as a JSON object. Optional.</div>
+                                      placeholder='{"Accept": "application/json"}'>{{ headers }}</textarea>
+                            <div class="form-text">Other headers to send, as a JSON object. Optional. The saved values are shown as <code>(saved)</code>: left so, they stay.</div>
                         </div>
                         
                         <div class="form-group" style="grid-column: span 2;">
@@ -270,7 +295,7 @@
                         <div class="form-text" id="keyFieldsHelp">
                             Fields that uniquely identify an error (comma-separated).
                             Rows with the same values in these fields count as the same error.
-                            {% if query %}Changing them closes the open errors and notifies their rows again, as new errors.{% endif %}
+                            {% if editing %}Changing them closes the open errors and notifies their rows again, as new errors.{% endif %}
                         </div>
                     </div>
                 </div>
@@ -401,7 +426,7 @@
             </div>
             
             <!-- Routing Section -->
-            {% if query %}
+            {% if editing %}
             <!-- Routing (only for edit mode) -->
             <div class="card mb-lg" id="routing">
                 <div class="card-header">
@@ -637,7 +662,7 @@
                 <div class="card-body">
                     <button type="submit" class="btn btn-primary w-full mb-sm">
                         <i class="bi bi-check-lg"></i>
-                        {{ 'Save changes' if query else 'Create query' }}
+                        {{ 'Save changes' if editing else 'Create query' }}
                     </button>
                     <a href="{{ url_for('main.queries_list') }}" class="btn btn-secondary w-full">
                         Cancel
@@ -713,7 +738,7 @@
     </div>
 </div>
 
-{% if query %}
+{% if editing %}
 <!-- Routing Rule Modal (only for edit mode) -->
 <div class="modal" id="ruleModal" role="dialog" aria-labelledby="ruleModalTitle" aria-modal="true">
     <div class="modal-dialog modal-dialog-lg">
@@ -809,14 +834,11 @@
 
 {% block extra_js %}
 <script>
-    // Available operators for routing conditions
     const operators = {{ operators | tojson | safe }};
     
-    // Initialize source type toggle
     sourceToggle.init();
     
-    {% if query %}
-    // Initialize routing manager
+    {% if editing %}
     routingManager.operators = operators;
     routingManager.init({{ query.id }}, operators);
     {% endif %}
@@ -847,64 +869,11 @@
         });
     }
 
+    // The SQL test runs the statement for real: the server says when it can change data, the page asks
     const sqlSafety = {
-        // Keywords that indicate non-SELECT operations
-        dangerousKeywords: [
-            'INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'TRUNCATE',
-            'CREATE', 'EXEC', 'EXECUTE', 'MERGE', 'GRANT', 'REVOKE',
-            'REPLACE', 'RENAME', 'CALL'
-        ],
-        
-        // The user confirmed the warning for the current text of the query
-        confirmed: false,
-        
-        /**
-         * Check if SQL starts with a dangerous keyword.
-         * Returns the keyword if dangerous, null if safe.
-         */
-        check(sql) {
-            if (!sql) return null;
-            
-            // Normalize: trim, remove leading comments and whitespace
-            var clean = sql.replace(/\/\*[\s\S]*?\*\//g, '')  // block comments
-                          .replace(/--.*$/gm, '')               // line comments
-                          .replace(/^\s+/, '')                   // leading whitespace
-                          .toUpperCase();
-            
-            // Get first word
-            var match = clean.match(/^([A-Z]+)/);
-            if (!match) return null;
-            
-            var firstWord = match[1];
-            
-            // SELECT and WITH (CTE) are safe
-            if (firstWord === 'SELECT' || firstWord === 'WITH') return null;
-            
-            // Check against dangerous keywords
-            for (var i = 0; i < this.dangerousKeywords.length; i++) {
-                if (firstWord === this.dangerousKeywords[i]) {
-                    return firstWord;
-                }
-            }
-            
-            // Unknown keyword — still flag it
-            return firstWord;
-        },
-
-        /** Keyword of the statement in the form, when the source is a database */
-        formKeyword() {
-            var sourceType = document.getElementById('source_type');
-            var sqlField = document.getElementById('sql_query');
-            if (!sqlField || (sourceType && sourceType.value !== 'database')) return null;
-            return this.check(sqlField.value);
-        },
-        
-        /** Shows the warning for a write statement; true if the user confirms it */
-        async confirm(keyword) {
-            if (!keyword || this.confirmed) return true;
+        confirm(keyword) {
             document.getElementById('sqlWarningKeyword').textContent = keyword;
-            this.confirmed = await askConfirmation('sqlWarningModal', 'sqlWarningConfirmBtn');
-            return this.confirmed;
+            return askConfirmation('sqlWarningModal', 'sqlWarningConfirmBtn');
         }
     };
 
@@ -919,7 +888,7 @@
         }
     };
     
-    // Before saving: the warnings, then the real submit
+    // Before saving: the warning for no day selected, then the real submit
     (function() {
         var form = document.getElementById('queryForm');
         if (!form) return;
@@ -927,31 +896,15 @@
         form.addEventListener('submit', function(e) {
             // Invalid fields: the form validator shows them and stops the submit
             if (typeof validator !== 'undefined' && !validator.validateForm(form)) return;
-
-            var keyword = sqlSafety.formKeyword();
-            var askDays = scheduleCheck.noDays();
-            var askSql = keyword && !sqlSafety.confirmed;
-            if (!askDays && !askSql) return;
+            if (!scheduleCheck.noDays()) return;
 
             e.preventDefault();
             (async function() {
-                if (askDays && !(await scheduleCheck.confirm())) return;
-                if (askSql && !(await sqlSafety.confirm(keyword))) return;
-                form.submit();
+                if (await scheduleCheck.confirm()) form.submit();
             })();
         });
     })();
     
-    // Reset confirmed flag when SQL changes
-    (function() {
-        var sqlField = document.getElementById('sql_query');
-        if (sqlField) {
-            sqlField.addEventListener('input', function() {
-                sqlSafety.confirmed = false;
-            });
-        }
-    })();
-	
 	// Limit the interval to 24 h at most
 	function limitIntervalValue() {
 		var input = document.getElementById('check_interval_value');

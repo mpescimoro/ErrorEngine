@@ -1,16 +1,17 @@
 {% extends "base.html" %}
 
-{% block title %}{{ 'Edit' if channel else 'New' }} channel - ErrorEngine{% endblock %}
+{% block title %}{{ 'Edit' if editing else 'New' }} channel - ErrorEngine{% endblock %}
 
 {% block content %}
 <div class="page-header">
     <h1 class="page-title">
         <i class="bi bi-broadcast"></i>
-        {{ 'Edit channel' if channel else 'New channel' }}
+        {{ 'Edit channel' if editing else 'New channel' }}
     </h1>
 </div>
 
 <form method="POST" id="channelForm">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="grid grid-cols-2 gap-lg">
         <div class="card">
             <div class="card-header">
@@ -54,7 +55,7 @@
             </div>
             <div class="card-body">
                 <div id="testResult" class="mb-lg"></div>
-                {% if channel %}
+                {% if editing %}
                 <button type="button" class="btn btn-secondary" onclick="testChannel()">
                     <i class="bi bi-send"></i> Send test
                 </button>
@@ -73,22 +74,23 @@
         </div>
         <div class="card-body">
             <div class="form-group">
-                <label class="form-label">URL <span class="required">*</span></label>
+                <label class="form-label">URL <span class="required">*</span>
+                    {% if hints.url == 'typed' %}<span class="text-muted">(type it again)</span>{% elif hints.url == 'saved' %}<span class="text-muted">(saved: leave empty to keep it)</span>{% endif %}</label>
                 <input type="url" class="form-control" id="webhook_url" name="webhook_url"
-                       value="{{ channel.get_config().url if channel and channel.channel_type == 'webhook' else '' }}"
                        placeholder="https://example.com/webhook">
             </div>
             <div class="form-group">
                 <label class="form-label">Method</label>
                 <select class="form-control form-select" id="webhook_method" name="webhook_method">
-                    <option value="POST" {{ 'selected' if not channel or channel.get_config().get('method', 'POST') == 'POST' }}>POST</option>
-                    <option value="PUT" {{ 'selected' if channel and channel.get_config().get('method') == 'PUT' }}>PUT</option>
+                    <option value="POST" {{ 'selected' if stored.get('method', 'POST') == 'POST' }}>POST</option>
+                    <option value="PUT" {{ 'selected' if stored.get('method') == 'PUT' }}>PUT</option>
                 </select>
             </div>
             <div class="form-group mb-0">
                 <label class="form-label">Headers (JSON)</label>
                 <textarea class="form-control font-mono" id="webhook_headers" name="webhook_headers" rows="2"
-                          placeholder='{"Authorization": "Bearer xxx"}'>{{ channel.get_config().get('headers', {})|tojson if channel and channel.channel_type == 'webhook' else '{}' }}</textarea>
+                          placeholder='{"Authorization": "Bearer xxx"}'>{{ headers }}</textarea>
+                <small class="form-text text-muted">The saved values are shown as <code>(saved)</code>: left so, they stay.</small>
             </div>
         </div>
     </div>
@@ -101,16 +103,16 @@
         </div>
         <div class="card-body">
             <div class="form-group">
-                <label class="form-label">Bot Token <span class="required">*</span></label>
+                <label class="form-label">Bot Token <span class="required">*</span>
+                    {% if hints.bot_token == 'typed' %}<span class="text-muted">(type it again)</span>{% elif hints.bot_token == 'saved' %}<span class="text-muted">(saved: leave empty to keep it)</span>{% endif %}</label>
                 <input type="text" class="form-control font-mono" id="telegram_bot_token" name="telegram_bot_token"
-                       value="{{ channel.get_config().bot_token if channel and channel.channel_type == 'telegram' else '' }}"
-                       placeholder="123456789:ABCdefGHI...">
+                       autocomplete="off" placeholder="123456789:ABCdefGHI...">
                 <small class="form-text text-muted">From <a href="https://t.me/BotFather" target="_blank">@BotFather</a></small>
             </div>
             <div class="form-group mb-0">
                 <label class="form-label">Chat ID <span class="required">*</span></label>
                 <input type="text" class="form-control font-mono" id="telegram_chat_id" name="telegram_chat_id"
-                       value="{{ channel.get_config().chat_id if channel and channel.channel_type == 'telegram' else '' }}"
+                       value="{{ stored.get('chat_id', '') if channel and channel.channel_type == 'telegram' else '' }}"
                        placeholder="-1001234567890">
                 <small class="form-text text-muted">Use <a href="https://t.me/userinfobot" target="_blank">@userinfobot</a> to find it</small>
             </div>
@@ -125,9 +127,9 @@
         </div>
         <div class="card-body">
             <div class="form-group mb-0">
-                <label class="form-label">Webhook URL <span class="required">*</span></label>
+                <label class="form-label">Webhook URL <span class="required">*</span>
+                    {% if hints.webhook_url == 'typed' %}<span class="text-muted">(type it again)</span>{% elif hints.webhook_url == 'saved' %}<span class="text-muted">(saved: leave empty to keep it)</span>{% endif %}</label>
                 <input type="url" class="form-control font-mono" id="teams_webhook_url" name="teams_webhook_url"
-                       value="{{ channel.get_config().webhook_url if channel and channel.channel_type == 'teams' else '' }}"
                        placeholder="https://....logic.azure.com/workflows/...">
                 <small class="form-text text-muted">Workflows in Teams → "Send webhook alerts to a channel" → webhook URL. The old Office 365 connector URLs no longer work.</small>
             </div>
@@ -137,7 +139,7 @@
     <div class="flex gap-md mt-lg">
         <button type="submit" class="btn btn-primary">
             <i class="bi bi-check-lg"></i>
-            {{ 'Save' if channel else 'Create' }}
+            {{ 'Save' if editing else 'Create' }}
         </button>
         <a href="{{ url_for('main.channels_list') }}" class="btn btn-ghost">Cancel</a>
     </div>
@@ -156,7 +158,7 @@ function toggleConfig() {
     }
 }
 
-{% if channel %}
+{% if editing %}
 async function testChannel() {
     const result = document.getElementById('testResult');
     result.innerHTML = '<div class="spinner"></div>';

@@ -6,6 +6,7 @@ import json
 import logging
 import re
 from datetime import timedelta
+from functools import partial
 from html.parser import HTMLParser
 from pathlib import Path
 from unittest.mock import patch
@@ -14,16 +15,12 @@ from models import (db, MonitoredQuery, ErrorRecord, EmailLog, DatabaseConnectio
                     NotificationChannel)
 from utils import get_utc_now, get_local_now, local_day_start_utc, format_local
 from version import __version__
+from tests import helpers
+
+
+make_query = partial(helpers.make_query, email_recipients='ops@x.it')
 
 ROOT = Path(__file__).resolve().parent.parent
-
-
-def make_query(name, **kwargs):
-    query = MonitoredQuery(name=name, sql_query='SELECT 1', key_fields='ID',
-                           email_recipients='ops@x.it', **kwargs)
-    db.session.add(query)
-    db.session.commit()
-    return query
 
 
 def add_errors(query, count, first_seen=None, resolved=False):
@@ -259,7 +256,7 @@ class TestQueryFormSave:
         db.session.commit()
         html = save_form(client, query, source_headers='{not json').get_data(as_text=True)
         # Our own check: its words on screen, unlike a database error (only in the log)
-        assert 'Error while updating: Headers must be a JSON object' in html
+        assert 'Headers must be a JSON object' in html
         db.session.refresh(query)
         assert not query.get_source_config().get('headers')
 

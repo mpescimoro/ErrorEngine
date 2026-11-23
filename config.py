@@ -3,19 +3,14 @@ ErrorEngine application configuration
 """
 import logging
 import os
+import secrets
 from datetime import timedelta
 
 logger = logging.getLogger(__name__)
 
-# Key used only when SECRET_KEY is missing
-DEFAULT_SECRET_KEY = 'secret-key-to-change-in-production'
-# Publicly known keys (defaults and the .env.example placeholder): with these, login stays blocked
-INSECURE_SECRET_KEYS = {DEFAULT_SECRET_KEY, 'chiave-segreta-da-cambiare-in-produzione',
-                        'change-this-to-a-random-string'}
-
 # Settings of older versions, no longer read: still in an .env, they get a warning at startup
 # (retired_settings_warnings) instead of being ignored without a word
-RETIRED_SETTINGS = ('MAIL_USE_TLS', 'NOTIFY_RETRY_HOURS')
+RETIRED_SETTINGS = ('MAIL_USE_TLS', 'NOTIFY_RETRY_HOURS', 'SECRET_KEY')
 
 
 def whole_number(name: str, default: int, between: tuple = None) -> int:
@@ -35,6 +30,21 @@ def whole_number(name: str, default: int, between: tuple = None) -> int:
     span = f' from {between[0]} to {between[1]}' if between else ''
     logger.critical(f"{name}={text} in .env is not a whole number{span}: "
                     f"correct it, or remove it for the default ({default})")
+    raise SystemExit(1)
+
+
+def flag(name: str) -> bool:
+    """
+    true or false from .env, false when the setting is empty. Anything else stops ErrorEngine
+    with a line that names the setting, as whole_number does.
+    """
+    text = (os.environ.get(name) or '').strip()
+    if text.lower() in ('', 'false'):
+        return False
+    if text.lower() == 'true':
+        return True
+    logger.critical(f"{name}={text} in .env is not true or false: "
+                    "correct it, or remove it for the default (false)")
     raise SystemExit(1)
 
 
@@ -75,24 +85,34 @@ def retired_settings_warnings() -> list:
         warnings.append("NOTIFY_RETRY_HOURS is no longer used: a notification that cannot be delivered gets "
                         "NOTIFY_ATTEMPTS attempts (5 by default), then it is shown as not delivered. "
                         "Remove it from .env")
+    if (os.environ.get('SECRET_KEY') or '').strip():
+        warnings.append("SECRET_KEY is no longer used: ErrorEngine makes a new one at every start. "
+                        "Remove it from .env")
     return warnings
 
 
 class Config:
-    """Base configuration."""
-    
-    # Flask
-    SECRET_KEY = os.environ.get('SECRET_KEY') or DEFAULT_SECRET_KEY
+    # Flask: signs the session cookie. New at every start, as a restart ends the sessions anyway (auth.py)
+    SECRET_KEY = secrets.token_hex(32)
 
     # Login (single user, see auth.py)
     LOGIN_USERNAME = os.environ.get('ERRORENGINE_USER') or 'admin'
     LOGIN_PASSWORD_HASH = os.environ.get('ERRORENGINE_PASSWORD_HASH', '')
     API_TOKEN = os.environ.get('ERRORENGINE_API_TOKEN', '')  # optional, for scripts
+    # Encrypts the passwords and tokens saved in the database (encryption.py); required
+    ENCRYPTION_KEY = os.environ.get('ERRORENGINE_ENCRYPTION_KEY', '')
     LOGIN_DISABLED = False
+    CSRF_DISABLED = False
     # The session expires after N hours of inactivity
     PERMANENT_SESSION_LIFETIME = timedelta(hours=whole_number('ERRORENGINE_SESSION_HOURS', 12))
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = 'Lax'
+    # The cookie goes out again only when the session changes (something the user does): the requests
+    # a page makes by itself do not move its expiry forward
+    SESSION_REFRESH_EACH_REQUEST = False
+    # Users open ErrorEngine with https://, through a reverse proxy: the session cookie only over HTTPS
+    HTTPS = flag('ERRORENGINE_HTTPS')
+    SESSION_COOKIE_SECURE = HTTPS
     
     # Internal database (SQLite unless DATABASE_URL is set)
     SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL') or 'sqlite:///errorengine.db'
@@ -155,36 +175,29 @@ class Config:
     # Time zone for displayed dates (default: UTC)
     TIMEZONE = os.environ.get('TIMEZONE', 'UTC')
 
+
 class DevelopmentConfig(Config):
-    """Development configuration."""
     DEBUG = True
 
 
 class ProductionConfig(Config):
-    """Production configuration."""
     DEBUG = False
-    
-    # In production SECRET_KEY must come from the environment
-    @property
-    def SECRET_KEY(self):
-        key = os.environ.get('SECRET_KEY')
-        if not key:
-            raise ValueError("SECRET_KEY must be set in production")
-        return key
 
 
 class TestingConfig(Config):
-    """Testing configuration."""
     TESTING = True
     DEBUG = True
     
     # In-memory database for fast tests (the scheduler does not start with TESTING)
     SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
+    # A key for the tests only
+    ENCRYPTION_KEY = 'wwS1YF4NDS-lYLzKPezGSYzMoD7ZvoQbkJkUE50mcKk='
 
     # Login disabled in tests (tests/test_auth.py turns it back on)
     LOGIN_DISABLED = True
+    # The CSRF check too (tests/test_csrf.py turns it back on)
+    CSRF_DISABLED = True
 
-    # Email mock
     MAIL_SERVER = 'localhost'
     MAIL_PORT = 25
     MAIL_SECURITY = 'ssl'
@@ -193,7 +206,6 @@ class TestingConfig(Config):
     MAIL_PASSWORD = 'test'
     MAIL_DEFAULT_SENDER = 'test@test.com'
     
-    # Short retention for tests
     LOG_RETENTION_DAYS = 1
     EMAIL_LOG_RETENTION_DAYS = 1
     RESOLVED_ERRORS_RETENTION_DAYS = 1
@@ -203,5 +215,4 @@ config = {
     'development': DevelopmentConfig,
     'production': ProductionConfig,
     'testing': TestingConfig,
-    'default': DevelopmentConfig
 }

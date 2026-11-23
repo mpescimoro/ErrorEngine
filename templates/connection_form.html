@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}{{ 'Edit' if connection else 'New' }} connection - ErrorEngine{% endblock %}
+{% block title %}{{ 'Edit' if editing else 'New' }} connection - ErrorEngine{% endblock %}
 
 {% block content %}
 <!-- Breadcrumb -->
@@ -8,19 +8,20 @@
     <ol class="flex items-center gap-sm text-muted" style="list-style: none; padding: 0; margin: 0;">
         <li><a href="{{ url_for('main.connections_list') }}" class="text-muted">Connections</a></li>
         <li><i class="bi bi-chevron-right"></i></li>
-        <li aria-current="page">{{ 'Edit' if connection else 'New' }}</li>
+        <li aria-current="page">{{ 'Edit' if editing else 'New' }}</li>
     </ol>
 </nav>
 
 <!-- Page Header -->
 <div class="page-header">
     <h1 class="page-title">
-        <i class="bi bi-{{ 'pencil' if connection else 'plus-lg' }}"></i>
-        {{ 'Edit connection' if connection else 'New connection' }}
+        <i class="bi bi-{{ 'pencil' if editing else 'plus-lg' }}"></i>
+        {{ 'Edit connection' if editing else 'New connection' }}
     </h1>
 </div>
 
 <form method="POST" id="connectionForm">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="grid" style="grid-template-columns: 2fr 1fr; gap: var(--space-xl); align-items: start;">
         
         <!-- Main Column -->
@@ -113,7 +114,8 @@
                         <div class="form-group">
                             <label for="password" class="form-label">
                                 Password
-                                {% if connection %}<span class="text-muted">(leave empty to keep it)</span>{% endif %}
+                                {% if password_hint == 'typed' %}<span class="text-muted">(type it again)</span>
+                                {% elif password_hint == 'saved' %}<span class="text-muted">(saved: leave empty to keep it)</span>{% endif %}
                             </label>
                             <input type="password" 
                                    class="form-control" 
@@ -159,6 +161,19 @@
                         <span class="form-check-label">Connection active</span>
                     </label>
                     <div class="form-text">When inactive, queries cannot use it</div>
+                    <label class="form-check form-switch mt-md">
+                        <input type="checkbox"
+                               class="form-check-input"
+                               id="allow_writes"
+                               name="allow_writes"
+                               {{ 'checked' if connection and connection.allow_writes }}>
+                        <span class="form-check-label">Allow statements that change data</span>
+                    </label>
+                    <div class="form-text">
+                        INSERT, UPDATE, DELETE, procedures (EXEC, CALL) and the like: off, the queries that contain
+                        them are refused. The check reads the text of the query: the real guarantee is a database user
+                        that can only read.
+                    </div>
                 </div>
             </div>
             
@@ -167,7 +182,7 @@
                 <div class="card-body">
                     <button type="submit" class="btn btn-primary w-full mb-sm">
                         <i class="bi bi-check-lg"></i>
-                        {{ 'Save changes' if connection else 'Create connection' }}
+                        {{ 'Save changes' if editing else 'Create connection' }}
                     </button>
                     <a href="{{ url_for('main.connections_list') }}" class="btn btn-secondary w-full">
                         Cancel
@@ -188,7 +203,6 @@ function updateDefaultPort() {
     const port = option.dataset.port;
     const portInput = document.getElementById('port');
     
-    // Update the placeholder
     portInput.placeholder = port ? `Default: ${port}` : 'N/A';
     
     // Show/hide the fields not used by SQLite
@@ -196,7 +210,6 @@ function updateDefaultPort() {
     document.getElementById('networkFields').style.display = isSqlite ? 'none' : 'block';
     document.getElementById('credentialFields').style.display = isSqlite ? 'none' : 'grid';
     
-    // Update the database label
     const dbLabel = document.getElementById('databaseLabel');
     const dbHelp = document.getElementById('databaseHelp');
     if (isSqlite) {
@@ -225,7 +238,7 @@ async function testConnection() {
         password: document.getElementById('password').value
     };
     
-    {% if connection %}
+    {% if editing %}
     // When editing with an empty password, test with the saved one (by ID)
     if (!data.password) {
         try {
@@ -255,7 +268,6 @@ function showTestResult(container, result) {
     }
 }
 
-// Init
 document.addEventListener('DOMContentLoaded', updateDefaultPort);
 </script>
 {% endblock %}

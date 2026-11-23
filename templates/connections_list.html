@@ -87,6 +87,7 @@
                             <form method="POST" action="{{ url_for('main.connection_delete', conn_id=conn.id) }}" 
                                   style="display: inline;"
                                   data-confirm="Delete connection {{ conn.name }}?">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                 <button type="submit" 
                                         class="btn btn-ghost btn-sm btn-icon text-danger"
                                         title="Delete"

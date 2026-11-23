@@ -1,18 +1,13 @@
 """
-Tests for the automatic page refresh (active errors summary)
-and for the filter of the Errors page.
+The automatic page refresh (active errors summary), the filter and the recipients of the Errors page.
 """
 import re
+
 import pytest
-from models import db, MonitoredQuery, ErrorRecord
+
+from models import db, ErrorRecord
+from tests.helpers import make_query
 from utils import get_utc_now
-
-
-def add_query(name):
-    query = MonitoredQuery(name=name, sql_query='SELECT 1', key_fields='ID')
-    db.session.add(query)
-    db.session.commit()
-    return query
 
 
 def add_error(query, n, resolved=False):
@@ -36,21 +31,21 @@ class TestErrorSummary:
         assert summary(client)['active'] == 0
 
     def test_counts_only_active_ones(self, client):
-        query = add_query('Q')
+        query = make_query('Q')
         add_error(query, 1)
         add_error(query, 2)
         add_error(query, 3, resolved=True)
         assert summary(client)['active'] == 2
 
     def test_signature_changes_with_a_new_error(self, client):
-        query = add_query('Q')
+        query = make_query('Q')
         add_error(query, 1)
         before = summary(client)['signature']
         add_error(query, 2)
         assert summary(client)['signature'] != before
 
     def test_signature_changes_when_an_error_is_resolved(self, client):
-        query = add_query('Q')
+        query = make_query('Q')
         error = add_error(query, 1)
         add_error(query, 2)
         before = summary(client)['signature']
@@ -60,7 +55,7 @@ class TestErrorSummary:
 
     def test_signature_unchanged_when_an_error_is_just_seen_again(self, client):
         """Every check updates the counters of known errors: that must not reload the page."""
-        query = add_query('Q')
+        query = make_query('Q')
         error = add_error(query, 1)
         before = summary(client)['signature']
         error.occurrence_count += 1
@@ -87,7 +82,7 @@ class TestPageAttributes:
     def test_counter_in_the_menu(self, client):
         html = client.get('/settings').get_data(as_text=True)
         assert 'id="navErrorCount" style="display: none;">0<' in html
-        add_error(add_query('Q'), 1)
+        add_error(make_query('Q'), 1)
         html = client.get('/settings').get_data(as_text=True)
         assert 'id="navErrorCount">1<' in html
 
@@ -101,14 +96,14 @@ class TestErrorsPageFilter:
         return [' '.join(t.split()) for t in re.findall(r'<option[^>]*>(.*?)</option>', select.group(0), re.S)], html
 
     def test_no_errors_no_menu_and_message(self, client):
-        add_query('Q')
+        make_query('Q')
         options, html = self.options(client)
         assert options is None
         assert 'bi-emoji-smile' in html
         assert 'There are no errors to resolve' in html
 
     def test_only_failing_queries_with_count(self, client):
-        a, b, c = add_query('Alpha'), add_query('Beta'), add_query('Gamma')
+        a, b, c = make_query('Alpha'), make_query('Beta'), make_query('Gamma')
         add_error(a, 1)
         add_error(a, 2)
         add_error(c, 1)
@@ -117,7 +112,7 @@ class TestErrorsPageFilter:
         assert options == ['All queries (3)', 'Alpha (2)', 'Gamma (1)']
 
     def test_selected_query_just_resolved(self, client):
-        a, b = add_query('Alpha'), add_query('Beta')
+        a, b = make_query('Alpha'), make_query('Beta')
         add_error(a, 1)
         add_error(b, 1, resolved=True)
         options, html = self.options(client, f'?query_id={b.id}')
@@ -136,11 +131,11 @@ class TestRecipientsColumn:
         raise AssertionError('row not found')
 
     def test_header(self, client):
-        add_error(add_query('Q'), 1)
+        add_error(make_query('Q'), 1)
         assert '<th>Recipients</th>' in client.get('/errors').get_data(as_text=True)
 
     def test_few_recipients_all_visible(self, client):
-        error = add_error(add_query('Q'), 1)
+        error = add_error(make_query('Q'), 1)
         error.add_notified_to(['user@x.it', 'it@x.it'])
         db.session.commit()
         cell = self.row_cell(client, error.id)
@@ -148,7 +143,7 @@ class TestRecipientsColumn:
         assert 'expandable-trigger' not in cell
 
     def test_many_recipients_first_three_and_the_rest_expandable(self, client):
-        error = add_error(add_query('Q'), 1)
+        error = add_error(make_query('Q'), 1)
         error.add_notified_to([f'user{i}@x.it' for i in range(1, 6)])
         db.session.commit()
         cell = self.row_cell(client, error.id)
@@ -159,13 +154,13 @@ class TestRecipientsColumn:
         assert f'aria-controls="error-details-r{error.id}"' in visible
 
     def test_a_single_hidden_recipient(self, client):
-        error = add_error(add_query('Q'), 1)
+        error = add_error(make_query('Q'), 1)
         error.add_notified_to([f'user{i}@x.it' for i in range(1, 5)])
         db.session.commit()
         assert '+1 more' in self.row_cell(client, error.id)
 
     def test_no_recipient_recorded(self, client):
-        error = add_error(add_query('Q'), 1)
+        error = add_error(make_query('Q'), 1)
         cell = self.row_cell(client, error.id)
         assert '—' in cell
         assert 'No email address recorded' in cell

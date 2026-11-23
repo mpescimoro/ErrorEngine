@@ -3,11 +3,20 @@ Models of the internal database (SQLite by default).
 """
 from datetime import datetime, time, timedelta
 from utils import get_utc_now
+from encryption import encrypt, decrypt, encrypt_fields, decrypt_fields, unreadable, UnreadableSecret
 from flask_sqlalchemy import SQLAlchemy
 import hashlib
 import json
 
 db = SQLAlchemy()
+
+# The settings the forms show, saved in clear: every other text of the settings is encrypted (encryption.py),
+# so that a field nobody listed is not left in clear. Those of an HTTP source:
+SOURCE_CLEAR = ('url', 'method', 'auth_type', 'api_key_name', 'api_key_in', 'response_path')
+# Those of a channel:
+CHANNEL_CLEAR = ('method', 'chat_id')
+# The fields of each type of channel that let anyone send to it: never sent back to the browser by its form
+CHANNEL_SECRETS = {'webhook': ('url', 'headers'), 'telegram': ('bot_token',), 'teams': ('webhook_url',)}
 
 
 class MonitoredQuery(db.Model):
@@ -101,42 +110,45 @@ class MonitoredQuery(db.Model):
     tags = db.Column(db.String(500), default='')  # Comma-separated tags
 
     def get_recipients_list(self):
-        """Returns the list of email recipients (comma-separated)"""
         if not self.email_recipients:
             return []
         return [r.strip() for r in self.email_recipients.split(',') if r.strip()]
     
     def get_default_routing_recipients(self):
-        """Returns the fallback recipients for routing"""
         if not self.routing_default_recipients:
             return []
         return [r.strip() for r in self.routing_default_recipients.split(',') if r.strip()]
     
     def get_key_fields_list(self):
-        """Returns the list of key fields"""
         return [f.strip() for f in self.key_fields.split(',') if f.strip()]
     
     def get_schedule_days_list(self):
         """Returns the list of active days (ISO weekday: 1=Mon, 7=Sun)"""
         if not self.schedule_days:
             return [1, 2, 3, 4, 5, 6, 7]  # Every day if not specified
-        return [int(d.strip()) for d in self.schedule_days.split(',') if d.strip()]
+        # Days saved before the form checked them may be anything: those are left out
+        days = (d.strip() for d in self.schedule_days.split(','))
+        return [int(d) for d in days if d in ('1', '2', '3', '4', '5', '6', '7')]
     
+    def stored_source_config(self) -> dict:
+        """The source settings as saved, secrets encrypted: what the form shows, without decrypting them."""
+        return json.loads(self.source_config) if self.source_config else {}
+
     def get_source_config(self):
-        """Returns the source configuration as a dict"""
-        if not self.source_config:
-            return {}
-        return json.loads(self.source_config)
-        
+        """The source settings, secrets in clear."""
+        try:
+            return decrypt_fields(self.stored_source_config(), SOURCE_CLEAR)
+        except UnreadableSecret:
+            raise unreadable('A token or header', f'the query {self.name}') from None
+
     def get_tags_list(self):
-        """Returns the list of tags."""
         if not self.tags:
             return []
         return [t.strip() for t in self.tags.split(',') if t.strip()]
 
     def set_source_config(self, config):
-        """Sets the source configuration from a dict"""
-        self.source_config = json.dumps(config, ensure_ascii=False)
+        """Sets the source settings, secrets encrypted (one already encrypted stays as it is)."""
+        self.source_config = json.dumps(encrypt_fields(config, SOURCE_CLEAR), ensure_ascii=False)
 
     def connection_disabled(self) -> bool:
         """A database query whose connection is disabled: it does not run until the connection is enabled."""
@@ -148,7 +160,6 @@ class MonitoredQuery(db.Model):
         return bool(self.is_active and self.consecutive_failures and not self.connection_disabled())
     
     def _get_local_now(self):
-        """Returns the local time in the configured time zone."""
         from utils import get_local_now
         return get_local_now()
 
@@ -253,7 +264,6 @@ class MonitoredQuery(db.Model):
         return datetime.combine(next_day, ref_time)
 
     def _utc_to_local(self, utc_dt):
-        """Converts a UTC datetime to local time."""
         from utils import utc_to_local
         return utc_to_local(utc_dt)
 
@@ -302,26 +312,53 @@ class DatabaseConnection(db.Model):
     port = db.Column(db.Integer)
     database = db.Column(db.String(255))  # database name, or service_name for Oracle
     username = db.Column(db.String(100))
-    password = db.Column(db.String(255))  # TODO: encrypt
+    # Encrypted (the password property): the column keeps its name
+    _password = db.Column('password', db.Text)
     is_active = db.Column(db.Boolean, default=True)
+    # Statements that change data (INSERT, UPDATE, DELETE, procedures): only where allowed
+    allow_writes = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=get_utc_now)
     
     queries = db.relationship('MonitoredQuery', backref='db_connection', lazy='dynamic')
-    
+
+    @property
+    def password(self):
+        """The password in clear."""
+        try:
+            return decrypt(self._password)
+        except UnreadableSecret:
+            raise unreadable('The password', f'the connection {self.name}') from None
+
+    @password.setter
+    def password(self, value):
+        self._password = encrypt(value)
+
     def get_driver(self):
         """Returns the driver for this DB type, with the configured timeouts."""
         from db_drivers import get_driver, driver_timeouts
         return get_driver(self.db_type, **driver_timeouts())
 
     def test_connection(self) -> dict:
-        """Tests the connection."""
-        driver = self.get_driver()
-        return driver.test_connection(
-            self.host, self.port, self.database, self.username, self.password
-        )
+        try:
+            password = self.password
+        except UnreadableSecret as e:
+            return {'status': 'error', 'message': str(e)}
+        return self.get_driver().test_connection(self.host, self.port, self.database, self.username, password)
+
+    def write_refusal(self, sql: str) -> str:
+        """Why this connection does not run the statement, one that can change data; empty when it does."""
+        # Here and not at the top: validators imports routing_service, which imports this module
+        from validators import write_statement_keyword
+        keyword = write_statement_keyword(sql)
+        if keyword and not self.allow_writes:
+            return (f"The query contains {keyword}, which can change data, and the connection {self.name} does not "
+                    "allow it: change the query, or allow statements that change data in the connection")
+        return ''
 
     def execute_query(self, sql: str) -> tuple:
-        """Runs a query on this connection."""
+        refusal = self.write_refusal(sql)
+        if refusal:
+            raise ValueError(refusal)
         driver = self.get_driver()
         conn = driver.open(
             self.host, self.port, self.database, self.username, self.password
@@ -364,13 +401,20 @@ class NotificationChannel(db.Model):
     last_sent_at = db.Column(db.DateTime)
     last_error = db.Column(db.Text)
     
-    def get_config(self):
-        import json
+    def stored_config(self) -> dict:
+        """The settings as saved, secrets encrypted: what the form shows, without decrypting them."""
         return json.loads(self.config) if self.config else {}
-    
+
+    def get_config(self):
+        """The settings, secrets in clear."""
+        try:
+            return decrypt_fields(self.stored_config(), CHANNEL_CLEAR)
+        except UnreadableSecret:
+            raise unreadable('An address, token or header', f'the channel {self.name}') from None
+
     def set_config(self, config_dict):
-        import json
-        self.config = json.dumps(config_dict, ensure_ascii=False)
+        """Sets the settings, secrets encrypted (one already encrypted stays as it is)."""
+        self.config = json.dumps(encrypt_fields(config_dict, CHANNEL_CLEAR), ensure_ascii=False)
     
     def __repr__(self):
         return f'<NotificationChannel {self.name} ({self.channel_type})>'
@@ -407,7 +451,6 @@ class RoutingRule(db.Model):
                                 order_by='RoutingCondition.id')
     
     def get_recipients_list(self):
-        """Returns the list of recipients"""
         if not self.recipients:
             return []
         return [r.strip() for r in self.recipients.split(',') if r.strip()]
@@ -488,11 +531,9 @@ class ErrorRecord(db.Model):
     )
     
     def get_error_data(self):
-        """Deserializes the error data"""
         return json.loads(self.error_data) if self.error_data else {}
     
     def set_error_data(self, data):
-        """Serializes the error data"""
         self.error_data = json.dumps(data, default=str, ensure_ascii=False)
 
     def get_notified_to(self) -> list:
@@ -533,17 +574,10 @@ class ErrorRecord(db.Model):
         self.undeliverable = json.dumps(data) if data['channels'] or data['recipients'] else None
     
     def needs_reminder(self, query):
-        """Checks whether the error needs a reminder"""
-        if not query.reminder_enabled:
+        if not query.reminder_enabled or not self.email_sent or self.resolved_at:
             return False
-        if not self.email_sent:
-            return False  # First email not sent yet
-        if self.resolved_at:
-            return False  # Already resolved
         if self.reminder_count >= query.reminder_max_count:
-            return False  # Reminder limit reached
-        
-        # Has enough time passed
+            return False
         last_notification = self.last_reminder_at or self.email_sent_at
         if not last_notification:
             return False
@@ -650,6 +684,7 @@ NEW_COLUMNS = [
     ('monitored_queries', 'last_failure_message'),
     ('error_records', 'notify_retry_at'),
     ('error_records', 'undeliverable'),
+    ('database_connections', 'allow_writes'),
 ]
 
 
@@ -678,3 +713,20 @@ def ensure_schema() -> list:
             connection.execute(text(ddl))
         added.append(f'{table}.{column_name}')
     return added
+
+
+def allow_writes_where_queries_write() -> list:
+    """
+    Once, when allow_writes arrives in a database of 2.4.2 or earlier, off everywhere: the connections
+    with a saved query that can change data keep running it. Returns [(connection, query, keyword)].
+    """
+    from validators import write_statement_keyword
+    allowed = []
+    for query in MonitoredQuery.query.filter(MonitoredQuery.db_connection_id.isnot(None)).order_by(MonitoredQuery.id):
+        keyword = query.source_type != 'http' and write_statement_keyword(query.sql_query)
+        connection = query.db_connection
+        if keyword and connection is not None and not connection.allow_writes:
+            connection.allow_writes = True
+            allowed.append((connection.name, query.name, keyword))
+    db.session.commit()
+    return allowed
