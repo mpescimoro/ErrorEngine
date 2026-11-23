@@ -7,7 +7,7 @@ Planned work, in order. Released versions are in [CHANGELOG.md](CHANGELOG.md).
 - [ ] Error identity, changed once with a migration that recomputes the open errors: same value types from every driver (numbers, CHAR without trailing spaces), a key-field hash that keeps values containing `|` apart, key fields edited without notifying the open errors again
 - [ ] Errors list and logs split into pages, statistics computed in the database, indexes for both
 - [ ] A row limit per notification, the other rows in a CSV attachment
-- [ ] API: errors as JSON, dates in one format, a limit on `days`; every read documented
+- [ ] API: failures answered in JSON too (a 404 is an HTML page today), dates in one format, a limit on `days`; every read documented
 - [ ] Run now and Test do not hold a server thread
 - [ ] SQLite: foreign keys enforced, the file compacted after the cleanup
 - [ ] Time windows across daylight saving changes
@@ -33,7 +33,7 @@ Planned work, in order. Released versions are in [CHANGELOG.md](CHANGELOG.md).
 - An API token that can only read, for monitors
 - Monitoring queries read-only on the database side too, where the driver can open a read-only connection or transaction
 - A Content-Security-Policy header, once the pages no longer have inline scripts
-- HTTP sources: Basic and OAuth2 auth, request body, pagination, proxy
+- HTTP sources: Basic auth and a request body in the form (the source reads them already), OAuth2, pagination, proxy
 - PostgreSQL behind PgBouncer (query timeout without startup options)
 - More channels: Slack, Google Chat, ntfy; signed webhooks
 - Docker image

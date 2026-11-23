@@ -29,6 +29,7 @@ from config import Config, DevelopmentConfig, ProductionConfig, TestingConfig
 from models import db, MonitoredQuery, DatabaseConnection, NotificationChannel, QueryLog
 from utils import redact_secrets, RedactSecretsFilter
 from validators import write_statement_keyword
+from tests.helpers import make_query
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -60,15 +61,6 @@ def start(project, port, env):
         except OSError:
             assert server.poll() is None and time.monotonic() < deadline
             time.sleep(0.1)
-
-
-def make_query(name='Orders', **kwargs):
-    kwargs.setdefault('sql_query', 'SELECT 1')
-    kwargs.setdefault('key_fields', 'ID')
-    query = MonitoredQuery(name=name, **kwargs)
-    db.session.add(query)
-    db.session.commit()
-    return query
 
 
 NAME = "Order's errors <script>window.x=1</script>"

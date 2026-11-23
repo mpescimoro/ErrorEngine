@@ -1,24 +1,14 @@
-r"""
-Single-user login, configured in .env:
+"""
+Single-user login; the settings are in docs/configuration.md (Sign-in).
 
-    ERRORENGINE_USER            username (default: admin)
-    ERRORENGINE_PASSWORD_HASH   password hash, generated with:
-        venv\Scripts\python.exe -c "import getpass; from werkzeug.security import generate_password_hash as h; print(h(getpass.getpass('Password: ')))"
-    ERRORENGINE_API_TOKEN       optional: to call the APIs from scripts, with the header
-                                "Authorization: Bearer <token>". It reads, and changes only
-                                what docs/api-reference.md lists (TOKEN_ACTIONS)
-    ERRORENGINE_SESSION_HOURS   hours of inactivity after which the session expires (default 12):
-                                the requests a page makes by itself do not count
+Every page and API requires login, except the login page, static files and /api/health. Until the
+password hash is set, nobody can open the interface; the scheduler keeps running. Changing the password
+or the username ends the open sessions; so do signing out, in every browser, and a restart.
 
-Every page and API requires login, except the login page, static files
-and /api/health (for external checks). Until the password hash is set, nobody can
-open the interface; the scheduler keeps running.
-Changing the password or the username ends the open sessions; so do signing out, in every
-browser, and a restart.
-
-The forms and the requests of the pages that change something carry a token of the
-session (CSRF), checked here: another site cannot make a signed-in browser send them.
-Scripts with the API token do not need it.
+Scripts use the API token: it reads, and changes only what docs/api-reference.md lists (TOKEN_ACTIONS).
+The forms and the requests of the pages that change something carry a token of the session (CSRF),
+checked here: another site cannot make a signed-in browser send them. Scripts with the API token do
+not need it.
 """
 import hashlib
 import hmac
@@ -143,7 +133,7 @@ def is_authenticated() -> bool:
 
 
 def _require_login():
-    """before_request: lets through only signed-in users."""
+    """before_request: lets through signed-in users, and scripts with the API token on /api/."""
     if current_app.config.get('LOGIN_DISABLED') or request.endpoint in PUBLIC_ENDPOINTS:
         return None
     if not _configuration_problem(current_app.config) and _is_logged_in():

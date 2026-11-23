@@ -2,29 +2,19 @@
 Queries that cannot read their source: the alert after MONITOR_FAILURE_THRESHOLD failures
 in a row and when they recover, health check and Settings.
 """
+from functools import partial
 from unittest.mock import patch
 
 import pytest
 
-from models import db, MonitoredQuery, NotificationChannel, EmailLog
+from models import db, EmailLog
+from tests import helpers
+from tests.helpers import make_channel
+
+
+make_query = partial(helpers.make_query, name='Critical')
 
 OK = {'success': True}
-
-
-def make_query(name='Critical', channels=(), **kwargs):
-    query = MonitoredQuery(name=name, sql_query='SELECT 1', key_fields='ID', **kwargs)
-    for channel in channels:
-        query.notification_channels.append(channel)
-    db.session.add(query)
-    db.session.commit()
-    return query
-
-
-def make_channel(name, channel_type='webhook'):
-    channel = NotificationChannel(name=name, channel_type=channel_type, config='{}', is_active=True)
-    db.session.add(channel)
-    db.session.commit()
-    return channel
 
 
 def fail(query, message='ORA-12541: TNS:no listener'):

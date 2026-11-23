@@ -30,6 +30,8 @@
 - The check for statements that change data reads the whole query, no longer its first word only: `WITH ... DELETE`, `SELECT ... INTO` and a second statement after `;` count too, `SET NOCOUNT` and `SET TRANSACTION ISOLATION LEVEL` before a SELECT do not
 - **Sign out** ends the session in every browser, copies of the cookie included, and a restart of ErrorEngine ends the open sessions: after one, sign in again
 - `SECRET_KEY` is no longer used: the key that signs the session cookie is new at every start, as a restart ends the sessions anyway. If it is still in `.env`, the log says so at startup
+- Unused code removed: styles no page used, the global names of the page scripts, `black` and `isort` from the development requirements
+- Code comments trimmed to the reasons behind the code; tests that repeated the same cases merged, one helper for the queries the tests create
 
 **Fixed**
 - Cross-site request forgery (CSRF): a page of the same host on another port, or of another host of the same domain, could make a signed-in browser change or delete queries, connections, channels and logs. The forms and the requests of the pages that change something now carry a token of the session, checked by the server; a request the browser marks as coming from another site is refused even with it. Scripts with the API token do not need it

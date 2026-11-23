@@ -80,7 +80,6 @@ def validate_routing_rule(data: dict) -> Tuple[bool, str]:
         return False, "The rule must be a JSON object"
     if not isinstance(data.get('name', ''), str):
         return False, "Rule name: text"
-    # Recipients are required
     recipients = data.get('recipients', '')
     if not isinstance(recipients, str):
         return False, "Rule recipients: comma-separated addresses, as text"
@@ -91,12 +90,10 @@ def validate_routing_rule(data: dict) -> Tuple[bool, str]:
     if not recipients.strip():
         return False, "The rule needs at least one recipient"
     
-    # Valid logic
     logic = data.get('condition_logic', 'AND')
     if logic not in ('AND', 'OR'):
         return False, "Logic must be 'AND' or 'OR'"
     
-    # Numeric priority
     try:
         priority = int(data.get('priority', 0))
         if priority < 0 or priority > 1000:
@@ -104,7 +101,6 @@ def validate_routing_rule(data: dict) -> Tuple[bool, str]:
     except (TypeError, ValueError):
         return False, "Priority must be a number"
     
-    # Conditions
     conditions = data.get('conditions', [])
     if not isinstance(conditions, list) or not all(isinstance(cond, dict) for cond in conditions):
         return False, "Conditions must be a list of objects"
@@ -133,12 +129,5 @@ def sanitize_string(value: str, max_length: int = 500) -> str:
     """Removes control characters and truncates to max_length."""
     if not value:
         return ""
-    
-    # Remove control characters
     value = ''.join(char for char in value if ord(char) >= 32 or char in '\n\r\t')
-    
-    # Truncate if too long
-    if len(value) > max_length:
-        value = value[:max_length]
-    
-    return value.strip()
+    return value[:max_length].strip()

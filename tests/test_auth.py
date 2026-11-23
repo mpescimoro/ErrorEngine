@@ -43,7 +43,8 @@ def login(client, username='admin', password='secret', next_url=None):
 
 
 class TestProtection:
-    """Without login nothing is reachable, except login, static files and health."""
+    """Without login: pages go to the login page, the API answers 401. Static files and the public health check:
+    test_offline_assets.py and test_public_health_check_shows_only_the_state."""
 
     def test_page_redirects_to_login(self, client):
         response = client.get('/errors?query_id=3')
@@ -56,16 +57,6 @@ class TestProtection:
         response = client.get('/api/queries')
         assert response.status_code == 401
         assert response.get_json()['error'] == 'unauthorized'
-
-    def test_api_changes_blocked(self, client):
-        assert client.post('/api/cleanup/run').status_code == 401
-
-    def test_health_is_public(self, client):
-        assert client.get('/api/health').status_code == 200
-
-    def test_static_files_are_public(self, client):
-        with client.get('/static/css/app.css') as response:
-            assert response.status_code == 200
 
     def test_login_page_is_public(self, client):
         response = client.get('/login')
@@ -88,15 +79,10 @@ class TestLogin:
         assert 'SameSite=Lax' in cookie
         assert 'Expires=' in cookie  # session with an expiry
 
-    def test_wrong_password(self, client):
-        response = login(client, password='wrong')
-        assert response.status_code == 200
-        assert 'Wrong username or password' in response.get_data(as_text=True)
-        assert client.get('/').status_code == 302
-
-    def test_wrong_user(self, client):
-        response = login(client, username='root')
-        assert 'Wrong username or password' in response.get_data(as_text=True)
+    @pytest.mark.parametrize('username, password', [('admin', 'wrong'), ('root', 'secret')])
+    def test_wrong_username_or_password(self, client, username, password):
+        response = login(client, username=username, password=password)
+        assert response.status_code == 200 and 'Wrong username or password' in response.get_data(as_text=True)
         assert client.get('/').status_code == 302
 
     @pytest.mark.parametrize('target', ['https://example.com/x', '//example.com', '/\\example.com', 'javascript:alert(1)'])
@@ -109,12 +95,6 @@ class TestLogin:
         html = client.get('/').get_data(as_text=True)
         assert 'class="sidebar-user-name" title="admin"' in html
         assert 'action="/logout"' in html
-
-    def test_logout(self, client):
-        login(client)
-        response = client.post('/logout')
-        assert response.headers['Location'] == '/login'
-        assert client.get('/').status_code == 302
 
     def test_password_change_ends_sessions(self, client, auth_app):
         login(client)
@@ -252,7 +232,8 @@ class TestSessions:
         login(browser)
         copy.set_cookie('session', browser.get_cookie('session').value)
         assert copy.get('/').status_code == 200
-        browser.post('/logout')
+        assert browser.post('/logout').headers['Location'] == '/login'
+        assert browser.get('/').status_code == 302
         assert copy.get('/').status_code == 302 and copy.get('/api/queries').status_code == 401
 
     def test_only_who_is_signed_in_can_sign_everyone_out(self, auth_app):

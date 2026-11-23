@@ -834,14 +834,11 @@
 
 {% block extra_js %}
 <script>
-    // Available operators for routing conditions
     const operators = {{ operators | tojson | safe }};
     
-    // Initialize source type toggle
     sourceToggle.init();
     
     {% if editing %}
-    // Initialize routing manager
     routingManager.operators = operators;
     routingManager.init({{ query.id }}, operators);
     {% endif %}

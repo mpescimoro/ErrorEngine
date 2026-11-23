@@ -163,25 +163,21 @@ const validator = {
         let isValid = true;
         let errorMessage = '';
         
-        // Required
         if (rules.required !== undefined && !value) {
             isValid = false;
             errorMessage = 'Required field';
         }
         
-        // Min length
         if (isValid && rules.minLength && value.length < parseInt(rules.minLength)) {
             isValid = false;
             errorMessage = `Minimum ${rules.minLength} characters`;
         }
         
-        // Max length
         if (isValid && rules.maxLength && value.length > parseInt(rules.maxLength)) {
             isValid = false;
             errorMessage = `Maximum ${rules.maxLength} characters`;
         }
         
-        // Pattern
         if (isValid && rules.pattern && value) {
             const pattern = this.patterns[rules.pattern];
             if (pattern && !pattern.test(value)) {
@@ -190,7 +186,6 @@ const validator = {
             }
         }
         
-        // Email
         if (isValid && input.type === 'email' && value) {
             if (!this.patterns.email.test(value)) {
                 isValid = false;
@@ -198,7 +193,6 @@ const validator = {
             }
         }
         
-        // Email list
         if (isValid && rules.emailList && value) {
             const emails = value.split(',').map(e => e.trim()).filter(e => e);
             for (const email of emails) {
@@ -210,7 +204,6 @@ const validator = {
             }
         }
         
-        // Min/max number
         if (isValid && input.type === 'number' && value) {
             const num = parseFloat(value);
             if (input.min && num < parseFloat(input.min)) {
@@ -223,7 +216,6 @@ const validator = {
             }
         }
         
-        // Update UI
         this.setFieldState(input, isValid, errorMessage);
         
         return isValid;
@@ -284,10 +276,8 @@ const validator = {
         const inputs = form.querySelectorAll('input, textarea, select');
         
         inputs.forEach(input => {
-            // Validate on blur
             input.addEventListener('blur', () => this.validateField(input));
             
-            // Clear error on input
             input.addEventListener('input', debounce(() => {
                 if (input.classList.contains('is-invalid')) {
                     this.validateField(input);
@@ -295,7 +285,6 @@ const validator = {
             }, 300));
         });
         
-        // Validate on submit
         form.addEventListener('submit', (e) => {
             if (!this.validateForm(form)) {
                 e.preventDefault();
@@ -314,7 +303,6 @@ const modal = {
         const modalEl = document.getElementById(modalId);
         if (!modalEl) return;
         
-        // Create backdrop
         let backdrop = document.querySelector('.modal-backdrop');
         if (!backdrop) {
             backdrop = document.createElement('div');
@@ -322,12 +310,10 @@ const modal = {
             document.body.appendChild(backdrop);
         }
         
-        // Show modal
         modalEl.classList.add('show');
         backdrop.classList.add('show');
         document.body.style.overflow = 'hidden';
         
-        // Focus first input
         setTimeout(() => {
             const firstInput = modalEl.querySelector('input, textarea, select');
             if (firstInput) firstInput.focus();
@@ -335,10 +321,8 @@ const modal = {
         
         this.current = modalEl;
         
-        // Close on backdrop click
         backdrop.onclick = () => this.close();
         
-        // Close on escape
         document.addEventListener('keydown', this.handleEscape);
     },
     
@@ -433,7 +417,6 @@ const queryManager = {
                 toast.error(result.error_message || 'Unknown error');
             }
             
-            // Reload after delay
             setTimeout(() => location.reload(), 1500);
             
         } catch (error) {
@@ -496,7 +479,6 @@ const routingManager = {
             this.rules = data.rules || [];
             this.render();
             
-            // Load available fields
             const fieldsData = await api.get(`/api/queries/${this.queryId}/fields`);
             window.availableFields = (fieldsData.fields || []).map(f => f.name);
         } catch (error) {
@@ -630,14 +612,12 @@ const routingManager = {
         const ruleId = document.getElementById('ruleId').value;
         const recipients = document.getElementById('ruleRecipients').value.trim();
         
-        // Validate
         if (!recipients) {
             toast.warning('Enter at least one recipient');
             document.getElementById('ruleRecipients').focus();
             return;
         }
         
-        // Collect conditions
         const conditions = [];
         document.querySelectorAll('.condition-row').forEach(row => {
             const field = row.querySelector('.cond-field').value.trim();
@@ -955,9 +935,7 @@ const nextCheckTimer = {
         this.queryNameElement = document.getElementById('nextCheckQuery');
         if (this.element) {
             this.update();
-            // Refresh data from the server every 30 seconds
             this.refreshId = setInterval(() => this.update(), 30000);
-            // Visual countdown every second
             this.countdownId = setInterval(() => this.tick(), 1000);
         }
     },
@@ -997,7 +975,7 @@ const nextCheckTimer = {
         
         if (this.secondsRemaining <= 0) {
             this.element.textContent = 'Running...';
-            // Reload data from the server after 3 seconds
+            // The check starts now: ask again once it had time to run
             setTimeout(() => this.update(), 3000);
         } else {
             this.element.textContent = this.formatTime(this.secondsRemaining);
@@ -1034,13 +1012,10 @@ const errorExpander = {
         
         const isExpanded = content.classList.contains('show');
         
-        // Toggle content
         content.classList.toggle('show');
         
-        // Toggle button state
         button.classList.toggle('expanded');
         
-        // Update aria
         button.setAttribute('aria-expanded', !isExpanded);
     }
 };
@@ -1049,7 +1024,6 @@ const errorExpander = {
 
 const settingsPage = {
     init() {
-        // Auto-load cleanup stats if on settings page
         const statsContainer = document.getElementById('cleanupStats');
         if (statsContainer) {
             this.loadCleanupStats();
@@ -1268,29 +1242,13 @@ document.addEventListener('DOMContentLoaded', () => {
     sourceToggle.init();
     settingsPage.init();
     
-    // Setup form validation on forms with data-validate
     document.querySelectorAll('form[data-validate]').forEach(form => {
         validator.setupForm(form);
     });
     
-    // Initialize alert dismissible
     document.querySelectorAll('.alert-dismissible .alert-close').forEach(btn => {
         btn.addEventListener('click', () => {
             btn.closest('.alert').remove();
         });
     });
 });
-
-// --- Globals ---
-
-window.api = api;
-window.toast = toast;
-window.modal = modal;
-window.validator = validator;
-window.queryManager = queryManager;
-window.errorManager = errorManager;
-window.routingManager = routingManager;
-window.testConnections = testConnections;
-window.errorExpander = errorExpander;
-window.settingsPage = settingsPage;
-window.escapeHtml = escapeHtml;

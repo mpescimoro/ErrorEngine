@@ -127,18 +127,13 @@ def get_field_value(error: dict, field_name: str):
 
 def evaluate_condition(error: dict, condition: RoutingCondition) -> bool:
     """Whether the error satisfies a single condition."""
-    # Field value
     field_value = get_field_value(error, condition.field_name)
-    
-    # None/NULL handling
     if field_value is None:
         if condition.operator == 'is_empty':
             return True
         elif condition.operator == 'is_not_empty':
             return False
         field_value = ''
-    
-    # Prepare the values to compare
     field_str = str(field_value)
     compare_value = condition.value or ''
     
@@ -147,8 +142,6 @@ def evaluate_condition(error: dict, condition: RoutingCondition) -> bool:
     if not condition.case_sensitive and condition.operator != 'regex':
         field_str = field_str.lower()
         compare_value = compare_value.lower()
-    
-    # Get the operator and evaluate
     operator_def = OPERATORS.get(condition.operator)
     if not operator_def:
         logger.warning(f"Unknown operator: {condition.operator}")
@@ -193,8 +186,6 @@ def apply_routing_rules(query: MonitoredQuery, errors: list) -> dict:
     # Routing enabled: evaluate the rules for each error
     recipient_errors = defaultdict(list)
     unmatched_errors = []
-    
-    # Sort the rules by priority
     sorted_rules = sorted(query.routing_rules, key=lambda r: r.priority)
     
     for error in errors:
@@ -266,8 +257,6 @@ def get_routing_summary(query: MonitoredQuery, errors: list) -> dict:
                     summary['recipients'][r] = len(recipient_errors)
             else:
                 summary['recipients'][recipient] = len(recipient_errors)
-        
-        # Unmatched count
         matched_errors = set()
         for errs in routing_result.values():
             for e in errs:

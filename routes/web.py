@@ -25,7 +25,6 @@ main_bp = Blueprint('main', __name__)
 
 @main_bp.app_context_processor
 def inject_global_data():
-    """Injects global data into every template."""
     summary = ErrorRecord.active_summary()
     return {
         'error_count': summary['active'],
@@ -37,7 +36,6 @@ def inject_global_data():
 # --- Helpers ---
 
 def parse_time(time_str):
-    """Converts an HH:MM string to a time object."""
     if not time_str:
         return None
     try:
@@ -350,7 +348,6 @@ def dashboard():
         .all()
     )
 
-    # General statistics
     stats = {
         'total_queries': len(queries),
         'active_queries': sum(1 for q in queries if q.is_active),
@@ -390,7 +387,6 @@ def queries_list():
 
 @main_bp.route('/queries/new', methods=['GET', 'POST'])
 def query_create():
-    """Creates a new query."""
     if request.method == 'GET':
         return render_query_form(None)
     query = MonitoredQuery(check_interval_minutes=15, reminder_interval_minutes=60, reminder_max_count=5,
@@ -417,7 +413,6 @@ def query_create():
 
 @main_bp.route('/queries/<int:query_id>')
 def query_detail(query_id):
-    """Query detail."""
     query = db.get_or_404(MonitoredQuery, query_id)
 
     # Active errors: the real count, the 10 most recent on the page (the rest on the Errors page)
@@ -426,7 +421,6 @@ def query_detail(query_id):
     active_errors = active.order_by(ErrorRecord.first_seen_at.desc()).limit(10).all()
     undelivered_count = active.filter(ErrorRecord.undeliverable.isnot(None)).count()
 
-    # Latest logs
     recent_logs = QueryLog.query.filter_by(
         query_id=query_id
     ).order_by(QueryLog.executed_at.desc()).limit(20).all()
@@ -445,7 +439,6 @@ def query_detail(query_id):
 
 @main_bp.route('/queries/<int:query_id>/edit', methods=['GET', 'POST'])
 def query_edit(query_id):
-    """Edits an existing query."""
     query = db.get_or_404(MonitoredQuery, query_id)
     if request.method == 'GET':
         return render_query_form(query)
@@ -471,7 +464,6 @@ def query_edit(query_id):
 
 @main_bp.route('/queries/<int:query_id>/delete', methods=['POST'])
 def query_delete(query_id):
-    """Deletes a query."""
     query = db.get_or_404(MonitoredQuery, query_id)
     name = query.name
     
@@ -490,7 +482,6 @@ def query_delete(query_id):
 
 @main_bp.route('/errors')
 def errors_list():
-    """List of all active errors."""
     query_id = request.args.get('query_id', type=int)
     delivery = request.args.get('delivery', '')
     
@@ -534,7 +525,6 @@ def errors_list():
 
 @main_bp.route('/logs')
 def logs_list():
-    """Run logs."""
     query_id = request.args.get('query_id', type=int)
     
     logs_query = QueryLog.query
@@ -583,7 +573,6 @@ def settings():
 
 @main_bp.route('/connections')
 def connections_list():
-    """List of database connections."""
     connections = DatabaseConnection.query.order_by(DatabaseConnection.name).all()
     return render_template('connections_list.html', 
                            connections=connections,
@@ -641,7 +630,6 @@ def render_connection_form(conn, form=None):
 
 @main_bp.route('/connections/new', methods=['GET', 'POST'])
 def connection_create():
-    """Creates a new connection."""
     if request.method == 'GET':
         return render_connection_form(None)
     conn = DatabaseConnection()
@@ -658,7 +646,6 @@ def connection_create():
 
 @main_bp.route('/connections/<int:conn_id>/edit', methods=['GET', 'POST'])
 def connection_edit(conn_id):
-    """Edits an existing connection."""
     conn = db.get_or_404(DatabaseConnection, conn_id)
     if request.method == 'GET':
         return render_connection_form(conn)
@@ -677,10 +664,8 @@ def connection_edit(conn_id):
 
 @main_bp.route('/connections/<int:conn_id>/delete', methods=['POST'])
 def connection_delete(conn_id):
-    """Deletes a connection."""
     conn = db.get_or_404(DatabaseConnection, conn_id)
     
-    # Is it used by any query
     if conn.queries.count() > 0:
         flash(f'Cannot delete: the connection is used by {conn.queries.count()} queries.', 'danger')
         return redirect(url_for('main.connections_list'))

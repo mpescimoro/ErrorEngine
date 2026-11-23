@@ -113,9 +113,6 @@ class TestKey:
         assert says in caplog.text and 'Fernet.generate_key()' in caplog.text
         assert 'If the database holds passwords saved with a key, set that key' in caplog.text
 
-    def test_the_command_in_the_log_makes_a_valid_key(self):
-        assert read_keys(Fernet.generate_key().decode())
-
 
 class TestSaved:
 

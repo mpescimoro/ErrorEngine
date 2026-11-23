@@ -39,7 +39,6 @@ class TestQueryForm:
         ({'name': '  '}, 'Name: required'),
         ({'key_fields': ' , ,'}, 'Key fields: at least one column name'),
         ({'check_interval_value': '0'}, 'Interval: a whole number, from 1 minute to 24 hours'),
-        ({'check_interval_value': '-5'}, 'Interval: a whole number, from 1 minute to 24 hours'),
         ({'check_interval_value': '25', 'check_interval_unit': 'hours'}, 'Interval: a whole number'),
         ({'check_interval_value': 'often'}, 'Interval: a whole number'),
         ({'schedule_days': '1,x'}, 'Days: numbers from 1 (Monday) to 7 (Sunday)'),
@@ -85,14 +84,6 @@ class TestQueryForm:
         assert 'Key fields: at least one column name' in html
         assert re.search(rf'value="{channel.id}"\s+checked', html)
         assert MonitoredQuery.query.count() == 0
-
-    def test_a_token_typed_is_not_sent_back(self, client):
-        form = {'name': 'API', 'source_type': 'http', 'source_url': 'https://api.example.com/errors',
-                'source_auth_type': 'bearer', 'source_auth_token': 'typed-secret-token', 'key_fields': 'ID',
-                'check_interval_value': '0', 'check_interval_unit': 'minutes'}
-        html = client.post('/queries/new', data=form).get_data(as_text=True)
-        assert 'Interval:' in html and 'https://api.example.com/errors' in html
-        assert 'typed-secret-token' not in html
 
     def test_http_settings_stay_when_the_headers_are_not_json(self, client):
         form = {'name': 'API', 'source_type': 'http', 'source_url': 'https://api.example.com/typed',

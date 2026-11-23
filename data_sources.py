@@ -52,8 +52,6 @@ class HttpDataSource(DataSource):
         headers = config.get('headers', {})
         body = config.get('body')
         timeout = config.get('timeout') or _default_http_timeout()
-        
-        # Authentication
         auth = None
         params = body if method == 'GET' and body else None
         auth_type = config.get('auth_type')
@@ -120,11 +118,7 @@ class HttpDataSource(DataSource):
             
             if not data:
                 return [], []
-            
-            # Columns from the first item
-            columns = list(data[0].keys()) if data else []
-            
-            return columns, data
+            return list(data[0].keys()), data
             
         except requests.RequestException as e:
             raise RuntimeError(f"HTTP error: {redact_secrets(str(e))}")

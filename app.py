@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 from flask import Flask
 from config import config, retired_settings_warnings
 
-# Logging setup
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -48,7 +47,6 @@ def create_app(config_name=None):
     from utils import install_log_redaction
     install_log_redaction()
 
-    # Extensions
     from models import db
     db.init_app(app)
     
@@ -73,12 +71,10 @@ def create_app(config_name=None):
     from notification_service import notification_service
     notification_service.init_app(app)
     
-    # Blueprints
     from routes import main_bp, api_bp
     app.register_blueprint(main_bp)
     app.register_blueprint(api_bp)
     
-    # Login: protects pages and APIs
     from auth import init_auth
     init_auth(app)
 
@@ -115,7 +111,6 @@ def create_app(config_name=None):
                 connection.exec_driver_sql('PRAGMA journal_mode=WAL')
         logger.info("Database initialized")
     
-    # Scheduler (not in testing)
     if not app.config.get('TESTING'):
         from scheduler import init_scheduler
         init_scheduler(app)

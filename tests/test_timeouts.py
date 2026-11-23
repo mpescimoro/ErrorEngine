@@ -6,22 +6,19 @@ import sqlite3
 import threading
 import time
 from contextlib import closing
+from functools import partial
 from unittest.mock import patch
 
 import pytest
 
 from models import db, MonitoredQuery, DatabaseConnection
 from utils import get_utc_now
+from tests import helpers
+
+
+make_query = partial(helpers.make_query, name='Critical')
 
 OK = {'success': True}
-
-
-def make_query(name='Critical', **kwargs):
-    kwargs.setdefault('sql_query', 'SELECT 1')
-    query = MonitoredQuery(name=name, key_fields='ID', **kwargs)
-    db.session.add(query)
-    db.session.commit()
-    return query
 
 
 class TestTimeouts:

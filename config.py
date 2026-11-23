@@ -92,8 +92,6 @@ def retired_settings_warnings() -> list:
 
 
 class Config:
-    """Base configuration."""
-    
     # Flask: signs the session cookie. New at every start, as a restart ends the sessions anyway (auth.py)
     SECRET_KEY = secrets.token_hex(32)
 
@@ -177,18 +175,16 @@ class Config:
     # Time zone for displayed dates (default: UTC)
     TIMEZONE = os.environ.get('TIMEZONE', 'UTC')
 
+
 class DevelopmentConfig(Config):
-    """Development configuration."""
     DEBUG = True
 
 
 class ProductionConfig(Config):
-    """Production configuration."""
     DEBUG = False
 
 
 class TestingConfig(Config):
-    """Testing configuration."""
     TESTING = True
     DEBUG = True
     
@@ -202,7 +198,6 @@ class TestingConfig(Config):
     # The CSRF check too (tests/test_csrf.py turns it back on)
     CSRF_DISABLED = True
 
-    # Email mock
     MAIL_SERVER = 'localhost'
     MAIL_PORT = 25
     MAIL_SECURITY = 'ssl'
@@ -211,7 +206,6 @@ class TestingConfig(Config):
     MAIL_PASSWORD = 'test'
     MAIL_DEFAULT_SENDER = 'test@test.com'
     
-    # Short retention for tests
     LOG_RETENTION_DAYS = 1
     EMAIL_LOG_RETENTION_DAYS = 1
     RESOLVED_ERRORS_RETENTION_DAYS = 1
@@ -221,5 +215,4 @@ config = {
     'development': DevelopmentConfig,
     'production': ProductionConfig,
     'testing': TestingConfig,
-    'default': DevelopmentConfig
 }

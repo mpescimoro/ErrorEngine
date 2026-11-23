@@ -12,7 +12,5 @@ coverage==7.17.0
 # Known vulnerabilities in the dependencies (also run by CI)
 pip-audit==2.10.1
 
-# Code quality
+# Code quality (the check CI runs)
 flake8==7.5.0
-black==26.10.1
-isort==9.0.2

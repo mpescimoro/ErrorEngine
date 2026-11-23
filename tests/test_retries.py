@@ -7,39 +7,20 @@ import re
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from unittest.mock import patch
 
-from models import db, MonitoredQuery, ErrorRecord, EmailLog, RoutingRule, RoutingCondition, NotificationChannel
+from models import db, MonitoredQuery, ErrorRecord, EmailLog, NotificationChannel
 from utils import get_utc_now
+from tests import helpers
+from tests.helpers import make_channel
+
+
+make_query = partial(helpers.make_query, name='Critical')
 
 ROWS = (['ID', 'TEAM'], [{'ID': 1, 'TEAM': 'PED'}, {'ID': 2, 'TEAM': 'IT'}])
 OK = {'success': True}
 DOWN = {'success': False, 'message': 'Connection refused', 'email_unavailable': True}
-
-
-def make_query(name='Critical', rules=(), channels=(), **kwargs):
-    kwargs.setdefault('sql_query', 'SELECT 1')
-    query = MonitoredQuery(name=name, key_fields='ID', **kwargs)
-    for channel in channels:
-        query.notification_channels.append(channel)
-    db.session.add(query)
-    db.session.flush()
-    for i, (recipients, conditions) in enumerate(rules):
-        rule = RoutingRule(query_id=query.id, name=f'Rule {i}', recipients=recipients,
-                           priority=i, is_active=True, condition_logic='OR')
-        db.session.add(rule)
-        db.session.flush()
-        for field, value in conditions:
-            db.session.add(RoutingCondition(rule_id=rule.id, field_name=field, operator='equals', value=value))
-    db.session.commit()
-    return query
-
-
-def make_channel(name, channel_type='webhook'):
-    channel = NotificationChannel(name=name, channel_type=channel_type, config='{}', is_active=True)
-    db.session.add(channel)
-    db.session.commit()
-    return channel
 
 
 def run(query, rows=ROWS, email=None):
@@ -216,7 +197,7 @@ class TestDeliveries:
 
         def until_given_up(name):
             """The waits before each new attempt, minutes; then the error given up."""
-            query = make_query(name, email_recipients='ops@x.it')
+            query = make_query(name=name, email_recipients='ops@x.it')
             run_check(query, email_result=down)
             error = ErrorRecord.query.filter_by(query_id=query.id).one()
             waits = []
@@ -294,8 +275,8 @@ class TestRetriesBetweenChecks:
 
     def test_not_for_inactive_queries_or_resolved_errors(self, app):
         import scheduler
-        paused = make_query('Paused', email_recipients='ops@x.it')
-        gone = make_query('Gone', email_recipients='ops@x.it')
+        paused = make_query(name='Paused', email_recipients='ops@x.it')
+        gone = make_query(name='Gone', email_recipients='ops@x.it')
         run(paused, email=DOWN)
         run(gone, email=DOWN)
         paused.is_active = False

@@ -203,7 +203,6 @@ function updateDefaultPort() {
     const port = option.dataset.port;
     const portInput = document.getElementById('port');
     
-    // Update the placeholder
     portInput.placeholder = port ? `Default: ${port}` : 'N/A';
     
     // Show/hide the fields not used by SQLite
@@ -211,7 +210,6 @@ function updateDefaultPort() {
     document.getElementById('networkFields').style.display = isSqlite ? 'none' : 'block';
     document.getElementById('credentialFields').style.display = isSqlite ? 'none' : 'grid';
     
-    // Update the database label
     const dbLabel = document.getElementById('databaseLabel');
     const dbHelp = document.getElementById('databaseHelp');
     if (isSqlite) {
@@ -270,7 +268,6 @@ function showTestResult(container, result) {
     }
 }
 
-// Init
 document.addEventListener('DOMContentLoaded', updateDefaultPort);
 </script>
 {% endblock %}

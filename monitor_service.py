@@ -30,7 +30,6 @@ class MonitorService:
         self.app = app
         
     def init_app(self, app):
-        """Initializes the Flask extension."""
         self.app = app
         app.extensions['monitor'] = self
     

@@ -110,19 +110,16 @@ class MonitoredQuery(db.Model):
     tags = db.Column(db.String(500), default='')  # Comma-separated tags
 
     def get_recipients_list(self):
-        """Returns the list of email recipients (comma-separated)"""
         if not self.email_recipients:
             return []
         return [r.strip() for r in self.email_recipients.split(',') if r.strip()]
     
     def get_default_routing_recipients(self):
-        """Returns the fallback recipients for routing"""
         if not self.routing_default_recipients:
             return []
         return [r.strip() for r in self.routing_default_recipients.split(',') if r.strip()]
     
     def get_key_fields_list(self):
-        """Returns the list of key fields"""
         return [f.strip() for f in self.key_fields.split(',') if f.strip()]
     
     def get_schedule_days_list(self):
@@ -145,7 +142,6 @@ class MonitoredQuery(db.Model):
             raise unreadable('A token or header', f'the query {self.name}') from None
 
     def get_tags_list(self):
-        """Returns the list of tags."""
         if not self.tags:
             return []
         return [t.strip() for t in self.tags.split(',') if t.strip()]
@@ -164,7 +160,6 @@ class MonitoredQuery(db.Model):
         return bool(self.is_active and self.consecutive_failures and not self.connection_disabled())
     
     def _get_local_now(self):
-        """Returns the local time in the configured time zone."""
         from utils import get_local_now
         return get_local_now()
 
@@ -269,7 +264,6 @@ class MonitoredQuery(db.Model):
         return datetime.combine(next_day, ref_time)
 
     def _utc_to_local(self, utc_dt):
-        """Converts a UTC datetime to local time."""
         from utils import utc_to_local
         return utc_to_local(utc_dt)
 
@@ -345,7 +339,6 @@ class DatabaseConnection(db.Model):
         return get_driver(self.db_type, **driver_timeouts())
 
     def test_connection(self) -> dict:
-        """Tests the connection."""
         try:
             password = self.password
         except UnreadableSecret as e:
@@ -363,7 +356,6 @@ class DatabaseConnection(db.Model):
         return ''
 
     def execute_query(self, sql: str) -> tuple:
-        """Runs a query on this connection."""
         refusal = self.write_refusal(sql)
         if refusal:
             raise ValueError(refusal)
@@ -459,7 +451,6 @@ class RoutingRule(db.Model):
                                 order_by='RoutingCondition.id')
     
     def get_recipients_list(self):
-        """Returns the list of recipients"""
         if not self.recipients:
             return []
         return [r.strip() for r in self.recipients.split(',') if r.strip()]
@@ -540,11 +531,9 @@ class ErrorRecord(db.Model):
     )
     
     def get_error_data(self):
-        """Deserializes the error data"""
         return json.loads(self.error_data) if self.error_data else {}
     
     def set_error_data(self, data):
-        """Serializes the error data"""
         self.error_data = json.dumps(data, default=str, ensure_ascii=False)
 
     def get_notified_to(self) -> list:
@@ -585,17 +574,10 @@ class ErrorRecord(db.Model):
         self.undeliverable = json.dumps(data) if data['channels'] or data['recipients'] else None
     
     def needs_reminder(self, query):
-        """Checks whether the error needs a reminder"""
-        if not query.reminder_enabled:
+        if not query.reminder_enabled or not self.email_sent or self.resolved_at:
             return False
-        if not self.email_sent:
-            return False  # First email not sent yet
-        if self.resolved_at:
-            return False  # Already resolved
         if self.reminder_count >= query.reminder_max_count:
-            return False  # Reminder limit reached
-        
-        # Has enough time passed
+            return False
         last_notification = self.last_reminder_at or self.email_sent_at
         if not last_notification:
             return False

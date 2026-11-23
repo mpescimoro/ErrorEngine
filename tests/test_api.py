@@ -1,7 +1,6 @@
 """
-Tests for the API routes.
+API: queries, routing rules, errors, statistics, cleanup, health, the test endpoints.
 """
-import json
 from datetime import timedelta
 
 import pytest
@@ -11,135 +10,52 @@ from utils import get_utc_now
 from version import __version__
 
 
-class TestQueriesAPI:
-    """Tests for the queries API."""
-    
-    def test_list_queries_empty(self, client):
-        """Empty query list."""
-        response = client.get('/api/queries')
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        assert isinstance(data, list)
-        assert len(data) == 0
-    
-    def test_list_queries_with_data(self, client, sample_query):
-        """Query list with data."""
-        response = client.get('/api/queries')
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        assert len(data) == 1
-        assert data[0]['name'] == 'Test Query'
-    
-    def test_toggle_query(self, client, sample_query):
-        """Toggles the active state of a query."""
-        # First deactivate
-        response = client.post(f'/api/queries/{sample_query.id}/toggle')
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        assert data['is_active'] is False
-        
-        # Then reactivate
-        response = client.post(f'/api/queries/{sample_query.id}/toggle')
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        assert data['is_active'] is True
-    
-    def test_query_status(self, client, sample_query):
-        """Gets the query state."""
-        response = client.get(f'/api/queries/{sample_query.id}/status')
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        assert data['name'] == 'Test Query'
-        assert 'active_errors' in data
-        assert 'is_active' in data
-    
-    def test_query_not_found(self, client):
-        """A query that does not exist returns 404."""
-        response = client.get('/api/queries/99999/status')
-        assert response.status_code == 404
+class TestQueries:
+
+    def test_list_and_status(self, client, sample_query):
+        assert [q['name'] for q in client.get('/api/queries').get_json()] == ['Test Query']
+        status = client.get(f'/api/queries/{sample_query.id}/status').get_json()
+        assert status['name'] == 'Test Query' and {'active_errors', 'is_active'} <= set(status)
+
+    def test_an_empty_list(self, client):
+        assert client.get('/api/queries').get_json() == [] and client.get('/api/errors').get_json() == []
+
+    def test_toggle(self, client, sample_query):
+        url = f'/api/queries/{sample_query.id}/toggle'
+        assert client.post(url).get_json()['is_active'] is False
+        assert client.post(url).get_json()['is_active'] is True
+
+    def test_what_does_not_exist_is_404(self, client):
+        assert client.get('/api/queries/99999/status').status_code == 404
+        assert client.post('/api/errors/99999/resolve').status_code == 404
 
 
-class TestRoutingRulesAPI:
-    """Tests for the routing rules API."""
-    
-    def test_get_routing_rules_empty(self, client, sample_query):
-        """Empty routing rule list."""
-        response = client.get(f'/api/queries/{sample_query.id}/routing/rules')
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        assert 'rules' in data
-        assert len(data['rules']) == 0
-    
-    def test_create_routing_rule(self, client, sample_query):
-        """Creates a new routing rule."""
-        rule_data = {
-            'name': 'Test Rule',
-            'recipients': 'test@example.com',
-            'condition_logic': 'AND',
-            'priority': 0,
-            'conditions': [
-                {
-                    'field_name': 'STATUS',
-                    'operator': 'equals',
-                    'value': 'ERROR'
-                }
-            ]
-        }
-        
-        response = client.post(
-            f'/api/queries/{sample_query.id}/routing/rules',
-            data=json.dumps(rule_data),
-            content_type='application/json'
-        )
-        
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        assert data['success'] is True
-        assert 'rule_id' in data
-    
-    def test_create_routing_rule_invalid_email(self, client, sample_query):
-        """Creates a rule with an invalid email."""
-        rule_data = {
-            'name': 'Test Rule',
-            'recipients': 'not-an-email',
-            'condition_logic': 'AND'
-        }
-        
-        response = client.post(
-            f'/api/queries/{sample_query.id}/routing/rules',
-            data=json.dumps(rule_data),
-            content_type='application/json'
-        )
-        
-        assert response.status_code == 400
-        data = json.loads(response.data)
-        assert data['success'] is False
-    
-    def test_create_routing_rule_missing_recipients(self, client, sample_query):
-        """Creates a rule without recipients."""
-        rule_data = {
-            'name': 'Test Rule',
-            'recipients': '',
-            'condition_logic': 'AND'
-        }
-        
-        response = client.post(
-            f'/api/queries/{sample_query.id}/routing/rules',
-            data=json.dumps(rule_data),
-            content_type='application/json'
-        )
-        
-        assert response.status_code == 400
-    
-    @pytest.mark.parametrize('condition, says', [
-        ({'field_name': 'STATUS', 'operator': ['equals'], 'value': 'X'}, 'Condition 1: unknown operator'),
-        ({'field_name': ['STATUS'], 'operator': 'equals', 'value': 'X'}, 'Condition 1: field is required'),
-        ({'field_name': 'STATUS', 'operator': 'equals', 'value': {'X': 1}}, 'Condition 1: the value is text or a number'),
+class TestRoutingRules:
+    RULE = {'name': 'Test Rule', 'recipients': 'test@example.com', 'condition_logic': 'AND', 'priority': 0,
+            'conditions': [{'field_name': 'STATUS', 'operator': 'equals', 'value': 'ERROR'}]}
+
+    def test_create_and_delete(self, client, sample_query):
+        url = f'/api/queries/{sample_query.id}/routing/rules'
+        assert client.get(url).get_json()['rules'] == []
+        created = client.post(url, json=self.RULE).get_json()
+        assert created['success'] is True
+        assert client.delete(f"{url}/{created['rule_id']}").get_json()['success'] is True
+        assert client.get(url).get_json()['rules'] == []
+
+    @pytest.mark.parametrize('changes, says', [
+        ({'recipients': 'not-an-email'}, ''),
+        ({'recipients': ''}, ''),
+        ({'conditions': [{'field_name': 'STATUS', 'operator': ['equals'], 'value': 'X'}]},
+         'Condition 1: unknown operator'),
+        ({'conditions': [{'field_name': ['STATUS'], 'operator': 'equals', 'value': 'X'}]},
+         'Condition 1: field is required'),
+        ({'conditions': [{'field_name': 'STATUS', 'operator': 'equals', 'value': {'X': 1}}]},
+         'Condition 1: the value is text or a number'),
     ])
-    def test_conditions_of_another_type_are_refused(self, client, sample_query, condition, says):
-        response = client.post(f'/api/queries/{sample_query.id}/routing/rules',
-                               json={'recipients': 'ops@example.com', 'conditions': [condition]})
-        assert response.status_code == 400 and says in response.get_json()['message']
+    def test_refused(self, client, sample_query, changes, says):
+        response = client.post(f'/api/queries/{sample_query.id}/routing/rules', json={**self.RULE, **changes})
+        assert response.status_code == 400 and response.get_json()['success'] is False
+        assert says in response.get_json()['message']
 
     def test_numbers_are_kept_as_the_page_sends_them(self, client, sample_query):
         url = f'/api/queries/{sample_query.id}/routing/rules'
@@ -149,117 +65,37 @@ class TestRoutingRulesAPI:
             assert response.status_code == 200, response.get_json()
         assert [c['value'] for rule in client.get(url).get_json()['rules'] for c in rule['conditions']] == ['5', '0']
 
-    def test_delete_routing_rule(self, client, sample_query_with_routing):
-        """Deletes a routing rule."""
-        # First get the rules
-        response = client.get(f'/api/queries/{sample_query_with_routing.id}/routing/rules')
-        data = json.loads(response.data)
-        rule_id = data['rules'][0]['id']
-        
-        # Delete the rule
-        response = client.delete(
-            f'/api/queries/{sample_query_with_routing.id}/routing/rules/{rule_id}'
-        )
-        
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        assert data['success'] is True
+
+def test_resolving_again_keeps_when_it_was_resolved(client, sample_query):
+    resolved_at = get_utc_now() - timedelta(days=2)
+    error = ErrorRecord(query_id=sample_query.id, error_hash='h1', error_data='{"ID": 1}', resolved_at=resolved_at)
+    db.session.add(error)
+    db.session.commit()
+    response = client.post(f'/api/errors/{error.id}/resolve')
+    assert response.status_code == 200 and response.get_json()['resolved_at'] == resolved_at.isoformat()
+    db.session.expire_all()
+    assert db.session.get(ErrorRecord, error.id).resolved_at == resolved_at
 
 
-class TestErrorsAPI:
-    """Tests for the errors API."""
-    
-    def test_list_errors_empty(self, client):
-        """Empty error list."""
-        response = client.get('/api/errors')
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        assert isinstance(data, list)
-        assert len(data) == 0
-    
-    def test_resolve_error_not_found(self, client):
-        """Resolving an error that does not exist."""
-        response = client.post('/api/errors/99999/resolve')
-        assert response.status_code == 404
-
-    def test_resolving_again_keeps_when_it_was_resolved(self, app, client, sample_query):
-        resolved_at = get_utc_now() - timedelta(days=2)
-        error = ErrorRecord(query_id=sample_query.id, error_hash='h1', error_data='{"ID": 1}',
-                            resolved_at=resolved_at)
-        db.session.add(error)
-        db.session.commit()
-        response = client.post(f'/api/errors/{error.id}/resolve')
-        assert response.status_code == 200 and response.get_json()['resolved_at'] == resolved_at.isoformat()
-        db.session.expire_all()
-        assert db.session.get(ErrorRecord, error.id).resolved_at == resolved_at
-
-
-class TestStatsAPI:
-    """Tests for the statistics API."""
-    
-    def test_get_stats(self, client):
-        """Gets the general statistics."""
-        response = client.get('/api/stats')
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        
-        assert 'total_queries' in data
-        assert 'active_queries' in data
-        assert 'total_active_errors' in data
-
-
-class TestCleanupAPI:
-    """Tests for the cleanup API."""
-    
-    def test_cleanup_stats(self, client):
-        """Gets the cleanup statistics."""
-        response = client.get('/api/cleanup/stats')
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        
-        assert 'retention_config' in data
-        assert 'counts' in data
-    
-    def test_run_cleanup(self, client):
-        """Runs a manual cleanup."""
-        response = client.post('/api/cleanup/run')
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        
-        assert data['success'] is True
-        assert 'result' in data
-
-
-class TestHealthAPI:
-    """Health check tests."""
-    
-    def test_health_check(self, client):
-        """Health check base."""
-        response = client.get('/api/health')
-        assert response.status_code == 200
-        data = json.loads(response.data)
-        
-        assert data['status'] == 'healthy'
-        assert 'checks' in data
-        assert data['checks']['database'] == 'ok'
-        assert data['version'] == __version__
+def test_statistics_cleanup_and_health(client):
+    assert {'total_queries', 'active_queries', 'total_active_errors'} <= set(client.get('/api/stats').get_json())
+    assert {'retention_config', 'counts'} <= set(client.get('/api/cleanup/stats').get_json())
+    cleanup = client.post('/api/cleanup/run').get_json()
+    assert cleanup['success'] is True and 'result' in cleanup
+    health = client.get('/api/health').get_json()
+    assert (health['status'], health['checks']['database'], health['version']) == ('healthy', 'ok', __version__)
 
 
 class TestTestEndpoints:
-    """Tests for the test endpoints."""
-    
-    def test_test_email_missing_recipient(self, client):
-        """Test email without a recipient."""
-        response = client.post(
-            '/api/test/email',
-            data=json.dumps({}),
-            content_type='application/json'
-        )
-        
-        assert response.status_code == 400
-        data = json.loads(response.data)
-        assert data['success'] is False
-    
+
+    def test_the_test_email_needs_a_recipient(self, client):
+        response = client.post('/api/test/email', json={})
+        assert response.status_code == 400 and response.get_json()['success'] is False
+
+    def test_the_sql_test_needs_the_sql(self, client, sample_connection):
+        response = client.post(f'/api/connections/{sample_connection.id}/test-query', json={})
+        assert response.status_code == 400 and response.get_json()['error'] == 'SQL query required'
+
     def test_test_reads_the_source_of_a_query_and_records_nothing(self, client, sample_query, sample_connection):
         query = db.session.get(MonitoredQuery, sample_query.id)
         query.db_connection_id = sample_connection.id
@@ -289,14 +125,3 @@ class TestTestEndpoints:
             response = client.post(url, json=body)
             assert response.status_code == 400 and '{"errors": [' in response.get_json()['message']
         assert client.post(url, data='errors=CRITICAL').status_code == 400
-
-    def test_test_query_missing_sql(self, client, sample_connection):
-        """Test query on a connection without SQL."""
-        response = client.post(
-            f'/api/connections/{sample_connection.id}/test-query',
-            data=json.dumps({}),
-            content_type='application/json'
-        )
-        
-        assert response.status_code == 400
-        assert json.loads(response.data)['error'] == 'SQL query required'

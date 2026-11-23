@@ -42,8 +42,6 @@ class NotificationService:
                 result = self._send_teams(config, query, errors, reminder)
             else:
                 return {'success': False, 'message': f'Unsupported type: {channel.channel_type}'}
-            
-            # Update the statistics
             if result['success']:
                 channel.total_sent += 1
                 channel.last_sent_at = get_utc_now()
@@ -202,14 +200,10 @@ class NotificationService:
         webhook_url = config.get('webhook_url')
         if not webhook_url:
             return {'success': False, 'message': 'Webhook URL missing'}
-        
-        # MessageCard for Teams
         facts = [
             {"name": "Errors still active" if reminder else "New errors", "value": str(len(errors))},
             {"name": "Time", "value": format_local_now('%d/%m/%Y %H:%M')},
         ]
-        
-        # Add the first errors as facts
         for i, error in enumerate(errors[:3]):
             preview = " | ".join([f"{k}: {v}" for k, v in list(error.items())[:2]])
             if len(preview) > 60:

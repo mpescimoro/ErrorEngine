@@ -1,11 +1,10 @@
 """
-pytest configuration and shared fixtures.
+Shared fixtures: the app on an in-memory database (or a file), a sample query with its errors and logs.
 """
 import pytest
 import sys
 import os
 
-# Add the root directory to the path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datetime import timedelta
@@ -17,7 +16,7 @@ from utils import get_utc_now
 
 @pytest.fixture(scope='function')
 def app():
-    """Creates an application instance for the tests."""
+    """The app on an in-memory SQLite database, new for each test."""
     app = create_app('testing')
     
     with app.app_context():
@@ -58,13 +57,12 @@ def scheduler_pool():
 
 @pytest.fixture(scope='function')
 def client(app):
-    """Test client for HTTP requests."""
     return app.test_client()
 
 
 @pytest.fixture(scope='function')
 def sample_query(app):
-    """Creates a sample query for the tests."""
+    """'Test Query': keyed on ID,CODE, to test@example.com, every 15 minutes."""
     with app.app_context():
         query = MonitoredQuery(
             name='Test Query',
@@ -79,22 +77,19 @@ def sample_query(app):
         )
         db.session.add(query)
         db.session.commit()
-        
-        # Refresh to get the ID
         db.session.refresh(query)
         yield query
 
 
 @pytest.fixture(scope='function')
 def sample_query_with_routing(app, sample_query):
-    """Creates a query with routing rules."""
+    """sample_query with routing: CRITICAL to critical@ (the rules stop there), WARNING to warning@, the others
+    to default@example.com."""
     with app.app_context():
-        # Reload the query in the current context
         query = db.session.get(MonitoredQuery, sample_query.id)
         query.routing_enabled = True
         query.routing_default_recipients = 'default@example.com'
         
-        # Rule 1: critical errors
         rule1 = RoutingRule(
             query_id=query.id,
             name='Critical errors',
@@ -116,7 +111,6 @@ def sample_query_with_routing(app, sample_query):
         )
         db.session.add(cond1)
         
-        # Rule 2: warnings
         rule2 = RoutingRule(
             query_id=query.id,
             name='Warning',
@@ -142,23 +136,12 @@ def sample_query_with_routing(app, sample_query):
         yield query
 
 
-@pytest.fixture
-def sample_error_data():
-    """Sample error data."""
-    return [
-        {'ID': '001', 'CODE': 'ERR001', 'SEVERITY': 'CRITICAL', 'MESSAGE': 'Critical error'},
-        {'ID': '002', 'CODE': 'ERR002', 'SEVERITY': 'WARNING', 'MESSAGE': 'Warning message'},
-        {'ID': '003', 'CODE': 'ERR003', 'SEVERITY': 'INFO', 'MESSAGE': 'Info message'},
-    ]
-
-
 @pytest.fixture(scope='function')
 def sample_errors_in_db(app, sample_query):
-    """Creates sample errors in the database (active + resolved)."""
+    """Errors of sample_query: 2 active (one notified), one resolved an hour ago, one 100 days ago."""
     with app.app_context():
         now = get_utc_now()
         
-        # Active error
         e1 = ErrorRecord(
             query_id=sample_query.id,
             error_hash='hash_active_001',
@@ -167,7 +150,6 @@ def sample_errors_in_db(app, sample_query):
         )
         e1.set_error_data({'ID': '001', 'CODE': 'ERR001', 'SEVERITY': 'CRITICAL'})
         
-        # Active error without email
         e2 = ErrorRecord(
             query_id=sample_query.id,
             error_hash='hash_active_002',
@@ -175,7 +157,6 @@ def sample_errors_in_db(app, sample_query):
         )
         e2.set_error_data({'ID': '002', 'CODE': 'ERR002', 'SEVERITY': 'WARNING'})
         
-        # Recently resolved error
         e3 = ErrorRecord(
             query_id=sample_query.id,
             error_hash='hash_resolved_recent',
@@ -184,7 +165,6 @@ def sample_errors_in_db(app, sample_query):
         )
         e3.set_error_data({'ID': '003', 'CODE': 'ERR003', 'SEVERITY': 'INFO'})
         
-        # Old resolved error (100 days ago)
         e4 = ErrorRecord(
             query_id=sample_query.id,
             error_hash='hash_resolved_old',
@@ -200,7 +180,7 @@ def sample_errors_in_db(app, sample_query):
 
 @pytest.fixture(scope='function')
 def sample_logs_in_db(app, sample_query):
-    """Creates sample logs in the database (recent + old)."""
+    """A run log and an email of 15 minutes ago, and older ones: a run of 60 days ago, an email of 120."""
     with app.app_context():
         now = get_utc_now()
         
@@ -213,7 +193,6 @@ def sample_logs_in_db(app, sample_query):
             emails_sent=1,
             execution_time_ms=150,
         )
-        # Force a recent timestamp
         db.session.add(log_recent)
         db.session.flush()
         log_recent.executed_at = now - timedelta(minutes=15)
@@ -264,7 +243,7 @@ def sample_logs_in_db(app, sample_query):
 
 @pytest.fixture(scope='function')
 def sample_connection(app):
-    """Creates a sample database connection."""
+    """'Test SQLite': a database in memory, so the queries on it really run."""
     with app.app_context():
         conn = DatabaseConnection(
             name='Test SQLite',

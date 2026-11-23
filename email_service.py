@@ -289,7 +289,6 @@ class EmailService:
         self.app = app
 
     def init_app(self, app):
-        """Initializes the Flask extension."""
         self.app = app
         app.extensions['email'] = self
         cfg = app.config

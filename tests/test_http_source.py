@@ -7,16 +7,8 @@ from unittest.mock import patch
 import pytest
 import requests
 
-from models import db, MonitoredQuery, ErrorRecord
-
-
-def make_query(name='Orders', **kwargs):
-    kwargs.setdefault('sql_query', 'SELECT 1')
-    kwargs.setdefault('key_fields', 'ID')
-    query = MonitoredQuery(name=name, **kwargs)
-    db.session.add(query)
-    db.session.commit()
-    return query
+from models import db, ErrorRecord
+from tests.helpers import make_query
 
 
 def http_response(body, status=200):

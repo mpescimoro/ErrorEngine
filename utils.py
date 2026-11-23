@@ -1,6 +1,5 @@
 """
-Utility functions for ErrorEngine.
-Centralized timezone handling that works everywhere (with or without Flask context).
+Helpers: the configured time zone, secrets out of messages, the server log file.
 """
 import logging
 import os
@@ -15,20 +14,11 @@ _cached_tz_name = None
 
 
 def get_configured_timezone():
-    """
-    Returns the configured ZoneInfo timezone.
-    Works both inside and outside Flask context.
-    
-    Priority:
-    1. Flask current_app.config['TIMEZONE']
-    2. os.environ['TIMEZONE']
-    3. 'UTC' (fallback)
-    """
+    """The ZoneInfo of TIMEZONE (Flask configuration, else environment); UTC when missing or not a time zone."""
     global _cached_tz, _cached_tz_name
     
     tz_name = None
     
-    # Try the Flask context
     try:
         from flask import current_app
         if current_app and current_app.config:
@@ -36,11 +26,9 @@ def get_configured_timezone():
     except RuntimeError:
         pass  # Outside the Flask context
     
-    # Fall back to the environment
     if not tz_name:
         tz_name = os.environ.get('TIMEZONE', 'UTC')
     
-    # Use the cache if the time zone has not changed
     if tz_name == _cached_tz_name and _cached_tz is not None:
         return _cached_tz
     
@@ -74,10 +62,7 @@ def utc_to_local(utc_dt):
     
     tz = get_configured_timezone()
     
-    # Assume input is naive UTC, make it aware
     utc_aware = utc_dt.replace(tzinfo=timezone.utc)
-    
-    # Convert to local and strip tzinfo
     return utc_aware.astimezone(tz).replace(tzinfo=None)
 
 
@@ -88,10 +73,7 @@ def local_to_utc(local_dt):
     
     tz = get_configured_timezone()
     
-    # Assume input is naive local, make it aware
     local_aware = local_dt.replace(tzinfo=tz)
-    
-    # Convert to UTC and strip tzinfo
     return local_aware.astimezone(timezone.utc).replace(tzinfo=None)
 
 
