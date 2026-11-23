@@ -328,7 +328,9 @@ class TestQueryForm:
         assert config_in_clear['auth_password'] == HIDDEN[1]
 
     @pytest.mark.parametrize('url', ['https://collector.example.net/errors', 'https://api.example.com:8443/errors',
-                                     'http://api.example.com/errors'])
+                                     'http://api.example.com/errors',
+                                     # urlsplit reads api.example.com, requests sends it to collector.example.net
+                                     'https://collector.example.net\\@api.example.com/errors'])
     def test_another_server_does_not_get_them(self, client, query, url):
         before = raw_database()
         html = client.post(f'/queries/{query.id}/edit',
@@ -446,9 +448,10 @@ class TestChannelForm:
     def test_a_webhook_keeps_its_headers_on_its_server_only(self, client, channels):
         hook = channels[0]
         saved_header = '{"Authorization": "(saved)"}'
-        elsewhere = channel_form('webhook', webhook_url='https://collector.example.net/x', webhook_headers=saved_header)
-        html = client.post(f'/channels/{hook.id}/edit', data=elsewhere).get_data(as_text=True)
-        assert 'Header Authorization: the address is on another server, type its value again' in html
+        for elsewhere in ('https://collector.example.net/x', 'https://collector.example.net\\@hooks.example.com/x'):
+            html = client.post(f'/channels/{hook.id}/edit', data=channel_form(
+                'webhook', webhook_url=elsewhere, webhook_headers=saved_header)).get_data(as_text=True)
+            assert 'Header Authorization: the address is on another server, type its value again' in html
         client.post(f'/channels/{hook.id}/edit', data=channel_form(
             'webhook', webhook_url='https://hooks.example.com/another-path', webhook_headers=saved_header))
         db.session.expire_all()

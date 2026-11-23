@@ -196,8 +196,8 @@ def _rebuild(database: str) -> bool:
 
 def _hide_channels_in_messages() -> list:
     """
-    The changes that hide the address, token and headers of each channel in the error messages saved before
-    (its last error, those of the errors), as they are hidden now when a message is written.
+    The changes that hide the address, token and headers of each channel in the error messages saved before 2.5
+    (its last error, those of the errors): those written since are hidden already.
     """
     from models import ErrorRecord, NotificationChannel, CHANNEL_CLEAR
     changes, known = [], []
@@ -225,8 +225,9 @@ def _hide_channels_in_messages() -> list:
 def encrypt_saved_secrets() -> dict:
     """
     At every start, in one transaction: the texts saved in clear (before 2.5) encrypted with the first key,
-    those of another key encrypted again with it, the secrets of the channels hidden in the error messages
-    saved before. Then the database file rebuilt without the old values.
+    those of another key encrypted again with it. At the first start after 2.4.2, the one that finds texts in
+    clear, the secrets of the channels hidden in the error messages saved before. Then the database file
+    rebuilt without the old values.
     Returns {'clear': n, 'older': n, 'unreadable': [where], 'messages': n, 'saved': bool, 'rebuilt': bool}.
     """
     from models import db, DatabaseConnection, MonitoredQuery, NotificationChannel, SOURCE_CLEAR, CHANNEL_CLEAR
@@ -252,9 +253,10 @@ def encrypt_saved_secrets() -> dict:
                       for field, value in stored.items()}
             if config != stored:
                 changes.append((item, column, json.dumps(config, ensure_ascii=False)))
-    messages = _hide_channels_in_messages()
-    found['messages'] = len(messages)
-    changes += messages
+    if found['clear']:
+        messages = _hide_channels_in_messages()
+        found['messages'] = len(messages)
+        changes += messages
 
     database = _database_file()
     marker = database + REBUILD_MARKER if database else None

@@ -15,7 +15,7 @@ from email_service import email_service, subject_warning
 from validators import write_statement_keyword
 
 import json
-from urllib.parse import urlsplit
+from urllib3.util import parse_url
 
 logger = logging.getLogger(__name__)
 main_bp = Blueprint('main', __name__)
@@ -80,13 +80,16 @@ def masked_headers(headers) -> str:
 
 
 def server_of(url) -> tuple:
-    """Scheme, host and port of an address: a saved secret goes only to the server it was typed for."""
+    """
+    Scheme, host and port of an address as requests reads it to connect: a saved secret goes only to the server
+    it was typed for. urlsplit reads some addresses otherwise: http://B\\@A/ is A for it, B for requests.
+    """
     try:
-        parts = urlsplit((url or '').strip())
-        scheme = parts.scheme.lower()
-        return scheme, (parts.hostname or '').lower(), parts.port or {'http': 80, 'https': 443}.get(scheme)
-    except ValueError:   # a port that is not a number
+        parts = parse_url((url or '').strip())
+    except ValueError:   # a port that is not a number, an address that cannot be read
         return '', url, None
+    scheme = (parts.scheme or '').lower()
+    return scheme, (parts.host or '').lower(), parts.port or {'http': 80, 'https': 443}.get(scheme)
 
 
 def holds_text(value) -> bool:
