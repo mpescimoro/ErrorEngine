@@ -58,7 +58,7 @@ def _mail_security():
 
 def _mail_port(security: str) -> int:
     """MAIL_PORT, or the usual port of that encryption."""
-    return whole_number('MAIL_PORT', {'ssl': 465, 'none': 25}.get(security, 587))
+    return whole_number('MAIL_PORT', {'ssl': 465, 'none': 25}.get(security, 587), between=(1, 65535))
 
 
 def retired_settings_warnings() -> list:
@@ -104,7 +104,7 @@ class Config:
     LOGIN_DISABLED = False
     CSRF_DISABLED = False
     # The session expires after N hours of inactivity
-    PERMANENT_SESSION_LIFETIME = timedelta(hours=whole_number('ERRORENGINE_SESSION_HOURS', 12))
+    PERMANENT_SESSION_LIFETIME = timedelta(hours=whole_number('ERRORENGINE_SESSION_HOURS', 12, between=(1, 8760)))
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = 'Lax'
     # The cookie goes out again only when the session changes (something the user does): the requests
@@ -135,7 +135,7 @@ class Config:
     M365_CLIENT_ID = (os.environ.get('M365_CLIENT_ID') or '').strip()
     M365_CLIENT_SECRET = os.environ.get('M365_CLIENT_SECRET', '')
     # Maximum wait for the email server (connection, login, sending)
-    MAIL_TIMEOUT_SECONDS = whole_number('MAIL_TIMEOUT_SECONDS', 30)
+    MAIL_TIMEOUT_SECONDS = whole_number('MAIL_TIMEOUT_SECONDS', 30, between=(1, 3600))
     # CA (or certificate) of an internal SMTP server; empty: the system certificates
     MAIL_CA_FILE = os.environ.get('MAIL_CA_FILE', '')
 
@@ -147,11 +147,11 @@ class Config:
     SCHEDULER_MAX_WORKERS = whole_number('SCHEDULER_MAX_WORKERS', 4)
 
     # HTTP/API timeout for external sources
-    HTTP_TIMEOUT_SECONDS = whole_number('HTTP_TIMEOUT_SECONDS', 30)
+    HTTP_TIMEOUT_SECONDS = whole_number('HTTP_TIMEOUT_SECONDS', 30, between=(1, 3600))
 
     # Database source timeouts (seconds)
-    DB_CONNECT_TIMEOUT_SECONDS = whole_number('DB_CONNECT_TIMEOUT_SECONDS', 15)
-    DB_QUERY_TIMEOUT_SECONDS = whole_number('DB_QUERY_TIMEOUT_SECONDS', 300)
+    DB_CONNECT_TIMEOUT_SECONDS = whole_number('DB_CONNECT_TIMEOUT_SECONDS', 15, between=(1, 3600))
+    DB_QUERY_TIMEOUT_SECONDS = whole_number('DB_QUERY_TIMEOUT_SECONDS', 300, between=(1, 86400))
 
     # Attempts to deliver a notification: the first, then after 1, 5, 15 and 60 minutes, and every
     # 60 minutes beyond the fifth. Then it is marked as not delivered; 1 = no retries
@@ -159,18 +159,18 @@ class Config:
 
     # Alert when a query cannot read its source N times in a row
     # (after a failure the scheduler retries every minute); 0 = no alert
-    MONITOR_FAILURE_THRESHOLD = whole_number('MONITOR_FAILURE_THRESHOLD', 3)
+    MONITOR_FAILURE_THRESHOLD = whole_number('MONITOR_FAILURE_THRESHOLD', 3, between=(0, 1000))
     # Recipients of these alerts (comma-separated); if empty, the query's recipients
     ADMIN_EMAILS = os.environ.get('ERRORENGINE_ADMIN_EMAILS', '')
     
     # Log retention (days)
-    LOG_RETENTION_DAYS = whole_number('LOG_RETENTION_DAYS', 30)
+    LOG_RETENTION_DAYS = whole_number('LOG_RETENTION_DAYS', 30, between=(0, 36500))
     
     # Email retention (days)
-    EMAIL_LOG_RETENTION_DAYS = whole_number('EMAIL_LOG_RETENTION_DAYS', 90)
+    EMAIL_LOG_RETENTION_DAYS = whole_number('EMAIL_LOG_RETENTION_DAYS', 90, between=(0, 36500))
     
     # Resolved errors retention (days)
-    RESOLVED_ERRORS_RETENTION_DAYS = whole_number('RESOLVED_ERRORS_RETENTION_DAYS', 60)
+    RESOLVED_ERRORS_RETENTION_DAYS = whole_number('RESOLVED_ERRORS_RETENTION_DAYS', 60, between=(0, 36500))
     
     # Time zone for displayed dates (default: UTC)
     TIMEZONE = os.environ.get('TIMEZONE', 'UTC')

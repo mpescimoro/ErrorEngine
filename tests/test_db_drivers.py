@@ -1,6 +1,7 @@
 """
 Database drivers: connections closed through the driver, the default port for a connection
-saved without one, the IBM i JVM started once, big DECIMAL values kept exact.
+saved without one, what a statement changes kept only where writes are allowed, the IBM i JVM
+started once, big DECIMAL values kept exact.
 """
 import re
 import sys
@@ -27,11 +28,8 @@ class FakeDriver:
     def open(self, *args):
         return WithoutClose()
 
-    def execute_query(self, connection, sql):
+    def run(self, connection, sql, writes):
         return ['X'], [{'X': '1'}]
-
-    def test_query(self, connection, sql, limit=5):
-        return {'valid': True, 'columns': ['X'], 'row_count': 1, 'sample_rows': [{'X': '1'}], 'error': None}
 
     def close(self, connection):
         self.closed.append(connection)
@@ -79,6 +77,102 @@ class TestPortLeftEmpty:
         assert 'PORT=446;' in ibm_db.connect.call_args.args[0]
         html = client.get('/connections/new').get_data(as_text=True)
         assert re.search(r'value="as400"[^>]*data-port="446"', html)
+
+
+class NoRowsCursor:
+    """The cursor of an INSERT: no description, and psycopg2, pymssql and oracledb fail when asked for rows."""
+    description = None
+
+    def execute(self, sql):
+        pass
+
+    def fetchall(self):
+        raise AssertionError('rows asked to a statement without them')
+
+    __iter__ = fetchall
+
+    def close(self):
+        pass
+
+
+class Transaction:
+    def __init__(self):
+        self.ends = []
+
+    def cursor(self):
+        return NoRowsCursor()
+
+    def commit(self):
+        self.ends.append('commit')
+
+    def rollback(self):
+        self.ends.append('rollback')
+
+
+class TestWrites:
+    """What a statement changes is committed where the connection allows writes, rolled back elsewhere."""
+
+    @pytest.mark.parametrize('db_type', ['sqlite', 'postgres', 'mysql', 'sqlserver', 'oracle'])
+    def test_committed_only_where_allowed_and_a_statement_without_rows_is_not_an_error(self, db_type):
+        from db_drivers import DRIVERS
+        if db_type not in DRIVERS:
+            pytest.skip(f'{db_type} driver not installed')
+        driver, connection = DRIVERS[db_type](), Transaction()
+        assert driver.run(connection, 'INSERT INTO t VALUES (1)', writes=True) == ([], [])
+        driver.run(connection, 'SELECT writes_something()', writes=False)
+        assert connection.ends == ['commit', 'rollback']
+
+    def test_sqlite_file(self, tmp_path):
+        import sqlite3
+        from contextlib import closing
+        from db_drivers.sqlite import SQLiteDriver
+        path = tmp_path / 'source.db'
+        with closing(sqlite3.connect(path)) as c, c:
+            c.execute('CREATE TABLE t (id INTEGER)')
+        driver = SQLiteDriver()
+        for writes, id_ in ((False, 1), (True, 2)):
+            with closing(driver.open(None, None, str(path), None, None)) as connection:
+                assert driver.run(connection, f'INSERT INTO t VALUES ({id_}) RETURNING id', writes) == \
+                    (['id'], [{'id': str(id_)}])
+        with closing(sqlite3.connect(path)) as c:
+            assert c.execute('SELECT id FROM t').fetchall() == [(2,)]
+
+    def test_ibm_i_jt400_keeps_autocommit_and_reads_nothing_after_an_insert(self, monkeypatch):
+        from db_drivers import ibmi
+        monkeypatch.setattr(ibmi, '_attach_as_daemon', lambda: None)
+
+        class Statement:
+            def execute(self, sql):
+                return False     # an update count, no rows
+
+            def getResultSet(self):
+                raise AssertionError('rows asked to a statement without them')
+
+            def close(self):
+                pass
+
+        class Connection:
+            """Without setAutoCommit, commit and rollback: calling them fails the test."""
+            def createStatement(self):
+                return Statement()
+
+        driver = ibmi.IBMiDriver()
+        for writes in (True, False):
+            assert driver.run(Connection(), 'INSERT INTO t VALUES (1)', writes) == ([], [])
+
+    def test_ibm_i_ibm_db_keeps_autocommit_and_reads_nothing_after_an_insert(self):
+        pytest.importorskip('ibm_db')
+        from db_drivers.as400 import AS400Driver
+        with patch('db_drivers.as400.ibm_db') as ibm_db:
+            ibm_db.exec_immediate.return_value = 'statement'
+            ibm_db.num_fields.return_value = 0
+            driver = AS400Driver()
+            for writes in (True, False):
+                assert driver.run('connection', 'INSERT INTO t VALUES (1)', writes) == ([], [])
+            ibm_db.autocommit.assert_not_called()
+            ibm_db.commit.assert_not_called()
+            ibm_db.rollback.assert_not_called()
+            ibm_db.fetch_assoc.assert_not_called()
 
 
 def test_jvm_started_once_with_threads_in_parallel(monkeypatch):

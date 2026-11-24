@@ -12,7 +12,7 @@ from encryption import decrypt
 from routing_service import get_operators_list
 from utils import local_day_start_utc, server_log_info
 from email_service import email_service, subject_warning
-from validators import write_statement_keyword
+from validators import write_statement_keyword, validate_email_list
 
 import json
 from urllib3.util import parse_url
@@ -157,6 +157,31 @@ def http_source_config(form, saved: dict, problems: list) -> dict:
     return config
 
 
+# What the lists of the query form offer: anything else comes from a script, not from the page
+FORM_CHOICES = {'source_type': ('database', 'http'), 'source_method': ('GET', 'POST'),
+                'source_auth_type': ('', 'bearer', 'api_key'), 'source_api_key_in': ('', 'query'),
+                'check_interval_unit': ('minutes', 'hours'), 'routing_aggregation': ('per_recipient', 'per_error'),
+                'routing_no_match_action': ('send_default', 'skip')}
+
+
+def form_time(form, field: str, label: str, problems: list):
+    """A time of the form; in another shape (8.30) a problem, not a time left out without a word."""
+    text = (form.get(field) or '').strip()
+    value = parse_time(text)
+    if text and value is None:
+        problems.append(f'{label}: hours and minutes, such as 08:30')
+    return value
+
+
+def form_recipients(form, field: str, label: str, problems: list) -> str:
+    """Comma-separated addresses, checked as the page checks them."""
+    text = form.get(field, '')
+    valid, error, _ = validate_email_list(text)
+    if not valid:
+        problems.append(f'{label}: {error}')
+    return text
+
+
 def form_number(text, lowest: int, highest: int = None):
     """A whole number typed in a form, within the limits; None otherwise."""
     text = (text or '').strip()
@@ -179,7 +204,8 @@ def query_from_form(query, form) -> list:
     The fields of the query form on the query, as typed; returns what is wrong with them. With anything
     wrong the caller saves nothing and shows the form again as sent, so nothing typed is lost.
     """
-    problems = []
+    problems = [f'{field}: not one of the choices of the form'
+                for field, choices in FORM_CHOICES.items() if field in form and form[field] not in choices]
     saved_config = query.stored_source_config()
     query.name = form.get('name', '').strip()
     if not query.name:
@@ -200,7 +226,7 @@ def query_from_form(query, form) -> list:
         query.set_source_config(http_source_config(form, saved_config, problems))
 
     query.email_subject = form.get('email_subject', query.email_subject)
-    query.email_recipients = form.get('email_recipients', '')
+    query.email_recipients = form_recipients(form, 'email_recipients', 'Recipients', problems)
     query.email_template = form.get('email_template', '')
 
     interval = form_number(form.get('check_interval_value', '15'), 1)
@@ -210,14 +236,14 @@ def query_from_form(query, form) -> list:
         query.check_interval_minutes = interval
     else:
         problems.append('Interval: a whole number, from 1 minute to 24 hours')
-    query.schedule_start_time = parse_time(form.get('schedule_start_time'))
-    query.schedule_end_time = parse_time(form.get('schedule_end_time'))
+    query.schedule_start_time = form_time(form, 'schedule_start_time', 'From', problems)
+    query.schedule_end_time = form_time(form, 'schedule_end_time', 'To', problems)
     days = form.get('schedule_days', '')
     if all(day.strip() in ('1', '2', '3', '4', '5', '6', '7') for day in days.split(',') if day.strip()):
         query.schedule_days = days
     else:
         problems.append('Days: numbers from 1 (Monday) to 7 (Sunday)')
-    query.schedule_reference_time = parse_time(form.get('schedule_reference_time'))
+    query.schedule_reference_time = form_time(form, 'schedule_reference_time', 'First run at', problems)
 
     query.reminder_enabled = form.get('reminder_enabled') == 'on'
     every = form_number(form.get('reminder_interval_minutes', '60'), 1)
@@ -229,7 +255,10 @@ def query_from_form(query, form) -> list:
 
     # Basic routing, only in the form of a saved query (the rules are managed through the API)
     query.routing_enabled = form.get('routing_enabled') == 'on'
-    for field in ('routing_default_recipients', 'routing_aggregation', 'routing_no_match_action'):
+    if 'routing_default_recipients' in form:
+        query.routing_default_recipients = form_recipients(form, 'routing_default_recipients',
+                                                           'Default recipients', problems)
+    for field in ('routing_aggregation', 'routing_no_match_action'):
         if field in form:
             setattr(query, field, form[field])
 

@@ -105,7 +105,10 @@ class IBMiDriver(DatabaseDriver):
         try:
             if self.query_timeout:
                 stmt.setQueryTimeout(int(self.query_timeout))
-            rs = stmt.executeQuery(sql)
+            # execute and not executeQuery, which wants rows: an INSERT, where writes are allowed, has none
+            if not stmt.execute(sql):
+                return [], []
+            rs = stmt.getResultSet()
             try:
                 meta = rs.getMetaData()
                 col_count = meta.getColumnCount()
@@ -154,6 +157,10 @@ class IBMiDriver(DatabaseDriver):
             return bool(val)
 
         return str(val)
+
+    def run(self, connection, sql: str, writes: bool) -> tuple:
+        # Autocommit, as JT400 opens the connection: each statement is saved as it runs, nothing to commit
+        return self.execute_query(connection, sql)
 
     def close(self, connection):
         """Closes the connection."""

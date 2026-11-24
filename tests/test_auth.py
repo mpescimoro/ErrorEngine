@@ -312,6 +312,21 @@ class TestTokenApi:
                            'api.api_run_cleanup'}
         assert 'the API token only reads and runs the actions listed in docs/api-reference.md' in caplog.text
 
+    def test_the_token_tests_a_connection_as_saved_and_not_fields_it_sends(self, client, auth_app, tmp_path):
+        # Otherwise, with the saved password, other users of the server, or whether a file exists on it
+        from models import db, DatabaseConnection
+        auth_app.config['API_TOKEN'] = TOKEN
+        conn = DatabaseConnection(name='Lite', db_type='sqlite', database=':memory:')
+        db.session.add(conn)
+        db.session.commit()
+        typed = {'db_type': 'sqlite', 'database': str(tmp_path / 'missing.db')}
+        url = f'/api/connections/{conn.id}/test'
+        answer = client.post(url, json=typed, headers={'Authorization': f'Bearer {TOKEN}'}).get_json()
+        assert answer['status'] == 'ok'
+        login(client)
+        answer = client.post(url, json=typed).get_json()
+        assert answer['status'] == 'error' and 'missing.db' in answer['message']
+
     def test_the_session_keeps_what_the_token_cannot_do(self, client, auth_app, sample_query):
         auth_app.config['API_TOKEN'] = TOKEN
         url = f'/api/queries/{sample_query.id}/toggle'

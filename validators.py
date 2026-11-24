@@ -6,7 +6,9 @@ from typing import Tuple, List
 
 from routing_service import OPERATORS
 
-EMAIL_PATTERN = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
+# The rule of the page too (static/js/app.js): ASCII without spaces, as smtplib cannot send to
+# andrea.bianchì@..., and the email then goes to none of its recipients
+EMAIL_PATTERN = re.compile(r'^[\x21-\x3f\x41-\x7e]+@[\x21-\x3f\x41-\x7e]+\.[\x21-\x3f\x41-\x7e]+$')
 
 
 def validate_email(email: str) -> Tuple[bool, str]:
@@ -42,32 +44,40 @@ def validate_email_list(emails_str: str) -> Tuple[bool, str, List[str]]:
     return True, "", validated
 
 
-# Quoted text and comments run nothing: in a single pass, so that '--' in a string is not a comment
-_SQL_NOT_CODE = re.compile(r"'(?:[^']|'')*'|\"[^\"]*\"|\[[^\]]*\]|`[^`]*`|/\*.*?\*/|--[^\n]*", re.S)
+# Quoted text and comments run nothing: in a single pass, so that '--' in a string is not a comment.
+# MySQL runs what /*! */ holds (MariaDB also /*M! */): only its opening goes, the rest is read as code
+_SQL_NOT_CODE = re.compile(r"'(?:[^']|'')*'|\"[^\"]*\"|\[[^\]]*\]|`[^`]*`|/\*M?!\d*|/\*.*?\*/|--[^\n]*", re.S)
 # Wherever they are: a CTE with DELETE, SELECT ... INTO, a procedure that can write
 _WRITE_WORDS = re.compile(r'\b(INSERT|UPDATE|DELETE|MERGE|UPSERT|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|'
                           r'RENAME|EXEC|EXECUTE|CALL|INTO)\b')
 # Settings of the session that SQL Server queries often start with, also without ; after them
-_READ_SETTINGS = re.compile(r'\s*SET\s+(?:NOCOUNT\s+(?:ON|OFF)|TRANSACTION\s+ISOLATION\s+LEVEL\s+'
+_READ_SETTINGS = re.compile(r'\s*SET\s+(?:NOCOUNT\s+(?:ON|OFF)|DATEFORMAT\s+(?:MDY|DMY|YMD|YDM|MYD|DYM)|'
+                            r'TRANSACTION\s+ISOLATION\s+LEVEL\s+'
                             r'(?:READ\s+UNCOMMITTED|READ\s+COMMITTED|REPEATABLE\s+READ|SNAPSHOT|SERIALIZABLE))\b')
+
+
+# MySQL comment lines at the start of a statement: no other database lets a statement start with #
+_HASH_COMMENTS = re.compile(r'\s*(?:#[^\n]*(?:\n|$)\s*)+')
 
 
 def write_statement_keyword(sql: str):
     """
     The word that lets the query change data (e.g. 'DELETE'); None for a read query. Every statement
-    must start with SELECT or WITH, after SET NOCOUNT and SET TRANSACTION ISOLATION LEVEL, and contain
-    none of those words. It reads the text: a function that writes, called from a SELECT, still gets
-    through, a database user that can only read does not.
+    must start with SELECT, WITH or DECLARE, after SET NOCOUNT, SET DATEFORMAT and SET TRANSACTION
+    ISOLATION LEVEL, and contain none of those words. It reads the text: a function that writes, called
+    from a SELECT, still gets through, a database user that can only read does not.
     """
     text = _SQL_NOT_CODE.sub(' ', sql or '').upper()
     for statement in text.split(';'):
-        while (setting := _READ_SETTINGS.match(statement)):
-            statement = statement[setting.end():]
-        first = re.match(r'[\s(]*([A-Z]+)', statement)
+        while (skip := _READ_SETTINGS.match(statement) or _HASH_COMMENTS.match(statement)):
+            statement = statement[skip.end():]
+        # The first word also after signs: {CALL ...} runs, as what /*!!! leaves in front of a DROP
+        first = re.search(r'[A-Z]+', statement)
         if not first:
             continue
-        if first.group(1) not in ('SELECT', 'WITH'):
-            return first.group(1)
+        # DECLARE: the variables a SQL Server query often starts with
+        if first.group() not in ('SELECT', 'WITH', 'DECLARE'):
+            return first.group()
         found = _WRITE_WORDS.search(statement)
         if found:
             return found.group(1)
@@ -93,6 +103,10 @@ def validate_routing_rule(data: dict) -> Tuple[bool, str]:
     logic = data.get('condition_logic', 'AND')
     if logic not in ('AND', 'OR'):
         return False, "Logic must be 'AND' or 'OR'"
+    # "false" as text would be read as true
+    for flag in ('stop_on_match', 'is_active'):
+        if flag in data and not isinstance(data[flag], bool):
+            return False, f"{flag}: true or false"
     
     try:
         priority = int(data.get('priority', 0))
@@ -113,6 +127,8 @@ def validate_routing_rule(data: dict) -> Tuple[bool, str]:
         if not isinstance(operator, str) or operator not in OPERATORS:
             # Saved, it would never match
             return False, f"Condition {i+1}: unknown operator {operator!r}"
+        if 'case_sensitive' in cond and not isinstance(cond['case_sensitive'], bool):
+            return False, f"Condition {i+1}: case_sensitive is true or false"
         # A number from a script is kept as the page sends it, as text
         if value is not None and (isinstance(value, bool) or not isinstance(value, (str, int, float))):
             return False, f"Condition {i+1}: the value is text or a number"

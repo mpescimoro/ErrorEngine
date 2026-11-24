@@ -146,6 +146,22 @@ class TestTestQuery:
         client.post(url, json={'sql': 'DROP TABLE orders', 'confirm_write': True})
         assert self.tables(path) == []
 
+    def test_where_allowed_what_the_statement_changes_is_saved(self, app, client, connection):
+        import sqlite3
+        conn, path = connection
+        conn.allow_writes = True
+        db.session.commit()
+        test = client.post(f'/api/connections/{conn.id}/test-query',
+                           json={'sql': 'INSERT INTO orders VALUES (7) RETURNING id', 'confirm_write': True}).get_json()
+        assert test['valid'] is True and test['sample_rows'] == [{'id': '7'}]
+        query = MonitoredQuery(name='Archive', sql_query='INSERT INTO orders VALUES (8)', key_fields='ID',
+                               db_connection_id=conn.id)
+        db.session.add(query)
+        db.session.commit()
+        assert client.post(f'/api/queries/{query.id}/run').get_json()['status'] == 'success'
+        with closing(sqlite3.connect(path)) as c:
+            assert c.execute('SELECT id FROM orders ORDER BY id').fetchall() == [(7,), (8,)]
+
     def test_a_saved_query_runs_only_where_allowed(self, app, client, connection):
         # Saved when the connection allowed it, or before the check read the whole statement
         conn, path = connection
@@ -171,7 +187,13 @@ class TestTestQuery:
                  # The settings SQL Server queries start with, with or without ;
                  'SET NOCOUNT ON; SELECT 1', 'set nocount on\nselect 1', 'SET NOCOUNT ON',
                  'SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED\nSELECT 1',
-                 'SET TRANSACTION ISOLATION LEVEL SNAPSHOT SET NOCOUNT OFF; WITH x AS (SELECT 1) SELECT * FROM x']
+                 'SET TRANSACTION ISOLATION LEVEL SNAPSHOT SET NOCOUNT OFF; WITH x AS (SELECT 1) SELECT * FROM x',
+                 'SET DATEFORMAT dmy; SELECT 1', 'set dateformat ymd select 1',
+                 'DECLARE @since date = GETDATE(); SELECT * FROM t WHERE d > @since',
+                 'DECLARE @since date = GETDATE()\nSELECT * FROM t WHERE d > @since',
+                 # MySQL runs what /*! */ holds: a hint, here
+                 'SELECT /*! STRAIGHT_JOIN */ a FROM t', "SELECT '/*! DROP TABLE t */' AS a",
+                 '# orders late\nSELECT 1', '#one\n  # two\nSELECT 1']
         assert [write_statement_keyword(sql) for sql in reads] == [None] * len(reads)
         writes = {'/* note */ -- line\n delete from orders': 'DELETE', 'EXEC proc': 'EXEC', 'CALL proc()': 'CALL',
                   'WITH gone AS (DELETE FROM t RETURNING *) SELECT * FROM gone': 'DELETE',
@@ -179,7 +201,12 @@ class TestTestQuery:
                   "SELECT '--', 1; DELETE FROM t": 'DELETE', 'SET NOCOUNT ON DELETE FROM t': 'DELETE',
                   'SET NOCOUNT ON; UPDATE t SET a = 1': 'UPDATE', 'SET ROWCOUNT 10; SELECT 1': 'SET',
                   'SET NOCOUNT ONE; SELECT 1': 'SET', 'SET @since = 1; SELECT 1': 'SET',
-                  'REPLACE INTO t VALUES (1)': 'REPLACE', 'SELECT * FROM t FOR UPDATE': 'UPDATE'}
+                  'REPLACE INTO t VALUES (1)': 'REPLACE', 'SELECT * FROM t FOR UPDATE': 'UPDATE',
+                  '/*!50000 DROP TABLE orders */': 'DROP', 'SELECT 1; /*M!100100 DELETE FROM t */': 'DELETE',
+                  'DECLARE @n int DELETE FROM t': 'DELETE', 'SET DATEFORMAT xyz; SELECT 1': 'SET',
+                  # A statement that starts with a sign: its first word still counts
+                  '/*!!! note */ DROP TABLE orders': 'NOTE', '{CALL LIB.PROC()}': 'CALL',
+                  '# note\nDROP TABLE orders': 'DROP', '# note\nSET GLOBAL read_only = 0': 'SET'}
         assert {sql: write_statement_keyword(sql) for sql in writes} == writes
 
     def test_the_button_asks_when_the_server_says_so(self):
@@ -375,6 +402,12 @@ class TestStartup:
                 whole_number('ERRORENGINE_PORT', 5000, between)
             assert stop.value.code == 1
             assert f'ERRORENGINE_PORT={value} in .env is not a whole number' in caplog.text
+        # A wait of 0 seconds fails every call, a session of 0 hours ends at once
+        for name, value in (('HTTP_TIMEOUT_SECONDS', '0'), ('ERRORENGINE_SESSION_HOURS', '0'),
+                            ('DB_QUERY_TIMEOUT_SECONDS', '-1'), ('LOG_RETENTION_DAYS', '-5')):
+            result = subprocess.run([sys.executable, '-c', 'import config'], cwd=ROOT, capture_output=True,
+                                    text=True, env=dict(os.environ, **{name: value}))
+            assert result.returncode == 1 and f'{name}={value} in .env is not a whole number from' in result.stderr
         for value, expected in (('', False), ('false', False), (' TRUE ', True)):
             monkeypatch.setenv('ERRORENGINE_HTTPS', value)
             assert flag('ERRORENGINE_HTTPS') is expected
@@ -382,6 +415,12 @@ class TestStartup:
         with pytest.raises(SystemExit):
             flag('ERRORENGINE_HTTPS')
         assert 'ERRORENGINE_HTTPS=yes in .env is not true or false' in caplog.text
+
+    def test_listening_beyond_this_computer_is_told_apart(self):
+        # Without HTTPS, serve.py warns for the first four: the password would cross the network in clear
+        from utils import reached_from_other_computers
+        hosts = ('0.0.0.0', '::', '192.168.1.10', 'erp-monitor', '127.0.0.1', '::1', 'localhost', ' 127.0.0.2 ')
+        assert [reached_from_other_computers(host) for host in hosts] == [True] * 4 + [False] * 4
 
     @pytest.mark.skipif(sys.platform == 'win32', reason='SIGTERM: Windows ends a process without a signal')
     def test_the_server_takes_its_port_before_the_scheduler_and_stops_in_order(self, tmp_path):

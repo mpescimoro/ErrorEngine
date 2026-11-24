@@ -5,7 +5,7 @@ from datetime import timedelta
 
 import pytest
 
-from models import db, ErrorRecord, MonitoredQuery
+from models import db, ErrorRecord, MonitoredQuery, DatabaseConnection
 from utils import get_utc_now
 from version import __version__
 
@@ -29,6 +29,27 @@ class TestQueries:
         assert client.get('/api/queries/99999/status').status_code == 404
         assert client.post('/api/errors/99999/resolve').status_code == 404
 
+    def test_a_failure_is_json_under_api_and_a_page_elsewhere(self, app, client, monkeypatch):
+        for method, url, code, name in (('get', '/api/queries/99999/status', 404, 'not_found'),
+                                        ('get', '/api/nothing-here', 404, 'not_found'),
+                                        ('delete', '/api/queries', 405, 'method_not_allowed'),
+                                        ('get', '/api/stats/timeline?days=0', 400, 'bad_request'),
+                                        ('get', '/api/stats/overview?days=366', 400, 'bad_request')):
+            response = getattr(client, method)(url)
+            assert (response.status_code, response.get_json()['error']) == (code, name), url
+        assert client.get('/api/stats/timeline?days=0').get_json()['message'] == 'days: from 1 to 365'
+        # The headers of the error stay
+        assert set(client.delete('/api/queries').headers['Allow'].split(', ')) >= {'GET'}
+        assert client.get('/api/stats/timeline?days=365').status_code == 200
+        page = client.get('/queries/99999')
+        assert page.status_code == 404 and page.get_json(silent=True) is None
+        # An error of ErrorEngine: the details only in the log
+        monkeypatch.setitem(app.config, 'PROPAGATE_EXCEPTIONS', False)
+        monkeypatch.setattr('routes.api.errors_per_local_day', lambda *args: 1 / 0)
+        response = client.get('/api/stats/timeline')
+        assert response.status_code == 500 and response.get_json()['error'] == 'internal_server_error'
+        assert 'ZeroDivisionError' not in response.get_data(as_text=True)
+
 
 class TestRoutingRules:
     RULE = {'name': 'Test Rule', 'recipients': 'test@example.com', 'condition_logic': 'AND', 'priority': 0,
@@ -51,6 +72,12 @@ class TestRoutingRules:
          'Condition 1: field is required'),
         ({'conditions': [{'field_name': 'STATUS', 'operator': 'equals', 'value': {'X': 1}}]},
          'Condition 1: the value is text or a number'),
+        # As text, "false" would be read as true
+        ({'stop_on_match': 'false'}, 'stop_on_match: true or false'),
+        ({'recipients': 'andrea.bianchì@example.com'}, 'Invalid email format'),
+        ({'is_active': 'false'}, 'is_active: true or false'),
+        ({'conditions': [{'field_name': 'STATUS', 'operator': 'equals', 'value': 'X', 'case_sensitive': 'false'}]},
+         'Condition 1: case_sensitive is true or false'),
     ])
     def test_refused(self, client, sample_query, changes, says):
         response = client.post(f'/api/queries/{sample_query.id}/routing/rules', json={**self.RULE, **changes})
@@ -86,10 +113,42 @@ def test_statistics_cleanup_and_health(client):
     assert (health['status'], health['checks']['database'], health['version']) == ('healthy', 'ok', __version__)
 
 
+class TestConnectionTest:
+
+    def test_the_edit_form_with_the_password_empty_tests_the_fields_typed(self, client, monkeypatch):
+        from db_drivers.postgres import PostgresDriver
+        seen = []
+
+        def test_connection(self, host, port, database, username, password):
+            seen.append((host, port, database, username, password))
+            return {'status': 'ok', 'message': 'Connection successful'}
+        monkeypatch.setattr(PostgresDriver, 'test_connection', test_connection)
+        conn = DatabaseConnection(name='PG', db_type='postgres', host='db.example.com', port=5432,
+                                  database='erp', username='reader')
+        conn.password = 'saved-secret'
+        db.session.add(conn)
+        db.session.commit()
+        typed = {'db_type': 'postgres', 'host': 'DB.example.com', 'port': '5432', 'database': 'erp_test',
+                 'username': 'auditor', 'password': ''}
+        assert client.post(f'/api/connections/{conn.id}/test', json=typed).get_json()['status'] == 'ok'
+        assert seen == [('DB.example.com', 5432, 'erp_test', 'auditor', 'saved-secret')]
+        # The saved password goes only to the server it was saved for
+        for moved in ({'host': 'elsewhere.example.com'}, {'port': '5433'}):
+            result = client.post(f'/api/connections/{conn.id}/test', json={**typed, **moved}).get_json()
+            assert result == {'status': 'error', 'message': 'Password: the server changed, type it again'}
+        assert len(seen) == 1
+        # Without the fields, as a script asks: the connection as saved
+        assert client.post(f'/api/connections/{conn.id}/test').get_json()['status'] == 'ok'
+        assert seen[-1] == ('db.example.com', 5432, 'erp', 'reader', 'saved-secret')
+
+
 class TestTestEndpoints:
 
     def test_the_test_email_needs_a_recipient(self, client):
-        response = client.post('/api/test/email', json={})
+        for body in ({}, {'recipient': 'not-an-address'}, {'recipient': 'a@example.com, b@example.com'}):
+            response = client.post('/api/test/email', json=body)
+            assert response.status_code == 400 and response.get_json()['success'] is False
+        response = client.post('/api/test/email', data='not json', content_type='text/plain')
         assert response.status_code == 400 and response.get_json()['success'] is False
 
     def test_the_sql_test_needs_the_sql(self, client, sample_connection):

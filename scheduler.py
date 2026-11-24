@@ -11,6 +11,7 @@ failed are sent again when their wait is over, without waiting for the next chec
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from flask_apscheduler import APScheduler
 from models import db, MonitoredQuery, ErrorRecord
 from utils import get_utc_now
@@ -20,8 +21,11 @@ scheduler = APScheduler()
 
 _executor = None
 _in_flight = set()          # ids of the queries currently running
+_waiting = {}               # id: when it was handed to the pool, until a thread takes it
 _lock = threading.Lock()
-_state = {'last_tick_at': None, 'max_workers': None}
+_state = {'last_tick_at': None, 'max_workers': None, 'busy': False}
+# Longer than a round: a burst of queries due in the same minute is not a sign of trouble
+BUSY_AFTER = timedelta(minutes=1)
 
 
 def _get_executor(app) -> ThreadPoolExecutor:
@@ -34,8 +38,15 @@ def _get_executor(app) -> ThreadPoolExecutor:
         return _executor
 
 
+def _taken(query_id: int):
+    """A thread of the pool has taken the query: it no longer waits."""
+    with _lock:
+        _waiting.pop(query_id, None)
+
+
 def _run_query(app, query_id: int):
     """Runs a query in its own thread, with its own application context."""
+    _taken(query_id)
     try:
         with app.app_context():
             from monitor_service import monitor_service
@@ -56,6 +67,7 @@ def _run_query(app, query_id: int):
 
 def _deliver_pending(app, query_id: int):
     """Sends again the notifications of a query whose wait is over, in its own thread."""
+    _taken(query_id)
     try:
         with app.app_context():
             from monitor_service import monitor_service
@@ -112,14 +124,16 @@ def dispatch_due_queries(app) -> list:
                 logger.debug(f"Scheduler: {query.name} not due - {reason}")
         # A check sends the pending notifications itself
         retries = queries_with_due_retries(exclude={query_id for query_id, _ in due})
+        _say_when_busy()
 
     executor = _get_executor(app)
     for query_id, name in due:
         with _lock:
             if query_id in _in_flight:
-                logger.warning(f"Scheduler: {name} is still running from the previous round, skipping")
+                logger.warning(f"Scheduler: {name} is still running, or waiting for a thread, from the previous round: skipped")
                 continue
             _in_flight.add(query_id)
+            _waiting[query_id] = get_utc_now()
         executor.submit(_run_query, app, query_id)
         started.append(query_id)
     for query_id in retries:
@@ -127,8 +141,28 @@ def dispatch_due_queries(app) -> list:
             if query_id in _in_flight:
                 continue
             _in_flight.add(query_id)
+            _waiting[query_id] = get_utc_now()
         executor.submit(_deliver_pending, app, query_id)
     return started
+
+
+def _say_when_busy():
+    """
+    In the log, once, when a query has waited longer than a round for a thread: which queries hold
+    the threads, the ones to look at (a source that hangs up to DB_QUERY_TIMEOUT_SECONDS).
+    """
+    with _lock:
+        oldest = min(_waiting.values(), default=None)
+        running = _in_flight - set(_waiting)
+    busy = oldest is not None and get_utc_now() - oldest > BUSY_AFTER
+    if busy and not _state['busy']:
+        names = sorted(q.name for q in MonitoredQuery.query.filter(MonitoredQuery.id.in_(running)))
+        logger.warning(f"Scheduler: all {_state['max_workers']} threads busy for more than a minute, queries are "
+                       f"waiting; running: {', '.join(names) or '-'}. Check these queries or raise "
+                       "SCHEDULER_MAX_WORKERS")
+    elif _state['busy'] and not busy:
+        logger.info("Scheduler: threads free again, no query waiting")
+    _state['busy'] = busy
 
 
 def release_locks(app) -> int:
@@ -151,11 +185,15 @@ def get_scheduler_status() -> dict:
     """Actual scheduler state, for the health check and the Settings page."""
     with _lock:
         in_flight = len(_in_flight)
+        oldest = min(_waiting.values(), default=None)
+        waiting = len(_waiting)
     return {
         'enabled': scheduler.app is not None,
         'running': bool(scheduler.app is not None and scheduler.running),
         'last_tick_at': _state['last_tick_at'],
         'in_flight': in_flight,
+        'waiting': waiting,
+        'busy': oldest is not None and get_utc_now() - oldest > BUSY_AFTER,
         'max_workers': _state['max_workers'],
     }
 

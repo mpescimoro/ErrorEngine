@@ -39,7 +39,7 @@ Settings live in `.env` in the project folder: copy `.env.example`, which has th
 | `RESOLVED_ERRORS_RETENTION_DAYS` | `60` | Days resolved errors are kept |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR` |
 
-A setting that takes a number but holds something else stops ErrorEngine at startup, and the log names it.
+A setting that takes a number but holds something else, or a number out of its range (a wait of `0` seconds, a session of `0` hours), stops ErrorEngine at startup, and the log names it with its range.
 
 Settings of older versions are no longer read: `MAIL_USE_TLS` (now `MAIL_SECURITY`), `NOTIFY_RETRY_HOURS` (now `NOTIFY_ATTEMPTS`) and `SECRET_KEY` (ErrorEngine makes a new one at every start). If they are still in `.env`, the log says so at startup. `MAIL_USE_TLS=true` meant STARTTLS and `false` SSL, whatever the port: the log names the `MAIL_SECURITY` that keeps it so, and says whether email goes out differently until it is set (`false` without `MAIL_PORT` or with a port other than 465, `true` with port 465).
 
@@ -123,7 +123,7 @@ Graph takes the email without saying which addresses do not exist: those come ba
 | IBM i (AS/400) | `JPype1` + JT400 | Needs Java 8+ and `lib/jt400.jar`, see [IBM i driver](ibmi-driver.md) |
 | AS/400 (DB2) | `ibm_db` | DRDA: needs a DB2 Connect license. Port 446 unless you set another. A password containing `;` does not work: use **IBM i (AS/400)** |
 
-Use read-only database users: ErrorEngine runs the query you write. Without **Allow statements that change data** in the connection, a query with INSERT, UPDATE, DELETE, a procedure with EXEC or CALL, and the like is refused; with it, each save of the query asks to confirm. `SET NOCOUNT` and `SET TRANSACTION ISOLATION LEVEL` before a SELECT, as SQL Server queries often start, do not count. The check reads the text of the query: it stops mistakes, not someone set on getting around it (a function that writes, called from a SELECT, or quoting particular to one database). A database user that can only read stops both.
+Use read-only database users: ErrorEngine runs the query you write. Without **Allow statements that change data** in the connection, a query with INSERT, UPDATE, DELETE, a procedure with EXEC or CALL, and the like is refused, and what gets past the check is rolled back (not on IBM i, which saves each statement as it runs). With it, each save of the query asks to confirm, and what the query changes is saved, at every check and when you test it. `DECLARE`, `SET NOCOUNT`, `SET DATEFORMAT` and `SET TRANSACTION ISOLATION LEVEL`, as SQL Server queries often start, do not count. The check reads the text of the query: it stops mistakes, not someone set on getting around it (a function that writes, called from a SELECT, or quoting particular to one database). A database user that can only read stops both.
 
 ## Running in production
 
@@ -144,7 +144,7 @@ Use read-only database users: ErrorEngine runs the query you write. Without **Al
 
   To have browsers use HTTPS only (HSTS), the proxy adds it, with nginx `add_header Strict-Transport-Security "max-age=31536000" always;`. HSTS covers the host name on every port: add it only if nothing else on that name is served with `http://`, or the browsers that opened ErrorEngine refuse those sites until `max-age` runs out. To go back, the proxy sends `max-age=0` over HTTPS for a while.
 - **Outgoing proxy:** HTTP sources, webhooks, Teams, Telegram and Microsoft 365 go through the proxy in `HTTPS_PROXY` (`HTTP_PROXY` for `http://` addresses), in `.env` or in the environment; `NO_PROXY` lists the hosts to reach directly, such as the servers of the internal network. Email by SMTP and the databases do not use it.
-- **External monitoring:** `GET /api/health` answers 200 (`healthy`, or `degraded` when some queries cannot read their source) or 503 when the internal database or the scheduler is not working.
+- **External monitoring:** `GET /api/health` answers 200 (`healthy`; `degraded` when some queries cannot read their source; `busy` when a query has waited more than a minute for a free thread, and the log says which queries hold them: check those, or raise `SCHEDULER_MAX_WORKERS`) or 503 when the internal database or the scheduler is not working.
 
 ## Notification channels
 

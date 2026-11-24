@@ -35,6 +35,15 @@ class TestQueryForm:
         query = MonitoredQuery.query.one()
         assert (query.name, query.check_interval_minutes, query.schedule_days) == ('Orders', 15, '1,2,3,4,5')
 
+    def test_what_the_page_accepts_the_server_accepts(self, client, source):
+        # An apostrophe, a long domain, times with the seconds of some browsers
+        form = query_form(source, email_recipients="o'brien@example.com, ops@mail.example.company",
+                          schedule_start_time='08:30', schedule_end_time='17:00:00')
+        assert client.post('/queries/new', data=form).status_code == 302
+        query = MonitoredQuery.query.one()
+        assert query.get_recipients_list() == ["o'brien@example.com", 'ops@mail.example.company']
+        assert (str(query.schedule_start_time), str(query.schedule_end_time)) == ('08:30:00', '17:00:00')
+
     @pytest.mark.parametrize('changes, says', [
         ({'name': '  '}, 'Name: required'),
         ({'key_fields': ' , ,'}, 'Key fields: at least one column name'),
@@ -45,6 +54,21 @@ class TestQueryForm:
         ({'schedule_days': '0,8'}, 'Days: numbers from 1 (Monday) to 7 (Sunday)'),
         ({'reminder_interval_minutes': 'hourly'}, 'Reminders: whole numbers from 1'),
         ({'reminder_max_count': '0'}, 'Reminders: whole numbers from 1'),
+        # Checked by the page too: here what a script, or a page that did not check, sends
+        ({'email_recipients': 'ops@example.com; anna@example,com'},
+         'Recipients: Invalid email format: ops@example.com; anna@example'),
+        ({'email_recipients': 'not-an-address'}, 'Recipients: Invalid email format: not-an-address'),
+        # smtplib cannot send to it, and the email would go to none of its recipients
+        ({'email_recipients': 'ops@example.com, andrea.bianchì@example.com'},
+         'Recipients: Invalid email format: andrea.bianchì@example.com'),
+        ({'routing_default_recipients': 'nobody'}, 'Default recipients: Invalid email format: nobody'),
+        ({'schedule_start_time': '8.30'}, 'From: hours and minutes, such as 08:30'),
+        ({'schedule_end_time': '25:00'}, 'To: hours and minutes'),
+        ({'schedule_reference_time': 'noon'}, 'First run at: hours and minutes'),
+        ({'routing_aggregation': 'whatever'}, 'routing_aggregation: not one of the choices of the form'),
+        ({'routing_no_match_action': 'explode'}, 'routing_no_match_action: not one of the choices of the form'),
+        ({'source_type': 'ftp'}, 'source_type: not one of the choices of the form'),
+        ({'source_method': 'DELETE'}, 'source_method: not one of the choices of the form'),
     ])
     def test_what_cannot_be_saved_comes_back_as_typed(self, client, source, changes, says):
         response = client.post('/queries/new', data=query_form(source, **changes))

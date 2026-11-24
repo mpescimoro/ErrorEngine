@@ -1,2 +1,2 @@
 """ErrorEngine version, shown in Settings and returned by the health check."""
-__version__ = '2.5.0'
+__version__ = '2.5.1'

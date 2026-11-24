@@ -1,6 +1,7 @@
 """
 Helpers: the configured time zone, secrets out of messages, the server log file.
 """
+import ipaddress
 import logging
 import os
 import re
@@ -234,3 +235,11 @@ def server_log_info():
         'rotation': (f"new file every {format_size(max_bytes)}, the last {backups} kept"
                      if max_bytes and backups else "no rotation, the file keeps growing"),
     }
+
+
+def reached_from_other_computers(host: str) -> bool:
+    """Whether the address the server listens on can be reached from other computers (0.0.0.0, a name)."""
+    try:
+        return not ipaddress.ip_address(host.strip()).is_loopback
+    except ValueError:
+        return host.strip().lower() != 'localhost'

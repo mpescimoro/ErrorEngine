@@ -76,7 +76,16 @@ class MonitorService:
                 result['error_message'] = f'The database connection "{query.db_connection.name}" is disabled'
                 return result
 
-            if not self._acquire_lock(query):
+            try:
+                locked = self._acquire_lock(query)
+            except Exception as e:
+                # ErrorEngine's own database, not the source: no failure of the source, and the lock may be another's
+                db.session.rollback()
+                result['status'] = 'skipped'
+                result['error_message'] = f'Not checked: the lock could not be taken ({redact_secrets(str(e))})'
+                logger.error(f"{query.name}: {result['error_message']}")
+                return result
+            if not locked:
                 result['status'] = 'skipped'
                 result['error_message'] = 'Query already running in another process'
                 return result

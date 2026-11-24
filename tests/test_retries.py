@@ -287,6 +287,23 @@ class TestRetriesBetweenChecks:
         wait_for_retry(gone)
         assert scheduler.queries_with_due_retries() == []
 
+    def test_a_lock_that_cannot_be_taken_is_not_a_failure_of_the_source(self, app):
+        # ErrorEngine's own database (locked by another writer): the source was not even read
+        import sqlalchemy.exc
+        from monitor_service import monitor_service
+        query = make_query(email_recipients='ops@x.it')
+        held_since = get_utc_now()
+        query.locked_at = held_since
+        db.session.commit()
+        locked = sqlalchemy.exc.OperationalError('UPDATE monitored_queries', {}, Exception('database is locked'))
+        with patch.object(monitor_service, '_acquire_lock', side_effect=locked):
+            result = monitor_service.check_query(query, force=True)
+        assert result['status'] == 'skipped' and 'the lock could not be taken' in result['error_message']
+        db.session.expire_all()
+        query = db.session.get(MonitoredQuery, query.id)
+        # Not counted as a failure, and the lock, maybe another's, left where it was
+        assert query.consecutive_failures == 0 and query.locked_at == held_since
+
     def test_a_running_check_is_left_alone_and_the_lock_released(self, app):
         query = make_query(email_recipients='ops@x.it')
         run(query, email=DOWN)

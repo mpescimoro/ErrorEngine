@@ -162,6 +162,48 @@ class TestIsolatedScheduler:
         assert finished.count('Slow') == 1 and finished.count('Fast') == 2
         assert scheduler_pool.get_scheduler_status()['last_tick_at'] is not None
 
+    def test_a_query_waiting_for_a_thread_for_over_a_minute_makes_the_health_busy(self, file_app, scheduler_pool,
+                                                                                caplog):
+        from datetime import timedelta
+        file_app.config['SCHEDULER_MAX_WORKERS'] = 1
+        make_query(name='Slow')
+        waiting = make_query(name='Waiting')
+        release = threading.Event()
+
+        def check(query, force=False):
+            if query.name == 'Slow':
+                release.wait(10)
+            return {'status': 'success'}
+
+        with patch.object(MonitoredQuery, 'should_run_now', return_value=(True, 'test')), \
+             patch('monitor_service.monitor_service.check_query', side_effect=check):
+            scheduler_pool.dispatch_due_queries(file_app)
+            for _ in range(100):
+                if list(scheduler_pool._waiting) == [waiting.id]:
+                    break
+                time.sleep(0.02)
+            status = scheduler_pool.get_scheduler_status()
+            # Just handed over: a burst of queries due in the same minute is not busy
+            assert (status['in_flight'], status['waiting'], status['busy']) == (2, 1, False)
+            scheduler_pool._waiting[waiting.id] -= timedelta(minutes=2)
+            assert scheduler_pool.get_scheduler_status()['busy'] is True
+            # The scheduler is not started in the tests: the status of one that is
+            status = dict(scheduler_pool.get_scheduler_status(), enabled=True, running=True)
+            with patch('scheduler.get_scheduler_status', return_value=status):
+                health = file_app.test_client().get('/api/health')
+            assert health.status_code == 200 and health.get_json()['status'] == 'busy'
+            checks = health.get_json()['checks']
+            assert (checks['scheduler'], checks['queries_running'], checks['queries_waiting']) == ('busy', 1, 1)
+            with caplog.at_level(logging.WARNING, logger='scheduler'):
+                scheduler_pool.dispatch_due_queries(file_app)
+                scheduler_pool.dispatch_due_queries(file_app)
+            busy_lines = [r.getMessage() for r in caplog.records if 'threads busy' in r.getMessage()]
+            # Said once, with the query that holds the thread
+            assert len(busy_lines) == 1 and 'all 1 threads busy' in busy_lines[0] and 'running: Slow' in busy_lines[0]
+            release.set()
+            scheduler_pool.shutdown(wait=True)
+        assert scheduler_pool.get_scheduler_status()['busy'] is False
+
 
 class TestLocksAtStartup:
     """A lock still there when ErrorEngine starts was left by a check cut short: nothing runs yet."""

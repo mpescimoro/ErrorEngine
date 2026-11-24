@@ -141,7 +141,8 @@ class TestFailingSourceAlert:
         assert data['status'] == 'degraded' and data['checks']['queries_failing'] == 1
 
     def test_health_503_with_scheduler_stopped(self, app, client):
-        stopped = {'enabled': True, 'running': False, 'last_tick_at': None, 'in_flight': 0, 'max_workers': 4}
+        stopped = {'enabled': True, 'running': False, 'last_tick_at': None, 'in_flight': 0, 'waiting': 0,
+                   'busy': False, 'max_workers': 4}
         with patch('scheduler.get_scheduler_status', return_value=stopped):
             response = client.get('/api/health')
         assert response.status_code == 503

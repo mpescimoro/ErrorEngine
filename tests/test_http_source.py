@@ -46,6 +46,22 @@ def test_rows_that_are_not_objects_are_a_source_failure(app):
                 HttpDataSource().execute({'url': 'https://api.x.com/items'})
 
 
+def test_a_single_object_is_a_source_failure_not_one_error(app):
+    # {"status": "ok"} would be an error that never resolves
+    from data_sources import HttpDataSource
+    with patch('data_sources.requests.request', return_value=http_response({'status': 'ok'})):
+        with pytest.raises(ValueError, match='an object, not a list of rows: set the JSON path'):
+            HttpDataSource().execute({'url': 'https://api.x.com/health'})
+
+
+def test_the_columns_are_the_fields_of_every_row(app):
+    from data_sources import HttpDataSource
+    body = [{'ID': 1, 'STATE': 'late'}, {'ID': 2, 'STATE': 'late', 'NOTE': 'only here'}]
+    with patch('data_sources.requests.request', return_value=http_response(body)):
+        columns, rows = HttpDataSource().execute({'url': 'https://api.x.com/items'})
+    assert columns == ['ID', 'STATE', 'NOTE'] and rows == body
+
+
 class TestJsonPath:
 
     def test_missing_step_is_a_source_failure(self, app):

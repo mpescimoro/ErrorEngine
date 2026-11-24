@@ -107,18 +107,18 @@ class HttpDataSource(DataSource):
                     raise ValueError(f"JSON response path '{response_path}' does not lead to a list "
                                      f"(found {type(data).__name__})")
 
-            # Normalize to a list of dicts
+            # A single object would be one error that never resolves, whatever it says ({"status": "ok"})
             if isinstance(data, dict):
-                data = [data]
-            elif not isinstance(data, list):
+                raise ValueError("Invalid response: an object, not a list of rows: set the JSON path to the list "
+                                 "(e.g. data.items)")
+            if not isinstance(data, list):
                 raise ValueError(f"Invalid response: expected a list, got {type(data).__name__}")
             if not all(isinstance(item, dict) for item in data):
                 kind = next(type(item).__name__ for item in data if not isinstance(item, dict))
                 raise ValueError(f"Invalid response: the list holds {kind} values, not objects with fields")
             
-            if not data:
-                return [], []
-            return list(data[0].keys()), data
+            # The fields of every row: one that only later rows have is a column too
+            return list(dict.fromkeys(field for row in data for field in row)), data
             
         except requests.RequestException as e:
             raise RuntimeError(f"HTTP error: {redact_secrets(str(e))}")

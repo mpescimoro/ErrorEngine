@@ -24,7 +24,9 @@ class OracleDriver(DatabaseDriver):
         cursor = connection.cursor()
         try:
             cursor.execute(sql)
-            columns = [desc[0] for desc in cursor.description] if cursor.description else []
+            if not cursor.description:
+                return [], []   # nothing to read, as after an INSERT where writes are allowed: some drivers fail on fetch
+            columns = [desc[0] for desc in cursor.description]
             rows = []
             for row in cursor:
                 row_dict = {}

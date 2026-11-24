@@ -73,7 +73,7 @@
                                        placeholder="192.168.1.100 or hostname">
                             </div>
                             
-                            <div class="form-group">
+                            <div class="form-group" id="portField">
                                 <label for="port" class="form-label">Port</label>
                                 <input type="number" 
                                        class="form-control" 
@@ -170,9 +170,9 @@
                         <span class="form-check-label">Allow statements that change data</span>
                     </label>
                     <div class="form-text">
-                        INSERT, UPDATE, DELETE, procedures (EXEC, CALL) and the like: off, the queries that contain
-                        them are refused. The check reads the text of the query: the real guarantee is a database user
-                        that can only read.
+                        INSERT, UPDATE, DELETE, procedures (EXEC, CALL) and the like: on, what they change is saved;
+                        off, the queries that contain them are refused. The check reads the text of the query: the real
+                        guarantee is a database user that can only read.
                     </div>
                 </div>
             </div>
@@ -208,6 +208,8 @@ function updateDefaultPort() {
     // Show/hide the fields not used by SQLite
     const isSqlite = select.value === 'sqlite';
     document.getElementById('networkFields').style.display = isSqlite ? 'none' : 'block';
+    // JT400 connects to the host servers of IBM i on their own ports: a port typed here would not be used
+    document.getElementById('portField').style.display = select.value === 'ibmi' ? 'none' : '';
     document.getElementById('credentialFields').style.display = isSqlite ? 'none' : 'grid';
     
     const dbLabel = document.getElementById('databaseLabel');
@@ -238,22 +240,10 @@ async function testConnection() {
         password: document.getElementById('password').value
     };
     
-    {% if editing %}
-    // When editing with an empty password, test with the saved one (by ID)
-    if (!data.password) {
-        try {
-            const result = await api.post('/api/connections/{{ connection.id }}/test');
-            showTestResult(container, result);
-            return;
-        } catch (error) {
-            container.innerHTML = `<div class="alert alert-danger"><i class="alert-icon bi bi-x-circle-fill"></i><div class="alert-content">${escapeHtml(error.message)}</div></div>`;
-            return;
-        }
-    }
-    {% endif %}
-    
+    // Editing with the password left empty: the fields as typed, with the saved password
+    const url = {% if editing %}!data.password ? '/api/connections/{{ connection.id }}/test' : {% endif %}'/api/connections/test';
     try {
-        const result = await api.post('/api/connections/test', data);
+        const result = await api.post(url, data);
         showTestResult(container, result);
     } catch (error) {
         container.innerHTML = `<div class="alert alert-danger"><i class="alert-icon bi bi-x-circle-fill"></i><div class="alert-content">${escapeHtml(error.message)}</div></div>`;

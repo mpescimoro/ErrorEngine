@@ -124,6 +124,12 @@ def _valid_api_token() -> bool:
     return scheme.lower() == 'bearer' and hmac.compare_digest(value.strip().encode(), token.encode())
 
 
+def signed_in_page() -> bool:
+    """A request of the pages, from a signed-in user (or with login turned off): not a script with the API token."""
+    return bool(current_app.config.get('LOGIN_DISABLED')) or (not _configuration_problem(current_app.config)
+                                                                and _is_logged_in())
+
+
 def is_authenticated() -> bool:
     """Signed-in user, valid API token, or login turned off (tests)."""
     cfg = current_app.config

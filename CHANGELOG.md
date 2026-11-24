@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.5.1
+
+**Added**
+- `/api/health` says `busy` when a query has waited more than a minute for a free thread: still 200, as ErrorEngine works, late. With login or token it also gives the queries running and waiting, and the log says once which queries hold the threads
+- A warning at startup when ErrorEngine listens beyond this computer without `ERRORENGINE_HTTPS`: the password would cross the network in clear
+
+**Changed**
+- A number in `.env` out of its range stops ErrorEngine at startup, and the log gives the range: a wait of `0` seconds made every call fail, a session of `0` hours ended at once
+- `/api/stats/...?days=` goes from 1 to 365: 700,000 days held the server 4.8 s and 650 MB of memory
+- The connection form does not show the port for IBM i (AS/400), which does not use it
+
+**Fixed**
+- Connections that allow statements that change data: what the query changes is saved, at every check and when it is tested, and the confirmation before the test says so. Until now the statement ran and what it changed was undone when the connection closed, except on IBM i, which saved it, and for a table created or dropped on SQLite, MySQL and Oracle, which stayed; on PostgreSQL, SQL Server and Oracle a statement without rows, such as an INSERT, ended with an error
+- The query form checks on the server too what the page checks: the times (`8.30` dropped the start of the window without a word) and the choices of its lists. The addresses of the recipients are checked on the server, and on the page, where the check never ran: `a@b.it; c@d,it` was saved as two wrong addresses. The server takes the addresses the page takes: one with an apostrophe is no longer refused by the routing rules
+- The routing rules API refuses `"false"` as text for `stop_on_match`, `is_active` and `case_sensitive`, which was read as true; the test email refuses an address that is not one
+- Test connection in the edit form, with the password left empty: it tests the fields as typed, with the saved password if the server is the same. Until now it tested the saved connection, and could say the connection worked for a host just changed
+- API: a failure is JSON too, a 404 was an HTML page
+- HTTP sources: the columns are the fields of every row, not only of the first. An answer that is a single object is a failure of the source, not an error that never resolves
+- A check whose lock cannot be taken, with ErrorEngine's database busy, is skipped: it no longer counts as a failure of the source, nor frees a lock that may be another's
+- Teams cards show the values of the source as text: `[text](address)` in a row is no longer a link
+- The check of statements that change data also reads a statement that starts with a sign: `{CALL LIB.PROC()}`, and a `DROP` after a MySQL comment line starting with `#`, passed as reads
+- The check of statements that change data reads as code what MySQL runs inside comments such as `/*!50000 DROP TABLE orders */` (MariaDB `/*M! */` too), which passed as a read. `DECLARE` and `SET DATEFORMAT`, which SQL Server queries often start with, no longer count as statements that change data
+- An email address with letters outside ASCII (`andrea.bianchì@...`) is refused, by the page too: smtplib could not send that email, to any of its recipients
+
 ## 2.5.0
 
 **Added**

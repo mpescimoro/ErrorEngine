@@ -1,6 +1,6 @@
 # API Reference
 
-All endpoints return JSON and need a login: the browser session, or for scripts the token set in `ERRORENGINE_API_TOKEN` (see [Configuration](configuration.md#sign-in)). Only `/api/health` is open, for external monitors.
+All endpoints return JSON and need a login: the browser session, or for scripts the token set in `ERRORENGINE_API_TOKEN` (see [Configuration](configuration.md#sign-in)). Only `/api/health` is open, for external monitors. A failure is JSON too, with its HTTP status: `{"error": "not_found", "message": "..."}`.
 
 With the token, scripts can read and send the POST requests in the table below, which run and test what is saved and resolve errors. The other requests that change something are made by the pages, to change the configuration, try SQL or a server typed in a form, send test emails or clean up: they need the browser session, and the token gets 403.
 
@@ -10,7 +10,7 @@ With the browser session, the requests that change something also need the CSRF 
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/health` | Server status: 200 when working, 503 when the internal database or the scheduler is down. Without login only the status; with login or token also version and counts |
+| GET | `/api/health` | Server status: 200 when working (`busy` when a query has waited more than a minute for a free thread), 503 when the internal database or the scheduler is down. Without login only the status; with login or token also version and counts |
 | GET | `/api/queries` | List queries |
 | GET | `/api/queries/{id}/status` | Status of a query |
 | POST | `/api/queries/{id}/run` | Run a query now |
@@ -18,11 +18,11 @@ With the browser session, the requests that change something also need the CSRF 
 | POST | `/api/queries/{id}/routing/test` | Recipients the routing rules choose for the active errors of the query (up to 10), or for the ones in the body: `{"errors": [{"FIELD": "value"}]}` |
 | GET | `/api/errors` | Active errors (`?query_id=` for one query) |
 | POST | `/api/errors/{id}/resolve` | Mark an error as resolved; one already resolved keeps its time |
-| GET | `/api/stats/overview?days=7` | Error statistics (`&query_id=` for one query) |
-| GET | `/api/stats/timeline?days=14` | Errors per day, today included (`&query_id=` for one query) |
+| GET | `/api/stats/overview?days=7` | Error statistics (`&query_id=` for one query); `days` from 1 to 365 |
+| GET | `/api/stats/timeline?days=14` | Errors per day, today included (`&query_id=` for one query); `days` from 1 to 365 |
 | GET | `/api/scheduler/next` | Next scheduled check |
 | GET | `/api/connections` | Active database connections |
-| POST | `/api/connections/{id}/test` | Test a connection |
+| POST | `/api/connections/{id}/test` | Test a connection, as saved |
 | GET | `/api/channels` | Active notification channels |
 | POST | `/api/channels/{id}/test` | Send a test message |
 

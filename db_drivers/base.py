@@ -77,6 +77,18 @@ class DatabaseDriver(ABC):
         """
         pass
 
+    def run(self, connection, sql: str, writes: bool) -> tuple:
+        """
+        execute_query, then commit where the connection allows writes; elsewhere roll back, for what gets
+        past the check of the text (a function that writes, called from a SELECT).
+        """
+        columns, rows = self.execute_query(connection, sql)
+        if writes:
+            connection.commit()
+        else:
+            connection.rollback()
+        return columns, rows
+
     def open(self, host: str, port: int, database: str, username: str, password: str):
         """connect() with a guaranteed time limit for the whole connection phase."""
         # A connection saved without a port uses the driver's, as the test in the form does
@@ -106,26 +118,6 @@ class DatabaseDriver(ABC):
             return {'status': 'ok', 'message': 'Connection successful'}
         except Exception as e:
             return {'status': 'error', 'message': redact_secrets(str(e))}
-
-    def test_query(self, connection, sql: str, limit: int = 5) -> dict:
-        """Tests a query and returns a sample."""
-        try:
-            columns, rows = self.execute_query(connection, sql)
-            return {
-                'valid': True,
-                'columns': columns,
-                'row_count': len(rows),
-                'sample_rows': rows[:limit],
-                'error': None
-            }
-        except Exception as e:
-            return {
-                'valid': False,
-                'columns': [],
-                'row_count': 0,
-                'sample_rows': [],
-                'error': redact_secrets(str(e))
-            }
 
     def _safe_value(self, value):
         """Converts a value to a JSON-safe type."""

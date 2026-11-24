@@ -62,6 +62,9 @@ class AS400Driver(DatabaseDriver):
 
         # Column names
         num_fields = ibm_db.num_fields(stmt)
+        if not num_fields:
+            ibm_db.free_stmt(stmt)
+            return [], []   # nothing to read, as after an INSERT where writes are allowed: fetching would fail
         columns = [ibm_db.field_name(stmt, i) for i in range(num_fields)]
 
         rows = []
@@ -75,6 +78,10 @@ class AS400Driver(DatabaseDriver):
             ibm_db.free_stmt(stmt)
 
         return columns, rows
+
+    def run(self, connection, sql: str, writes: bool) -> tuple:
+        # Autocommit, as ibm_db opens the connection: each statement is saved as it runs, nothing to commit
+        return self.execute_query(connection, sql)
 
     def close(self, connection):
         """Closes the ibm_db connection."""

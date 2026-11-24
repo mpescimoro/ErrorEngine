@@ -75,6 +75,7 @@ logging.getLogger().setLevel(_level if _level in ('DEBUG', 'INFO', 'WARNING', 'E
 from waitress import create_server
 from app import create_app
 from config import whole_number
+from utils import reached_from_other_computers
 
 
 def readable_by_others(paths) -> list:
@@ -127,6 +128,10 @@ def main():
 
     app = create_app('production')
     warn_about_permissions(app)
+    if reached_from_other_computers(host) and not app.config.get('HTTPS'):
+        logger.warning(f"Listening on {host} without HTTPS: from other computers the password and the session "
+                       "cross the network in clear. Put a reverse proxy with HTTPS in front and set "
+                       "ERRORENGINE_HTTPS=true, or set ERRORENGINE_HOST=127.0.0.1")
     # From the reverse proxy alone, the client address, host and https of the requests it forwards;
     # the same headers from anyone else are dropped
     from_proxy = {'trusted_proxy': proxy,

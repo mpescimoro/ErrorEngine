@@ -364,7 +364,7 @@ class DatabaseConnection(db.Model):
             self.host, self.port, self.database, self.username, self.password
         )
         try:
-            return driver.execute_query(conn, sql)
+            return driver.run(conn, sql, bool(self.allow_writes))
         finally:
             # driver.close: not every connection has close() (e.g. ibm_db)
             driver.close(conn)

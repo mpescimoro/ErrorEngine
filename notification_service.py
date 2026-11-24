@@ -221,7 +221,8 @@ class NotificationService:
                 "activityTitle": f"{query.name}",
                 "activitySubtitle": "Reminder: errors not resolved yet" if reminder else "New errors detected",
                 "facts": facts,
-                "markdown": True
+                # The values come from the source: as text, so that [text](address) is not a link in the card
+                "markdown": False
             }]
         }
         return self._post_teams(webhook_url, card)
@@ -281,7 +282,7 @@ class NotificationService:
                             "@context": "http://schema.org/extensions",
                             "themeColor": "d63384",
                             "summary": title,
-                            "sections": [{"activityTitle": title, "text": "\n\n".join(lines)}]
+                            "sections": [{"activityTitle": title, "text": "\n\n".join(lines), "markdown": False}]
                         }
                         result = self._post_teams(config['webhook_url'], card)
                 else:

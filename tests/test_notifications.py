@@ -335,6 +335,19 @@ class TestChannelMessages:
         assert new['activitySubtitle'] != reminder['activitySubtitle']
         assert 'reminder' in reminder['activitySubtitle'].lower()
         assert [f['name'] for f in new['facts']][:2] == ['New errors', 'Time']
+        # Values of the source as text: [text](address) is not a link
+        assert new['markdown'] is False and reminder['markdown'] is False
+
+    def test_teams_failing_query_alert_is_text(self, app):
+        from notification_service import notification_service
+        query = make_query()
+        query.notification_channels.append(NotificationChannel(
+            name='Teams', channel_type='teams', config=json.dumps(CHANNEL_CONFIGS['teams'])))
+        db.session.commit()
+        with patch('notification_service.requests.post') as post:
+            post.return_value.status_code = 200
+            notification_service.send_system_message(query, 'monitor_failed', 'Failing', ['Last error: [x](y)'])
+        assert json.loads(post.call_args.kwargs['data'])['sections'][0]['markdown'] is False
 
     def test_webhook_failing_query_alert_in_utc(self, app):
         from notification_service import notification_service

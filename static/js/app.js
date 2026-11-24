@@ -149,7 +149,8 @@ const toast = {
 
 const validator = {
     patterns: {
-        email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
+        // ASCII without spaces, as on the server (validators.py): smtplib cannot send to other letters
+        email: /^[\x21-\x3f\x41-\x7e]+@[\x21-\x3f\x41-\x7e]+\.[\x21-\x3f\x41-\x7e]+$/,
         name: /^[\w\s\-àèéìòù]+$/i,
         fieldName: /^[a-zA-Z_][a-zA-Z0-9_]*$/
     },
@@ -193,7 +194,8 @@ const validator = {
             }
         }
         
-        if (isValid && rules.emailList && value) {
+        // data-email-list has no value: its dataset entry is '', so present, not true
+        if (isValid && rules.emailList !== undefined && value) {
             const emails = value.split(',').map(e => e.trim()).filter(e => e);
             for (const email of emails) {
                 if (!this.patterns.email.test(email)) {

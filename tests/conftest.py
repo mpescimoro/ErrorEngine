@@ -51,6 +51,8 @@ def scheduler_pool():
     import scheduler
     scheduler._executor = None
     scheduler._in_flight.clear()
+    scheduler._waiting.clear()
+    scheduler._state['busy'] = False
     yield scheduler
     scheduler.shutdown(wait=True)
 

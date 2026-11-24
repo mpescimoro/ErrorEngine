@@ -5,7 +5,8 @@ import os
 import logging
 import mimetypes
 from zoneinfo import ZoneInfo
-from flask import Flask
+from flask import Flask, request, jsonify
+from werkzeug.exceptions import HTTPException
 from config import config, retired_settings_warnings
 
 logging.basicConfig(
@@ -77,6 +78,19 @@ def create_app(config_name=None):
     
     from auth import init_auth
     init_auth(app)
+
+    @app.errorhandler(HTTPException)
+    def api_errors_in_json(error):
+        """Under /api/ a failure is JSON too, as the rest of the API; the pages keep Flask's."""
+        if not request.path.startswith('/api/'):
+            return error
+        response = jsonify({'error': error.name.lower().replace(' ', '_'), 'message': error.description})
+        response.status_code = error.code
+        # The headers of the error, as Allow of a 405
+        for name, value in error.get_headers():
+            if name.lower() != 'content-type':
+                response.headers[name] = value
+        return response
 
     # Python takes file types from the Windows registry, which can say text/plain for .js and .css:
     # with nosniff the browser would then refuse the scripts and the styles

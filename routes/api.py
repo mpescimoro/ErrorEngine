@@ -2,19 +2,21 @@
 REST API routes — JSON endpoints.
 """
 import logging
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, abort
 from datetime import timedelta
 from types import SimpleNamespace
 from db_drivers import get_driver, driver_timeouts, DRIVER_LABELS
 from models import (db, MonitoredQuery, ErrorRecord, EmailLog, RoutingRule,
                     RoutingCondition, DatabaseConnection, NotificationChannel)
 from email_service import email_service
+from encryption import UnreadableSecret
 from monitor_service import monitor_service
 from notification_service import notification_service
 from cleanup_service import cleanup_service
 from routing_service import apply_routing_rules, get_routing_summary
 from data_sources import test_query_source
-from validators import validate_email_list, validate_routing_rule, sanitize_string, write_statement_keyword
+from validators import (validate_email, validate_email_list, validate_routing_rule, sanitize_string,
+                        write_statement_keyword)
 from utils import (get_utc_now, get_local_now, format_local, local_day_start_utc, utc_to_local,
                    redact_secrets)
 from version import __version__
@@ -303,22 +305,12 @@ def api_connections_list():
     } for c in connections])
 
 
-@api_bp.route('/connections/<int:conn_id>/test', methods=['POST'])
-def api_connection_test(conn_id):
-    conn = db.get_or_404(DatabaseConnection, conn_id)
-    result = conn.test_connection()
-    return jsonify(result)
-
-
-@api_bp.route('/connections/test', methods=['POST'])
-def api_connection_test_new():
-    """Tests a connection not saved yet."""
-    data = request.get_json()
-    
+def test_typed_connection(data: dict, password):
+    """A connection as typed in the form, with this password."""
     db_type = data.get('db_type')
     if not db_type:
         return jsonify({'status': 'error', 'message': 'Database type required'}), 400
-    
+
     try:
         driver = get_driver(db_type, **driver_timeouts())
         result = driver.test_connection(
@@ -326,11 +318,41 @@ def api_connection_test_new():
             port=int(data.get('port') or driver.default_port or 0),
             database=data.get('database'),
             username=data.get('username'),
-            password=data.get('password')
+            password=password
         )
         return jsonify(result)
     except Exception as e:
         return jsonify({'status': 'error', 'message': redact_secrets(str(e))})
+
+
+@api_bp.route('/connections/<int:conn_id>/test', methods=['POST'])
+def api_connection_test(conn_id):
+    """
+    The saved connection. With the fields of the edit form, where the password was left empty: those fields
+    with the saved password, which goes only to the server it was saved for, as when the form is saved.
+    """
+    from auth import signed_in_page
+    conn = db.get_or_404(DatabaseConnection, conn_id)
+    # The API token tests what is saved: typed servers, users and files need the session (docs/api-reference.md)
+    typed = request.get_json(silent=True) if signed_in_page() else None
+    if not isinstance(typed, dict) or not typed:
+        return jsonify(conn.test_connection())
+    port = str(typed.get('port') or '').strip()
+    if (str(typed.get('host') or '').strip().lower(), int(port) if port.isdigit() else None) != \
+            ((conn.host or '').strip().lower(), conn.port):
+        return jsonify({'status': 'error', 'message': 'Password: the server changed, type it again'})
+    try:
+        password = conn.password
+    except UnreadableSecret as e:
+        return jsonify({'status': 'error', 'message': str(e)})
+    return test_typed_connection(typed, password)
+
+
+@api_bp.route('/connections/test', methods=['POST'])
+def api_connection_test_new():
+    """Tests a connection not saved yet."""
+    data = request.get_json(silent=True) or {}
+    return test_typed_connection(data, data.get('password'))
 
 
 @api_bp.route('/connections/<int:conn_id>/test-query', methods=['POST'])
@@ -354,17 +376,10 @@ def api_connection_test_query(conn_id):
                         'error': f'The query contains {keyword}, which can change data: confirm it to test it'})
 
     try:
-        driver = conn.get_driver()
-        connection = driver.open(
-            conn.host, conn.port, conn.database, conn.username, conn.password
-        )
-        try:
-            result = driver.test_query(connection, sql)
-            return jsonify(result)
-        finally:
-            driver.close(connection)
+        columns, rows = conn.execute_query(sql)
     except Exception as e:
         return jsonify({'valid': False, 'error': redact_secrets(str(e))})
+    return jsonify({'valid': True, 'columns': columns, 'row_count': len(rows), 'sample_rows': rows[:5], 'error': None})
 
 
 # --- Notification channels ---
@@ -388,12 +403,20 @@ def api_channel_test(channel_id):
 
 # --- Statistics ---
 
+def days_asked(default: int) -> int:
+    """?days=, from 1 to 365: more only makes the server work (700,000 days took 4.8 s and 650 MB)."""
+    days = request.args.get('days', default, type=int)
+    if not 1 <= days <= 365:
+        abort(400, 'days: from 1 to 365')
+    return days
+
+
 @api_bp.route('/stats/overview', methods=['GET'])
 def api_stats_overview():
     """General statistics; ?query_id= for one query."""
     from sqlalchemy import func
     
-    days = request.args.get('days', 7, type=int)
+    days = days_asked(7)
     query_id = request.args.get('query_id', type=int)
 
     def errors(*conditions):
@@ -458,7 +481,7 @@ def api_stats_overview():
 @api_bp.route('/stats/timeline', methods=['GET'])
 def api_stats_timeline():
     """Errors per day, for the chart: the last N local days, today included; ?query_id= for one query."""
-    days = max(1, request.args.get('days', 14, type=int))
+    days = days_asked(14)
     stats_dict = errors_per_local_day(days, request.args.get('query_id', type=int))
     first_day = get_local_now().date() - timedelta(days=days - 1)
 
@@ -493,7 +516,7 @@ def errors_per_local_day(days: int, query_id: int = None) -> dict:
 @api_bp.route('/stats/by-query', methods=['GET'])
 def api_stats_by_query():
     query_id = request.args.get('query_id', type=int)
-    days = request.args.get('days', 30, type=int)
+    days = days_asked(30)
     
     if not query_id:
         return jsonify({'error': 'query_id required'}), 400
@@ -527,7 +550,7 @@ def api_stats_by_query():
 def api_stats_all_queries():
     from sqlalchemy import func
     
-    days = request.args.get('days', 30, type=int)
+    days = days_asked(30)
     start_date = get_utc_now() - timedelta(days=days)
     
     results = db.session.query(
@@ -568,12 +591,15 @@ def api_stats_all_queries():
 
 @api_bp.route('/test/email', methods=['POST'])
 def api_test_email():
-    data = request.get_json()
-    recipient = data.get('recipient')
-    
+    data = request.get_json(silent=True) or {}
+    recipient = str(data.get('recipient') or '').strip()
+
     if not recipient:
         return jsonify({'success': False, 'message': 'Recipient required'}), 400
-    
+    valid, error = validate_email(recipient)
+    if not valid:
+        return jsonify({'success': False, 'message': error}), 400
+
     result = email_service.test_email(recipient)
     return jsonify(result)
 
@@ -665,7 +691,7 @@ def api_health():
     """
     Health check for external monitoring: 503 if the internal database does not answer or the scheduler is
     stopped (no round for more than 3 minutes); 200 with status 'degraded' when some queries cannot read their
-    source.
+    source, 'busy' when a query has waited more than a minute for a free thread (ErrorEngine works, late).
     """
     try:
         db_ok = True
@@ -685,9 +711,11 @@ def api_health():
             scheduler_check = 'stopped'
         elif sched['last_tick_at'] and get_utc_now() - sched['last_tick_at'] > timedelta(minutes=3):
             scheduler_check = 'stalled'
+        elif sched['busy']:
+            scheduler_check = 'busy'
         else:
             scheduler_check = 'ok'
-        scheduler_ok = scheduler_check in ('ok', 'disabled')
+        scheduler_ok = scheduler_check in ('ok', 'busy', 'disabled')
 
         # Active queries that cannot read their source
         failing = sum(1 for q in MonitoredQuery.query.filter(MonitoredQuery.consecutive_failures > 0)
@@ -697,6 +725,8 @@ def api_health():
             status = 'unhealthy'
         elif failing:
             status = 'degraded'
+        elif scheduler_check == 'busy':
+            status = 'busy'
         else:
             status = 'healthy'
 
@@ -716,6 +746,8 @@ def api_health():
             body['checks'].update({
                 'last_scheduler_run': sched['last_tick_at'].isoformat() if sched['last_tick_at'] else None,
                 'queries_failing': failing,
+                'queries_running': sched['in_flight'] - sched['waiting'],
+                'queries_waiting': sched['waiting'],
                 'connections_configured': connections_count
             })
         return jsonify(body), 200 if (db_ok and scheduler_ok) else 503
