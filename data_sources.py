@@ -7,7 +7,8 @@ import requests
 from abc import ABC, abstractmethod
 from urllib.parse import urljoin
 from flask import current_app
-from utils import redact_secrets
+from db_drivers import TooManyRows, row_limit
+from utils import forbidden_destination, redact_secrets
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,9 @@ class HttpDataSource(DataSource):
         url = config.get('url')
         if not url:
             raise ValueError("URL not specified")
+        refusal = forbidden_destination(url)
+        if refusal:
+            raise ValueError(refusal)
         
         method = config.get('method', 'GET').upper()
         headers = config.get('headers', {})
@@ -116,6 +120,10 @@ class HttpDataSource(DataSource):
             if not all(isinstance(item, dict) for item in data):
                 kind = next(type(item).__name__ for item in data if not isinstance(item, dict))
                 raise ValueError(f"Invalid response: the list holds {kind} values, not objects with fields")
+            # Past MAX_ROWS the check stops, as for a database
+            limit = row_limit()
+            if limit and len(data) > limit:
+                raise TooManyRows(limit)
             
             # The fields of every row: one that only later rows have is a column too
             return list(dict.fromkeys(field for row in data for field in row)), data

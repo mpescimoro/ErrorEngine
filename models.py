@@ -43,6 +43,9 @@ class MonitoredQuery(db.Model):
     
     # Fields that uniquely identify an error (comma-separated)
     key_fields = db.Column(db.String(500), nullable=False)
+    # Checks in a row without an error before it is resolved: more than 1 for data that comes and goes
+    # (0, as an upgraded database gets it, is the same as 1)
+    resolve_after_checks = db.Column(db.Integer, default=1)
     
     # === EMAIL ===
     email_subject = db.Column(db.String(200), default='[ErrorEngine] New errors: {query_name}')
@@ -91,6 +94,8 @@ class MonitoredQuery(db.Model):
     failing_since = db.Column(db.DateTime)        # first failure of the streak
     failure_alerted_at = db.Column(db.DateTime)   # "query failing" alert sent
     last_failure_message = db.Column(db.Text)
+    # After failed runs, the next one not before this time: the waits grow while the source keeps failing
+    failure_retry_at = db.Column(db.DateTime)
 
     # === RELATIONSHIPS ===
     errors = db.relationship('ErrorRecord', backref='monitored_query', lazy='dynamic', 
@@ -198,31 +203,49 @@ class MonitoredQuery(db.Model):
         return window_day.isoweekday() in self.get_schedule_days_list()
 
     def get_next_scheduled_time(self, now=None):
-        """Computes the next run from reference_time + interval (local time)."""
+        """
+        The current slot and the next one, from reference_time + interval, as local times.
+
+        - Up to an hour the slots are counted in real time from the reference time of the day: the night the
+          clock goes back keeps the rhythm through the hour that comes twice, instead of stopping for an hour,
+          and the night it goes forward has no slot in the hour that does not exist.
+        - Longer intervals keep the local times of the day (a daily query at 08:00 stays at 08:00): in the hour
+          that comes twice they run the first time round, and a time the clock skips (02:30, when it jumps from
+          02:00 to 03:00) comes an hour later.
+        - The next slot is the first one after now, also when the next day begins before the last slot plus the
+          interval (every 7 hours, or a day of 23 or 25 hours).
+
+        In the hour that comes twice the local times carry fold, Python's mark for the second time round, which
+        local_to_utc reads: compare them in UTC.
+        """
+        from utils import local_to_utc, utc_to_local
         if now is None:
             now = self._get_local_now()
         
         # Without a reference_time, use midnight
         ref_time = self.schedule_reference_time or time(0, 0)
         interval = timedelta(minutes=self.check_interval_minutes)
-        
-        # First slot of today
-        today_ref = datetime.combine(now.date(), ref_time)
-        
-        # Current or previous slot
-        if now >= today_ref:
-            elapsed = now - today_ref
-            intervals_passed = int(elapsed.total_seconds() // interval.total_seconds())
-            current_slot = today_ref + (interval * intervals_passed)
-            next_slot = current_slot + interval
+        now_utc = local_to_utc(now)
+
+        def first_slot(day):
+            """The reference time of a day, in UTC."""
+            return local_to_utc(datetime.combine(day, ref_time))
+
+        if interval <= timedelta(hours=1):
+            # From the reference time of today, or of yesterday before it
+            day = now.date() if now_utc >= first_slot(now.date()) else now.date() - timedelta(days=1)
+            start = first_slot(day)
+            current_slot = start + (now_utc - start) // interval * interval
+            next_slot = min(current_slot + interval, first_slot(day + timedelta(days=1)))
         else:
-            yesterday_ref = today_ref - timedelta(days=1)
-            elapsed = now - yesterday_ref
-            intervals_passed = int(elapsed.total_seconds() // interval.total_seconds())
-            current_slot = yesterday_ref + (interval * intervals_passed)
-            next_slot = current_slot + interval
+            # The local times of yesterday, today and tomorrow (at most 24 a day), in UTC
+            slots = sorted({local_to_utc(datetime.combine(day, ref_time) + timedelta(minutes=minutes))
+                            for day in (now.date() + timedelta(days=offset) for offset in (-1, 0, 1))
+                            for minutes in range(0, 24 * 60, self.check_interval_minutes)})
+            current_slot = max(slot for slot in slots if slot <= now_utc)
+            next_slot = min(slot for slot in slots if slot > now_utc)
         
-        return current_slot, next_slot
+        return utc_to_local(current_slot), utc_to_local(next_slot)
 
     def get_next_run_time(self, now=None):
         """Computes when the query will run next (taking the time window into account)."""
@@ -231,17 +254,21 @@ class MonitoredQuery(db.Model):
         
         current_slot, next_slot = self.get_next_scheduled_time(now)
         
-        # Which slot is the next one to run
+        # Which slot is the next one to run: compared in UTC, as in the hour that comes twice the local times
+        # do not tell which came first
+        from utils import local_to_utc
         if self.last_check_at is not None:
-            # last_check_at in local time, for the comparison
-            last_check_local = self._utc_to_local(self.last_check_at)
-            if last_check_local >= current_slot:
+            if self.last_check_at >= local_to_utc(current_slot):
                 target_slot = next_slot
             else:
                 target_slot = current_slot
         else:
-            target_slot = current_slot if current_slot >= now else next_slot
+            target_slot = current_slot if local_to_utc(current_slot) >= local_to_utc(now) else next_slot
         
+        # A source that keeps failing is tried again when its wait is over (should_run_now)
+        if self.failure_retry_at is not None and self.failure_retry_at > local_to_utc(target_slot):
+            target_slot = self._utc_to_local(self.failure_retry_at)
+
         # Move forward until the slot falls inside the active days and the time window
         for _ in range(1000):  # at most 1000 iterations, for safety
             if self._window_contains(target_slot):
@@ -283,16 +310,21 @@ class MonitoredQuery(db.Model):
         if prev_day_inactive and now.time() < ref_time:
             return False, f"Waiting for first run at {ref_time.strftime('%H:%M')}"
         
+        # After failed runs the next one waits (MonitorService._mark_failure): no thread for a failing source
+        # at every round. Compared in UTC, as in the hour that comes twice local times do not tell which came first
+        from utils import local_to_utc
+        if self.failure_retry_at is not None and local_to_utc(now) < self.failure_retry_at:
+            retry_at = self._utc_to_local(self.failure_retry_at)
+            return False, f"Source failing: next attempt at {retry_at.strftime('%H:%M')}"
+
         current_slot, next_slot = self.get_next_scheduled_time(now)
         
         # Never run yet: run if we are in the current slot
         if self.last_check_at is None:
             return True, "First run"
         
-        last_check_local = self._utc_to_local(self.last_check_at)
-        
         # If the last run is before the current slot, run now
-        if last_check_local < current_slot:
+        if self.last_check_at < local_to_utc(current_slot):
             return True, "Current slot not run yet"
         
         return False, f"Next run: {next_slot.strftime('%H:%M')}"
@@ -334,9 +366,9 @@ class DatabaseConnection(db.Model):
         self._password = encrypt(value)
 
     def get_driver(self):
-        """Returns the driver for this DB type, with the configured timeouts."""
-        from db_drivers import get_driver, driver_timeouts
-        return get_driver(self.db_type, **driver_timeouts())
+        """Returns the driver for this DB type, with the configured timeouts and row limit."""
+        from db_drivers import get_driver, driver_timeouts, row_limit
+        return get_driver(self.db_type, max_rows=row_limit(), **driver_timeouts())
 
     def test_connection(self) -> dict:
         try:
@@ -349,7 +381,7 @@ class DatabaseConnection(db.Model):
         """Why this connection does not run the statement, one that can change data; empty when it does."""
         # Here and not at the top: validators imports routing_service, which imports this module
         from validators import write_statement_keyword
-        keyword = write_statement_keyword(sql)
+        keyword = write_statement_keyword(sql, self.db_type)
         if keyword and not self.allow_writes:
             return (f"The query contains {keyword}, which can change data, and the connection {self.name} does not "
                     "allow it: change the query, or allow statements that change data in the connection")
@@ -524,10 +556,21 @@ class ErrorRecord(db.Model):
     
     # Counter: how many times it has been seen
     occurrence_count = db.Column(db.Integer, default=1)
+    # Checks in a row that did not return it, while it waits to be resolved (see resolve_after_checks)
+    missing_checks = db.Column(db.Integer, default=0)
     
     # Composite index for efficient lookups
     __table_args__ = (
         db.Index('ix_error_query_hash', 'query_id', 'error_hash'),
+        # The active errors of a query, at every check
+        db.Index('ix_error_records_query_active', 'query_id', 'resolved_at'),
+        # The active errors of every query (scheduler, dashboard) and the resolved ones to delete
+        db.Index('ix_error_records_resolved_at', 'resolved_at'),
+        # The statistics and the errors page, by time of detection
+        db.Index('ix_error_records_first_seen_at', 'first_seen_at'),
+        # One active error per identity; on an upgraded database, migration 1 resolves the copies first
+        db.Index('ix_error_records_active_identity', 'query_id', 'error_hash', unique=True,
+                 sqlite_where=db.text('resolved_at IS NULL')),
     )
     
     def get_error_data(self):
@@ -576,6 +619,9 @@ class ErrorRecord(db.Model):
     def needs_reminder(self, query):
         if not query.reminder_enabled or not self.email_sent or self.resolved_at:
             return False
+        # Not returned by the last check: waiting to be resolved, not still active
+        if self.missing_checks:
+            return False
         if self.reminder_count >= query.reminder_max_count:
             return False
         last_notification = self.last_reminder_at or self.email_sent_at
@@ -587,7 +633,11 @@ class ErrorRecord(db.Model):
     
     @staticmethod
     def calculate_hash(data: dict, key_fields: list) -> str:
-        """Computes the unique error hash from the key fields."""
+        """
+        The identity of an error: the hash of the values of the key fields as a JSON list, so a value with |
+        in it stays apart and NULL (or a missing field) is not an empty value. It changes only together with a
+        migration of the saved hashes (migrations.py, number 2): otherwise every open error would look new.
+        """
         key_values = []
         for field in key_fields:
             # Look up the field case-insensitively
@@ -596,9 +646,9 @@ class ErrorRecord(db.Model):
                 if k.upper() == field.upper():
                     value = v
                     break
-            key_values.append(str(value) if value is not None else '')
+            key_values.append(str(value) if value is not None else None)
         
-        hash_string = '|'.join(key_values)
+        hash_string = json.dumps(key_values, ensure_ascii=False, separators=(',', ':'))
         return hashlib.sha256(hash_string.encode()).hexdigest()
     
     @classmethod
@@ -644,6 +694,13 @@ class QueryLog(db.Model):
     # Error message or notes, if any
     error_message = db.Column(db.Text)
     
+    __table_args__ = (
+        # The latest runs of a query (its page, its state)
+        db.Index('ix_query_logs_query_time', 'query_id', 'executed_at'),
+        # The log page and the cleanup
+        db.Index('ix_query_logs_executed_at', 'executed_at'),
+    )
+
     def __repr__(self):
         return f'<QueryLog {self.id} status={self.status}>'
 
@@ -667,8 +724,22 @@ class EmailLog(db.Model):
     status = db.Column(db.String(20))  # 'sent', 'failed'
     error_message = db.Column(db.Text)
     
+    __table_args__ = (
+        # The emails of today (dashboard) and the cleanup
+        db.Index('ix_email_logs_sent_at', 'sent_at'),
+    )
+
     def __repr__(self):
         return f'<EmailLog {self.id} status={self.status}>'
+
+
+class SchemaMigration(db.Model):
+    """A numbered migration of the database that has run (migrations.py): each runs once."""
+    __tablename__ = 'schema_migrations'
+
+    number = db.Column(db.Integer, primary_key=True, autoincrement=False)
+    name = db.Column(db.String(100), nullable=False)
+    applied_at = db.Column(db.DateTime, default=get_utc_now)
 
 
 # Columns added after the tables were created, in the order to add them
@@ -685,6 +756,9 @@ NEW_COLUMNS = [
     ('error_records', 'notify_retry_at'),
     ('error_records', 'undeliverable'),
     ('database_connections', 'allow_writes'),
+    ('monitored_queries', 'failure_retry_at'),
+    ('monitored_queries', 'resolve_after_checks'),
+    ('error_records', 'missing_checks'),
 ]
 
 
@@ -715,6 +789,24 @@ def ensure_schema() -> list:
     return added
 
 
+def ensure_indexes() -> list:
+    """
+    Creates the indexes of the models that an existing database lacks (db.create_all() creates them only with
+    new tables) and returns their names. On a large database the first start after the update takes longer, once.
+    """
+    from sqlalchemy import inspect
+
+    added = []
+    inspector = inspect(db.engine)
+    for table in db.metadata.sorted_tables:
+        existing = {index['name'] for index in inspector.get_indexes(table.name)}
+        for index in sorted(table.indexes, key=lambda index: index.name):
+            if index.name not in existing:
+                index.create(bind=db.engine)
+                added.append(index.name)
+    return added
+
+
 def allow_writes_where_queries_write() -> list:
     """
     Once, when allow_writes arrives in a database of 2.4.2 or earlier, off everywhere: the connections
@@ -723,9 +815,10 @@ def allow_writes_where_queries_write() -> list:
     from validators import write_statement_keyword
     allowed = []
     for query in MonitoredQuery.query.filter(MonitoredQuery.db_connection_id.isnot(None)).order_by(MonitoredQuery.id):
-        keyword = query.source_type != 'http' and write_statement_keyword(query.sql_query)
         connection = query.db_connection
-        if keyword and connection is not None and not connection.allow_writes:
+        keyword = query.source_type != 'http' and connection is not None and write_statement_keyword(
+            query.sql_query, connection.db_type)
+        if keyword and not connection.allow_writes:
             connection.allow_writes = True
             allowed.append((connection.name, query.name, keyword))
     db.session.commit()

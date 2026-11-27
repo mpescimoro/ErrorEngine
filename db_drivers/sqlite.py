@@ -43,7 +43,7 @@ class SQLiteDriver(DatabaseDriver):
                 return [], []   # nothing to read, as after an INSERT where writes are allowed: some drivers fail on fetch
             columns = [desc[0] for desc in cursor.description]
             rows = []
-            for row in cursor.fetchall():
+            for row in self._fetch_rows(cursor):
                 row_dict = {col: self._safe_value(row[i]) for i, col in enumerate(columns)}
                 rows.append(row_dict)
             return columns, rows

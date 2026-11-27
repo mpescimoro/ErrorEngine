@@ -58,7 +58,7 @@ Pick the columns that identify each problem:
 | Log entries | `LOG_ID`, or `TIMESTAMP, MESSAGE` |
 | Stock | `WAREHOUSE, PRODUCT_CODE` |
 
-Rows with the same values in the key fields count as the same error. Choose them before the first run: changing them later closes the open errors and notifies their rows again.
+Rows with the same values in the key fields count as the same error; an empty value and NULL are different values. Choose them before the first run: changing them later closes the open errors and notifies their rows again. Two columns with the same name, as `SELECT *` over two tables can give, make the query fail: give each its own name with `AS`.
 
 ### A good monitor query
 

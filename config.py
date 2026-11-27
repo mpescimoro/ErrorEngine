@@ -138,6 +138,9 @@ class Config:
     MAIL_TIMEOUT_SECONDS = whole_number('MAIL_TIMEOUT_SECONDS', 30, between=(1, 3600))
     # CA (or certificate) of an internal SMTP server; empty: the system certificates
     MAIL_CA_FILE = os.environ.get('MAIL_CA_FILE', '')
+    # Most errors listed in a notification email: beyond, it lists the first ones and says how many
+    # more there are (thousands of rows made emails that servers refuse and mail programs cut); 0 = all
+    EMAIL_MAX_ROWS = whole_number('EMAIL_MAX_ROWS', 100, between=(0, 100000))
 
 
     # Scheduler: the Flask-APScheduler REST API stays off (it would allow registering
@@ -152,13 +155,17 @@ class Config:
     # Database source timeouts (seconds)
     DB_CONNECT_TIMEOUT_SECONDS = whole_number('DB_CONNECT_TIMEOUT_SECONDS', 15, between=(1, 3600))
     DB_QUERY_TIMEOUT_SECONDS = whole_number('DB_QUERY_TIMEOUT_SECONDS', 300, between=(1, 86400))
+    # Most rows a query or an HTTP source may return: beyond, the check fails and creates or resolves
+    # nothing, instead of filling memory, the database and the emails (a JOIN gone wrong); 0 = no limit
+    MAX_ROWS = whole_number('MAX_ROWS', 10000, between=(0, 10000000))
 
     # Attempts to deliver a notification: the first, then after 1, 5, 15 and 60 minutes, and every
-    # 60 minutes beyond the fifth. Then it is marked as not delivered; 1 = no retries
+    # 60 minutes beyond the fifth. Then it is marked as not delivered; 1 = no retries. An email service
+    # or a channel that does not answer does not use them up: the notification waits for it
     NOTIFY_ATTEMPTS = whole_number('NOTIFY_ATTEMPTS', 5)
 
-    # Alert when a query cannot read its source N times in a row
-    # (after a failure the scheduler retries every minute); 0 = no alert
+    # Alert when a query cannot read its source N times in a row (after a failure the scheduler tries
+    # again at the next round, then after 1, 2, 4... minutes, up to an hour); 0 = no alert
     MONITOR_FAILURE_THRESHOLD = whole_number('MONITOR_FAILURE_THRESHOLD', 3, between=(0, 1000))
     # Recipients of these alerts (comma-separated); if empty, the query's recipients
     ADMIN_EMAILS = os.environ.get('ERRORENGINE_ADMIN_EMAILS', '')

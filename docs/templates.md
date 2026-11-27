@@ -23,8 +23,9 @@ Templates use [Jinja](https://jinja.palletsprojects.com/templates/) and see thes
 | `query_name` | Query name |
 | `query_description` | Query description |
 | `check_time` | Time of the check (UTC) |
-| `error_count` | Number of errors |
-| `errors` | The errors: a list of rows, each a dictionary column → value |
+| `error_count` | Number of errors, also those not listed |
+| `errors` | The errors: a list of rows, each a dictionary column → value; the first `EMAIL_MAX_ROWS` |
+| `errors_not_listed` | How many errors are beyond `EMAIL_MAX_ROWS`, not in `errors` (`0` when they are all there) |
 | `columns` | Column names, in query order |
 | `email_type` | `new_errors` or `reminder` |
 
@@ -39,6 +40,7 @@ Values are escaped automatically. Templates run in a sandbox: they cannot reach 
   <tr>{% for c in columns %}<td>{{ e[c] }}</td>{% endfor %}</tr>
   {% endfor %}
 </table>
+{% if errors_not_listed %}<p>+ {{ errors_not_listed }} more</p>{% endif %}
 ```
 
 `localtime` converts a date to the time zone set in `TIMEZONE`.

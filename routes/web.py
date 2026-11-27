@@ -8,7 +8,7 @@ from sqlalchemy import inspect
 from db_drivers import get_available_drivers, DRIVER_LABELS
 from models import (db, MonitoredQuery, ErrorRecord, QueryLog, EmailLog,
                     DatabaseConnection, NotificationChannel, CHANNEL_SECRETS, SOURCE_CLEAR)
-from encryption import decrypt
+from encryption import PREFIX, decrypt
 from routing_service import get_operators_list
 from utils import local_day_start_utc, server_log_info
 from email_service import email_service, subject_warning
@@ -70,6 +70,14 @@ def json_object(text: str):
 
 # In the forms in place of a saved header value, which does not go back to the browser: sent back, it keeps it
 SAVED = '(saved)'
+# A secret typed as ErrorEngine saves it, encrypted (from a backup or the database), would be decrypted and sent
+# to the server of the form: a saved secret is kept with an empty field or (saved), never its encrypted text
+ENCRYPTED_TYPED = 'that is a secret as ErrorEngine saves it, encrypted: type the secret itself'
+
+
+def encrypted_text(value) -> bool:
+    """Whether a value typed in a form is a secret as ErrorEngine saves it (see ENCRYPTED_TYPED)."""
+    return isinstance(value, str) and value.startswith(PREFIX)
 
 
 def masked_headers(headers) -> str:
@@ -113,6 +121,8 @@ def headers_from_form(text: str, kept, problems: list, example: str, elsewhere=(
         problems.append(f'Headers must be a JSON object, e.g. {example}')
         return kept
     for name, value in headers.items():
+        if encrypted_text(value):
+            problems.append(f'Header {name}: {ENCRYPTED_TYPED}')
         if value != SAVED:
             continue
         if name in kept:
@@ -145,6 +155,8 @@ def http_source_config(form, saved: dict, problems: list) -> dict:
         config = {field: value for field, value in config.items() if field in SOURCE_CLEAR or not holds_text(value)}
     if 'source_auth_type' in form and not config['auth_type']:
         config['auth_token'] = ''
+    elif encrypted_text(form.get('source_auth_token')):
+        problems.append(f'Token/Key: {ENCRYPTED_TYPED}')
     elif form.get('source_auth_token'):
         config['auth_token'] = form['source_auth_token']
     elif moved and saved.get('auth_token'):
@@ -221,7 +233,15 @@ def query_from_form(query, form) -> list:
     query.key_fields = form.get('key_fields', '')
     if not query.get_key_fields_list():
         problems.append('Key fields: at least one column name')
+    # Not in the form (a page opened before the upgrade): the saved value stays
+    checks = form_number(form.get('resolve_after_checks', str(query.resolve_after_checks or 1)), 1, 100)
+    if checks:
+        query.resolve_after_checks = checks
+    else:
+        problems.append('Resolved after: a whole number of checks, from 1 to 100')
     query.is_active = form.get('is_active') == 'on'
+    # Changed in its form: a query whose source was failing is read again at the next round
+    query.failure_retry_at = None
     if query.source_type == 'http':
         query.set_source_config(http_source_config(form, saved_config, problems))
 
@@ -637,7 +657,9 @@ def connection_from_form(conn, form) -> list:
     conn.database = form.get('database')
     conn.username = form.get('username')
     # Editing, an empty password keeps the saved one, for the same server only
-    if form.get('password'):
+    if encrypted_text(form.get('password')):
+        problems.append(f'Password: {ENCRYPTED_TYPED}')
+    elif form.get('password'):
         conn.password = form['password']
     elif conn._password and database_server(conn) != saved_server:
         problems.append('Password: the server changed, type it again')
@@ -762,6 +784,8 @@ def channel_from_form(channel, form) -> list:
                   'chat_id': form.get('telegram_chat_id', '').strip()}
         if not (config['bot_token'] and config['chat_id']):
             problems.append('Telegram: bot token and chat ID are both required')
+        if encrypted_text(form.get('telegram_bot_token', '').strip()):
+            problems.append(f'Bot token: {ENCRYPTED_TYPED}')
     elif channel.channel_type == 'teams':
         typed = form.get('teams_webhook_url', '').strip()
         config = {'webhook_url': typed or kept.get('webhook_url', '')}

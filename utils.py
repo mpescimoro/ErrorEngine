@@ -1,15 +1,17 @@
 """
-Helpers: the configured time zone, secrets out of messages, the server log file.
+Helpers: the configured time zone, secrets out of messages, the server log file, the addresses not called.
 """
 import ipaddress
 import logging
 import os
 import re
+import socket
 from datetime import datetime, timezone, time, timedelta
 from urllib.parse import urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
 from requests.utils import requote_uri
+from urllib3.util import parse_url
 
 # Cache to avoid repeated lookups
 _cached_tz = None
@@ -243,3 +245,41 @@ def reached_from_other_computers(host: str) -> bool:
         return not ipaddress.ip_address(host.strip()).is_loopback
     except ValueError:
         return host.strip().lower() != 'localhost'
+
+
+# Cloud metadata services outside the link-local network (169.254.0.0/16 and fe80::/10, refused as a whole)
+METADATA_ADDRESSES = {ipaddress.ip_address('100.100.100.200'),   # Alibaba Cloud
+                      ipaddress.ip_address('fd00:ec2::254')}      # AWS, over IPv6
+
+
+def forbidden_destination(url):
+    """
+    Why an HTTP source, a webhook or Teams does not call this address; None when it does. Link-local addresses
+    are where cloud servers have their metadata service (169.254.169.254), which gives the credentials of the
+    machine: a source pointed there would show them. Loopback and private networks stay allowed, the usual
+    home of the APIs ErrorEngine reads. A name is resolved here and requests resolves it again to connect:
+    a DNS that changes its answer in between is not stopped, nor a proxy that resolves names itself.
+    """
+    try:
+        host = parse_url((url or '').strip()).host
+    except ValueError:
+        return None   # requests says what is wrong with the address
+    if not host:
+        return None
+    host = host.strip('[]')
+    try:
+        addresses = [ipaddress.ip_address(host.split('%')[0])]
+    except ValueError:   # a name, or an address written otherwise (2852039166)
+        try:
+            addresses = [ipaddress.ip_address(info[4][0].split('%')[0])
+                         for info in socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)]
+        except (OSError, UnicodeError, ValueError):
+            return None   # not resolved here: requests fails the same way, or a proxy resolves it
+    for address in addresses:
+        if address.version == 6 and address.ipv4_mapped:
+            address = address.ipv4_mapped
+        if address.is_link_local or address in METADATA_ADDRESSES:
+            shown = host if host == str(address) else f'{host} ({address})'
+            return (f"The address {shown} is link-local or a cloud metadata service, which gives the "
+                    "credentials of the machine: ErrorEngine does not call it")
+    return None

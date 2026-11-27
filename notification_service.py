@@ -7,7 +7,7 @@ import requests
 from html import escape
 from urllib.parse import urljoin
 from data_sources import REDIRECTS
-from utils import format_local_now, get_utc_now, redact_secrets, utc_iso
+from utils import forbidden_destination, format_local_now, get_utc_now, redact_secrets, utc_iso
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +113,9 @@ class NotificationService:
 
     def _post_json(self, url: str, payload: dict, headers: dict, method: str = 'POST') -> dict:
         """POST/PUT of a JSON; non-standard values (Decimal, dates) become text."""
+        refusal = forbidden_destination(url)
+        if refusal:
+            return {'success': False, 'permanent': True, 'message': refusal}
         secrets = [url, *headers.values()]
         try:
             body = json.dumps(payload, default=str, ensure_ascii=False).encode('utf-8')
@@ -229,6 +232,9 @@ class NotificationService:
 
     def _post_teams(self, webhook_url: str, card: dict) -> dict:
         """Sends a card to the Teams webhook."""
+        refusal = forbidden_destination(webhook_url)
+        if refusal:
+            return {'success': False, 'permanent': True, 'message': refusal}
         try:
             body = json.dumps(card, default=str, ensure_ascii=False).encode('utf-8')
             response = requests.post(webhook_url, data=body, timeout=self.timeout,

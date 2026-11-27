@@ -5,6 +5,8 @@ SQLite is always available (Python standard library).
 """
 import logging
 
+from .base import TooManyRows  # noqa: F401 (for the callers: from db_drivers import TooManyRows)
+
 logger = logging.getLogger(__name__)
 
 DRIVERS = {}
@@ -77,7 +79,17 @@ def driver_timeouts() -> dict:
     }
 
 
-def get_driver(db_type: str, connect_timeout: float = None, query_timeout: float = None):
+def row_limit():
+    """Most rows a source may return (MAX_ROWS from the app configuration); None = no limit."""
+    try:
+        from flask import current_app
+        limit = current_app.config.get('MAX_ROWS', 10000)
+    except RuntimeError:  # outside the Flask context: the default value
+        limit = 10000
+    return limit or None
+
+
+def get_driver(db_type: str, connect_timeout: float = None, query_timeout: float = None, max_rows: int = None):
     """Returns an instance of the requested driver."""
     driver_class = DRIVERS.get(db_type.lower())
     if not driver_class:
@@ -86,7 +98,7 @@ def get_driver(db_type: str, connect_timeout: float = None, query_timeout: float
             f"Driver not supported or not installed: {db_type}. "
             f"Available: {available}"
         )
-    return driver_class(connect_timeout=connect_timeout, query_timeout=query_timeout)
+    return driver_class(connect_timeout=connect_timeout, query_timeout=query_timeout, max_rows=max_rows)
 
 
 def get_available_drivers() -> dict:

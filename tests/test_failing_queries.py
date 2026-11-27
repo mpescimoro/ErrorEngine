@@ -2,6 +2,7 @@
 Queries that cannot read their source: the alert after MONITOR_FAILURE_THRESHOLD failures
 in a row and when they recover, health check and Settings.
 """
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from unittest.mock import patch
 
@@ -154,3 +155,92 @@ class TestFailingSourceAlert:
         page = client.get('/settings').get_data(as_text=True)
         assert 'Not started in this process' in page
         assert 'Critical (1)' in page
+
+
+FIXED = datetime(2026, 11, 16, 9, 0, 20)   # UTC, 20 seconds into the minute
+
+
+def fail_at(query, now=FIXED):
+    """A failed check at a fixed time (UTC)."""
+    with patch('monitor_service.get_utc_now', return_value=now):
+        return fail(query)
+
+
+def retry_in_minutes(query, now=FIXED):
+    """Minutes from the minute of the failure to the next attempt; None: at the next round."""
+    if query.failure_retry_at is None:
+        return None
+    return round((query.failure_retry_at - now.replace(second=0)).total_seconds() / 60)
+
+
+class TestRetriesSlowDown:
+    """A source that keeps failing is tried again after waits that grow, not at every round."""
+
+    def test_waits_grow_up_to_an_hour(self, app):
+        query = make_query(check_interval_minutes=1440)
+        waits = []
+        for _ in range(9):
+            fail_at(query)
+            waits.append(retry_in_minutes(query))
+        assert waits == [None, 1, 2, 4, 8, 16, 32, 60, 60]
+
+    def test_never_less_often_than_the_interval(self, app):
+        query = make_query(check_interval_minutes=5)
+        waits = []
+        for _ in range(6):
+            fail_at(query)
+            waits.append(retry_in_minutes(query))
+        assert waits == [None, 1, 2, 4, 5, 5]
+
+    def test_not_due_before_the_wait_is_over(self, app):
+        from utils import utc_to_local
+        query = make_query(check_interval_minutes=1440)
+        query.last_check_at = FIXED - timedelta(days=1)   # it worked yesterday: today's run is due
+        for _ in range(3):
+            fail_at(query)
+        local = utc_to_local(FIXED.replace(second=0))
+        due, reason = query.should_run_now(local + timedelta(minutes=1))
+        assert due is False and 'next attempt at' in reason
+        assert query.should_run_now(local + timedelta(minutes=2))[0] is True
+        assert query.get_next_run_time(local + timedelta(minutes=1)) == local + timedelta(minutes=2)
+
+    def test_a_success_or_a_save_of_the_form_resets_the_waits(self, app, client):
+        query = make_query(check_interval_minutes=1440)
+        for _ in range(4):
+            fail_at(query)
+        succeed(query)   # Run now does not wait
+        assert query.failure_retry_at is None and query.consecutive_failures == 0
+        for _ in range(4):
+            fail_at(query)
+        assert query.failure_retry_at is not None
+        form = {'name': 'Critical', 'source_type': 'database', 'sql_query': 'SELECT 1', 'key_fields': 'ID',
+                'check_interval_value': '1', 'check_interval_unit': 'hours', 'is_active': 'on'}
+        assert client.post(f'/queries/{query.id}/edit', data=form).status_code == 302
+        db.session.expire_all()
+        assert db.session.get(type(query), query.id).failure_retry_at is None   # fixed: tried at the next round
+
+    def test_the_scheduler_tries_a_failing_daily_query_less_and_less(self, file_app, scheduler_pool):
+        """The real scheduler, one round a minute for 70 minutes, a source that never answers."""
+        clock = {'now': datetime(2026, 11, 16, 9, 0, tzinfo=timezone.utc)}
+        start = clock['now']
+
+        class Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return clock['now'].astimezone(tz) if tz else clock['now'].replace(tzinfo=None)
+
+        tried = []
+
+        def source(query):
+            tried.append(int((clock['now'] - start).total_seconds() // 60))
+            raise ConnectionError('ORA-12170: TNS:Connect timeout occurred')
+
+        with patch('utils.datetime', Clock):
+            make_query(check_interval_minutes=1440)
+            with patch('monitor_service.execute_query_source', side_effect=source):
+                for minute in range(70):
+                    clock['now'] = start + timedelta(minutes=minute)
+                    scheduler_pool.dispatch_due_queries(file_app)
+                    scheduler_pool.shutdown(wait=True)
+        # Before: every minute, 70 times
+        assert tried == [0, 1, 2, 4, 8, 16, 32, 64]

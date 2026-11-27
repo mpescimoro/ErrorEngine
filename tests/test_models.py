@@ -11,13 +11,14 @@ from utils import get_utc_now
 
 
 def test_the_hash_is_the_identity_of_an_error():
-    """Only the key fields count, their names in any case, a missing one as empty. The formula never changes: a
-    different hash would make every open error look new after an upgrade."""
+    """Only the key fields count, their names in any case, a missing one as NULL. The formula changes only with a
+    migration of the saved hashes (migrations.py, number 2): a different hash would make every open error look
+    new after an upgrade."""
     def h(data):
         return ErrorRecord.calculate_hash(data, ['ID', 'CODE'])
-    assert h({'ID': '001', 'CODE': 'ERR001'}) == hashlib.sha256(b'001|ERR001').hexdigest()
+    assert h({'ID': '001', 'CODE': 'ERR001'}) == hashlib.sha256(b'["001","ERR001"]').hexdigest()
     assert h({'id': '001', 'code': 'ERR001', 'MESSAGE': 'B'}) == h({'ID': '001', 'CODE': 'ERR001', 'MESSAGE': 'A'})
-    assert h({'ID': '001'}) == h({'ID': '001', 'CODE': ''})
+    assert h({'ID': '001'}) == h({'ID': '001', 'CODE': None}) != h({'ID': '001', 'CODE': ''})
     assert h({'ID': '002', 'CODE': 'ERR001'}) != h({'ID': '001', 'CODE': 'ERR001'})
 
 

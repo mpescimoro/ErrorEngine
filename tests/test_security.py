@@ -209,6 +209,43 @@ class TestTestQuery:
                   '# note\nDROP TABLE orders': 'DROP', '# note\nSET GLOBAL read_only = 0': 'SET'}
         assert {sql: write_statement_keyword(sql) for sql in writes} == writes
 
+    def test_postgres_text_between_dollars(self):
+        """PostgreSQL quotes text between $$: what they hold is text, what follows them is code."""
+        postgres = {"SELECT $$'$$; DELETE FROM t; COMMIT; --'": 'DELETE',
+                    "SELECT $$'$$; COMMIT; DELETE FROM t; --'": 'COMMIT',
+                    "SELECT $a$ ' $a$; DELETE FROM t; --'": 'DELETE',
+                    # After a letter, of any alphabet, $$ is part of a name
+                    "SELECT 1 AS x$$; DELETE FROM t; --'$$": 'DELETE',
+                    "SELECT 1 AS \u20ac$$; DELETE FROM t; --'$$": 'DELETE',
+                    "SELECT '$$'; DELETE FROM t": 'DELETE',
+                    'SELECT $$DELETE$$ AS label, $x$ -- $x$ AS b FROM t': None, "SELECT $$it's$$ AS a": None}
+        assert {sql: write_statement_keyword(sql, 'postgres') for sql in postgres} == postgres
+        # Elsewhere $$ quotes nothing: in SQL Server $x$ is an amount and a name, and what is between them runs
+        assert write_statement_keyword('SELECT $x$; DELETE FROM t; SELECT $x$', 'sqlserver') == 'DELETE'
+
+    def test_postgres_escape_text(self):
+        """In E'...' of PostgreSQL \\' is a quote inside the text: what follows the closing quote is code."""
+        postgres = {"SELECT E'\\''; COMMIT; DELETE FROM orders; --'": 'COMMIT',
+                    "SELECT e'\\\\'; DELETE FROM t": 'DELETE',
+                    "SELECT E'it''s \\' DELETE' AS a": None,
+                    # After a letter the E is part of a name, and the text that follows is plain: \ is a character
+                    "SELECT nameE'\\'; DELETE FROM t; --'": 'DELETE'}
+        assert {sql: write_statement_keyword(sql, 'postgres') for sql in postgres} == postgres
+        # In SQL Server E'\' is a name and a plain text, and what follows runs
+        assert write_statement_keyword("SELECT E'\\'; DELETE FROM t; --'", 'sqlserver') == 'DELETE'
+
+    def test_the_connection_gives_the_check_its_type(self, app, client):
+        """The test of a query on PostgreSQL refuses, or asks, before running it."""
+        conn = DatabaseConnection(name='Orders', db_type='postgres', host='db.local', database='orders', username='u')
+        db.session.add(conn)
+        db.session.commit()
+        url, sql = f'/api/connections/{conn.id}/test-query', "SELECT $$'$$; DELETE FROM orders; COMMIT; --'"
+        refused = client.post(url, json={'sql': sql, 'confirm_write': True}).get_json()
+        assert refused['valid'] is False and 'contains DELETE' in refused['error']
+        conn.allow_writes = True
+        db.session.commit()
+        assert client.post(url, json={'sql': sql}).get_json()['confirm'] == 'DELETE'
+
     def test_the_button_asks_when_the_server_says_so(self):
         js = (ROOT / 'static' / 'js' / 'app.js').read_text(encoding='utf-8')
         test = js[js.index('async function testSqlQuery'):]

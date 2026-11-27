@@ -67,6 +67,7 @@ class IBMiDriver(DatabaseDriver):
     
     name = "ibmi"
     default_port = 446
+    autocommit = True    # as JT400 opens the connection: each statement is saved as it runs
 
     def open(self, host: str, port: int, database: str, username: str, password: str):
         # The JVM starts in the calling thread: the connection thread, which can
@@ -121,6 +122,7 @@ class IBMiDriver(DatabaseDriver):
                         val = rs.getObject(i + 1)
                         row[col] = self._java_to_python(val)
                     rows.append(row)
+                    self._check_row_count(len(rows))
             finally:
                 rs.close()
         finally:
@@ -157,10 +159,6 @@ class IBMiDriver(DatabaseDriver):
             return bool(val)
 
         return str(val)
-
-    def run(self, connection, sql: str, writes: bool) -> tuple:
-        # Autocommit, as JT400 opens the connection: each statement is saved as it runs, nothing to commit
-        return self.execute_query(connection, sql)
 
     def close(self, connection):
         """Closes the connection."""

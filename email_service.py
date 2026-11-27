@@ -470,13 +470,17 @@ class EmailService:
         """
         HTML and plain text of a notification email. A custom template that cannot be used
         gives way to the default one, so the notification still goes out; strict raises instead.
+        Past EMAIL_MAX_ROWS errors the email lists the first ones and says how many more there are.
         """
+        limit = current_app.config.get('EMAIL_MAX_ROWS', 100)
+        listed = errors[:limit] if limit else errors
         context = dict(
             query_name=query.name,
             query_description=query.description,
             check_time=datetime.now(timezone.utc),
             error_count=len(errors),
-            errors=errors,
+            errors=listed,
+            errors_not_listed=len(errors) - len(listed),
             columns=columns,
             email_type=email_type
         )

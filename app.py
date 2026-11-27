@@ -110,13 +110,19 @@ def create_app(config_name=None):
     # Create the database tables (and add new columns to existing ones)
     with app.app_context():
         db.create_all()
-        from models import ensure_schema, allow_writes_where_queries_write
+        from models import ensure_schema, ensure_indexes, allow_writes_where_queries_write
         for column in ensure_schema():
             logger.info(f"Database updated: added column {column}")
             if column == 'database_connections.allow_writes':
                 for connection, query, keyword in allow_writes_where_queries_write():
                     logger.info(f"Connection {connection}: statements that change data allowed, "
                                 f"as the query {query} contains {keyword}")
+        # The numbered migrations, before the indexes: one of them makes room for an index (migrations.py)
+        from migrations import run_migrations
+        for migration in run_migrations():
+            logger.info(f"Database updated: migration {migration}")
+        for index in ensure_indexes():
+            logger.info(f"Database updated: added index {index}")
         from encryption import encrypt_saved_secrets
         encrypt_saved_secrets()
         if db.engine.dialect.name == 'sqlite' and db.engine.url.database not in (None, '', ':memory:'):

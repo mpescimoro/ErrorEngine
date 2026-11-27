@@ -102,6 +102,9 @@ class Transaction:
     def cursor(self):
         return NoRowsCursor()
 
+    def set_session(self, readonly):
+        """psycopg2: the transaction that follows is BEGIN READ ONLY."""
+
     def commit(self):
         self.ends.append('commit')
 
@@ -121,6 +124,20 @@ class TestWrites:
         assert driver.run(connection, 'INSERT INTO t VALUES (1)', writes=True) == ([], [])
         driver.run(connection, 'SELECT writes_something()', writes=False)
         assert connection.ends == ['commit', 'rollback']
+
+    def test_postgres_asks_the_database_to_refuse_changes(self):
+        """Where writes are not allowed, BEGIN READ ONLY before the statement: refused also what the text hides."""
+        from db_drivers import DRIVERS
+        if 'postgres' not in DRIVERS:
+            pytest.skip('postgres driver not installed')
+        events, connection = [], Transaction()
+        connection.set_session = lambda readonly: events.append(('read only', readonly))
+        connection.cursor = lambda: types.SimpleNamespace(execute=lambda sql: events.append(('run', sql)),
+                                                          description=None, close=lambda: None)
+        DRIVERS['postgres']().run(connection, 'SELECT 1', writes=False)
+        DRIVERS['postgres']().run(connection, 'INSERT INTO t VALUES (1)', writes=True)
+        assert events == [('read only', True), ('run', 'SELECT 1'), ('run', 'INSERT INTO t VALUES (1)')]
+        assert connection.ends == ['rollback', 'commit']
 
     def test_sqlite_file(self, tmp_path):
         import sqlite3

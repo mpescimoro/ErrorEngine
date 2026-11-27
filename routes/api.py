@@ -2,8 +2,9 @@
 REST API routes — JSON endpoints.
 """
 import logging
+from bisect import bisect_right
 from flask import Blueprint, request, jsonify, abort
-from datetime import timedelta
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from db_drivers import get_driver, driver_timeouts, DRIVER_LABELS
 from models import (db, MonitoredQuery, ErrorRecord, EmailLog, RoutingRule,
@@ -17,8 +18,7 @@ from routing_service import apply_routing_rules, get_routing_summary
 from data_sources import test_query_source
 from validators import (validate_email, validate_email_list, validate_routing_rule, sanitize_string,
                         write_statement_keyword)
-from utils import (get_utc_now, get_local_now, format_local, local_day_start_utc, utc_to_local,
-                   redact_secrets)
+from utils import (get_utc_now, get_local_now, format_local, local_day_start_utc, local_to_utc, redact_secrets)
 from version import __version__
 
 
@@ -370,7 +370,7 @@ def api_connection_test_query(conn_id):
     refusal = conn.write_refusal(sql)
     if refusal:
         return jsonify({'valid': False, 'error': refusal})
-    keyword = write_statement_keyword(sql)
+    keyword = write_statement_keyword(sql, conn.db_type)
     if keyword and data.get('confirm_write') is not True:
         return jsonify({'valid': False, 'confirm': keyword,
                         'error': f'The query contains {keyword}, which can change data: confirm it to test it'})
@@ -419,10 +419,10 @@ def api_stats_overview():
     days = days_asked(7)
     query_id = request.args.get('query_id', type=int)
 
-    def errors(*conditions):
-        """The errors that meet the conditions, of the query asked for or of all of them."""
-        found = ErrorRecord.query.filter(*conditions)
-        return found.filter(ErrorRecord.query_id == query_id) if query_id else found
+    def count_errors(*conditions):
+        """How many errors meet the conditions, of the query asked for or of all of them."""
+        found = db.session.query(func.count(ErrorRecord.id)).filter(*conditions)
+        return (found.filter(ErrorRecord.query_id == query_id) if query_id else found).scalar()
 
     now = get_utc_now()
     today_start = local_day_start_utc()   # local midnight, not UTC
@@ -430,28 +430,26 @@ def api_stats_overview():
     prev_period_start = period_start - timedelta(days=days)
     month_ago = now - timedelta(days=30)
     
-    errors_today = errors(ErrorRecord.first_seen_at >= today_start).count()
-    errors_period = errors(ErrorRecord.first_seen_at >= period_start).count()
+    errors_today = count_errors(ErrorRecord.first_seen_at >= today_start)
+    errors_period = count_errors(ErrorRecord.first_seen_at >= period_start)
     
-    errors_prev_period = errors(ErrorRecord.first_seen_at >= prev_period_start,
-                                ErrorRecord.first_seen_at < period_start).count()
+    errors_prev_period = count_errors(ErrorRecord.first_seen_at >= prev_period_start,
+                                      ErrorRecord.first_seen_at < period_start)
     
     if errors_prev_period > 0:
         trend_percent = round(((errors_period - errors_prev_period) / errors_prev_period) * 100)
     else:
         trend_percent = 100 if errors_period > 0 else 0
     
-    errors_active = errors(ErrorRecord.resolved_at.is_(None)).count()
+    errors_active = count_errors(ErrorRecord.resolved_at.is_(None))
     
-    resolved_errors = errors(ErrorRecord.resolved_at.isnot(None), ErrorRecord.resolved_at >= month_ago).all()
-    
-    avg_resolution_hours = 0
-    if resolved_errors:
-        total_seconds = sum(
-            (e.resolved_at - e.first_seen_at).total_seconds() 
-            for e in resolved_errors if e.resolved_at and e.first_seen_at
-        )
-        avg_resolution_hours = round(total_seconds / len(resolved_errors) / 3600, 1)
+    # Of the errors resolved in the last 30 days, computed by the database (julianday, in days): reading them
+    # one by one took seconds with some months of errors
+    average_days = db.session.query(
+        func.avg(func.julianday(ErrorRecord.resolved_at) - func.julianday(ErrorRecord.first_seen_at))
+    ).filter(ErrorRecord.resolved_at.isnot(None), ErrorRecord.resolved_at >= month_ago,
+             *([ErrorRecord.query_id == query_id] if query_id else [])).scalar()
+    avg_resolution_hours = round(average_days * 24, 1) if average_days is not None else 0
     
     top_queries = db.session.query(
         MonitoredQuery.id,
@@ -497,19 +495,30 @@ def api_stats_timeline():
     return jsonify(timeline)
 
 
+# The start of the UTC seconds that SQLite's strftime('%s') counts
+EPOCH = datetime(1970, 1, 1)
+
+
 def errors_per_local_day(days: int, query_id: int = None) -> dict:
     """
     Errors first seen in each of the last `days` local days (today included):
-    {'YYYY-MM-DD': count}. Days follow the configured time zone, not UTC.
+    {'YYYY-MM-DD': count}, the days with errors. Days follow the configured time zone, not UTC. The database
+    counts them by quarter of an hour, as every time zone has its midnights on a quarter of a UTC hour, and
+    each quarter goes to the day of the last local midnight before it: converting every error here took
+    seconds with some months of errors.
     """
-    errors = db.session.query(ErrorRecord.first_seen_at).filter(
-        ErrorRecord.first_seen_at >= local_day_start_utc(max(1, days) - 1))
+    days = max(1, days)
+    midnights = [local_day_start_utc(days_ago) for days_ago in range(days - 1, -1, -1)]   # oldest first
+    today = get_local_now().date()
+    quarter = db.func.cast(db.func.strftime('%s', ErrorRecord.first_seen_at), db.Integer) // 900
+    found = db.session.query(quarter, db.func.count(ErrorRecord.id)).filter(ErrorRecord.first_seen_at >= midnights[0])
     if query_id:
-        errors = errors.filter(ErrorRecord.query_id == query_id)
+        found = found.filter(ErrorRecord.query_id == query_id)
     counts = {}
-    for (first_seen,) in errors:
-        day = str(utc_to_local(first_seen).date())
-        counts[day] = counts.get(day, 0) + 1
+    for number, count in found.group_by(quarter):
+        days_ago = days - bisect_right(midnights, EPOCH + timedelta(minutes=15 * number))
+        day = str(today - timedelta(days=days_ago))
+        counts[day] = counts.get(day, 0) + count
     return counts
 
 
@@ -779,7 +788,8 @@ def api_scheduler_next():
                 if query_next is None:
                     continue
                 
-                if next_run is None or query_next < next_run:
+                # In UTC: in the hour that comes twice the local times do not tell which comes first
+                if next_run is None or local_to_utc(query_next) < local_to_utc(next_run):
                     next_run = query_next
                     next_query = query
             except Exception as e:
@@ -792,9 +802,8 @@ def api_scheduler_next():
                 'message': 'No scheduled queries'
             })
         
-        # Remaining seconds (local time)
-        now_local = next_query._get_local_now()
-        seconds_remaining = max(0, int((next_run - now_local).total_seconds()))
+        # Remaining seconds, in UTC as above
+        seconds_remaining = max(0, int((local_to_utc(next_run) - get_utc_now()).total_seconds()))
         
         return jsonify({
             'has_scheduled': True,

@@ -36,6 +36,8 @@ class OracleDriver(DatabaseDriver):
                         value = value.read()
                     row_dict[col] = self._safe_value(value)
                 rows.append(row_dict)
+                # Row by row, as each LOB is read before the next fetch: past MAX_ROWS the rest is not read
+                self._check_row_count(len(rows))
             return columns, rows
         finally:
             cursor.close()

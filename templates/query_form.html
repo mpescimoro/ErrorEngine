@@ -280,7 +280,7 @@
                     Error identification
                 </div>
                 <div class="card-body">
-                    <div class="form-group mb-0">
+                    <div class="form-group">
                         <label for="key_fields" class="form-label">
                             Key fields <span class="required">*</span>
                         </label>
@@ -296,6 +296,25 @@
                             Fields that uniquely identify an error (comma-separated).
                             Rows with the same values in these fields count as the same error.
                             {% if editing %}Changing them closes the open errors and notifies their rows again, as new errors.{% endif %}
+                        </div>
+                    </div>
+
+                    <div class="form-group mb-0">
+                        <label for="resolve_after_checks" class="form-label">Resolved after</label>
+                        <div class="input-group">
+                            <input type="number"
+                                   class="form-control"
+                                   id="resolve_after_checks"
+                                   name="resolve_after_checks"
+                                   min="1"
+                                   max="100"
+                                   value="{{ (query.resolve_after_checks or 1) if query else 1 }}"
+                                   aria-describedby="resolveAfterHelp">
+                            <span class="input-group-text">checks without it</span>
+                        </div>
+                        <div class="form-text" id="resolveAfterHelp">
+                            1: an error is resolved at the first check that does not return it. More for data that
+                            comes and goes: back before then, it is the same error, not notified again.
                         </div>
                     </div>
                 </div>

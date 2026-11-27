@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 class AS400Driver(DatabaseDriver):
     name = "as400"
     default_port = 446   # DRDA on IBM i
+    autocommit = True    # as ibm_db opens the connection: each statement is saved as it runs
 
     def connect(self, host: str, port: int, database: str, username: str, password: str):
         """Creates and returns an ibm_db connection."""
@@ -73,15 +74,12 @@ class AS400Driver(DatabaseDriver):
             while row:
                 row_dict = {col: self._safe_value(row.get(col)) for col in columns}
                 rows.append(row_dict)
+                self._check_row_count(len(rows))
                 row = ibm_db.fetch_assoc(stmt)
         finally:
             ibm_db.free_stmt(stmt)
 
         return columns, rows
-
-    def run(self, connection, sql: str, writes: bool) -> tuple:
-        # Autocommit, as ibm_db opens the connection: each statement is saved as it runs, nothing to commit
-        return self.execute_query(connection, sql)
 
     def close(self, connection):
         """Closes the ibm_db connection."""

@@ -1,6 +1,7 @@
 """
 Notifications retried until delivered: every recipient and every channel, with growing
-waits, given up after NOTIFY_ATTEMPTS attempts; a channel that refuses for good is not retried.
+waits, given up after NOTIFY_ATTEMPTS attempts; a channel that refuses for good is not retried,
+and a service or channel that does not answer is waited for, one attempt an hour.
 """
 import logging
 import re
@@ -8,7 +9,7 @@ import sqlite3
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from functools import partial
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from models import db, MonitoredQuery, ErrorRecord, EmailLog, NotificationChannel
 from utils import get_utc_now
@@ -157,6 +158,11 @@ class TestRetriedNotifications:
             assert c.exec_driver_sql('PRAGMA journal_mode').scalar() == 'wal'
 
 
+# The mail server refused the address: a refusal of this notification, not a service that does not answer
+REFUSED_RESULT = {'success': False, 'message': 'Refused by the mail server: ops@x.it: 550 5.1.1 User unknown',
+                  'refused': {'ops@x.it': '550 5.1.1 User unknown'}}
+
+
 def run_check(query, email_result=None, channel_result=None):
     """A check that finds one error; email and channels answer as given."""
     from monitor_service import monitor_service
@@ -192,13 +198,54 @@ class TestDeliveries:
         html = client.get('/errors').get_data(as_text=True)
         assert 'Not delivered</span>' in html and not re.search(r'badge-warning[^>]*>\s*Delivery pending', html)
 
-    def test_attempts_and_waits(self, app, client):
-        down = {'success': False, 'message': 'SMTP down', 'email_unavailable': True}
+    def test_a_service_that_does_not_answer_does_not_use_up_the_attempts(self, app):
+        """Mail server down for longer than the 5 attempts: the notification waits for it, then goes out."""
+        query = make_query(email_recipients='ops@x.it')
+        run_check(query, email_result=DOWN)
+        error = ErrorRecord.query.filter_by(query_id=query.id).one()
+        waits = []
+        for _ in range(8):
+            assert error.notify_pending, f'given up after {error.notify_attempts} attempts'
+            waits.append(round((error.notify_retry_at - get_utc_now()).total_seconds() / 60))
+            error.notify_retry_at = None   # the wait is over
+            db.session.commit()
+            run_check(query, email_result=DOWN)
+        assert waits == [1, 5, 15, 60, 60, 60, 60, 60]
+        assert error.notify_pending and error.notify_attempts == 9 and not error.undeliverable
+        error.notify_retry_at = None
+        db.session.commit()
+        run_check(query)   # the mail server answers again
+        assert not error.notify_pending and error.email_sent and error.get_notified_to() == ['ops@x.it']
 
+    def test_a_channel_that_does_not_answer_keeps_it_waiting_too(self, app):
+        hook = make_channel('Hook')
+        query = make_query(email_recipients='', channels=[hook])
+        unavailable = {'success': False, 'message': 'HTTP 503 Service Unavailable'}
+        run_check(query, channel_result=unavailable)
+        error = ErrorRecord.query.filter_by(query_id=query.id).one()
+        for _ in range(6):
+            assert error.notify_pending, f'given up after {error.notify_attempts} attempts'
+            error.notify_retry_at = None
+            db.session.commit()
+            run_check(query, channel_result=unavailable)
+        assert error.notify_pending and error.notify_attempts == 7 and not error.undeliverable
+        error.notify_retry_at = None
+        db.session.commit()
+        run_check(query)   # the channel answers again
+        assert not error.notify_pending and error.get_notified_channels() == [hook.id]
+
+    def test_one_attempt_means_no_retries_even_with_the_service_down(self, app):
+        app.config['NOTIFY_ATTEMPTS'] = 1
+        query = make_query(email_recipients='ops@x.it')
+        run_check(query, email_result=DOWN)
+        error = ErrorRecord.query.filter_by(query_id=query.id).one()
+        assert not error.notify_pending and error.get_undeliverable()['recipients'] == ['ops@x.it']
+
+    def test_attempts_and_waits(self, app, client):
         def until_given_up(name):
             """The waits before each new attempt, minutes; then the error given up."""
             query = make_query(name=name, email_recipients='ops@x.it')
-            run_check(query, email_result=down)
+            run_check(query, email_result=REFUSED_RESULT)
             error = ErrorRecord.query.filter_by(query_id=query.id).one()
             waits = []
             for _ in range(10):
@@ -207,7 +254,7 @@ class TestDeliveries:
                 waits.append(round((error.notify_retry_at - get_utc_now()).total_seconds() / 60))
                 error.notify_retry_at = None   # the wait is over
                 db.session.commit()
-                run_check(query, email_result=down)
+                run_check(query, email_result=REFUSED_RESULT)
             return waits, error
 
         waits, error = until_given_up('Default')
@@ -375,14 +422,27 @@ class TestOneLogLinePerAttempt:
         assert 'pending' not in message
 
     def test_given_up(self, app, caplog):
+        import smtplib
+        app.config['NOTIFY_ATTEMPTS'] = 2
+        query = make_query(email_recipients='ops@x.it')
+        server = MagicMock()
+        server.sendmail.side_effect = smtplib.SMTPRecipientsRefused({'ops@x.it': (550, b'5.1.1 User unknown')})
+        self.check(query, caplog, smtp={'return_value': server})
+        wait_for_retry(query)
+        lines = self.check(query, caplog, smtp={'return_value': server})
+        assert len(lines) == 1 and lines[0].levelno == logging.ERROR
+        message = lines[0].getMessage()
+        assert '50 given up for ops@x.it after 2 attempts' in message and 'User unknown' in message
+
+    def test_mail_server_down_keeps_waiting(self, app, caplog):
         app.config['NOTIFY_ATTEMPTS'] = 2
         query = make_query(email_recipients='ops@x.it')
         self.check(query, caplog, smtp={'side_effect': OSError('Connection refused')})
         wait_for_retry(query)
         lines = self.check(query, caplog, smtp={'side_effect': OSError('Connection refused')})
-        assert len(lines) == 1 and lines[0].levelno == logging.ERROR
+        assert len(lines) == 1 and lines[0].levelno == logging.WARNING
         message = lines[0].getMessage()
-        assert '50 given up for ops@x.it after 2 attempts' in message and 'Connection refused' in message
+        assert '50 pending for ops@x.it, next attempt in 5 min' in message and 'given up' not in message
 
     def test_email_delivered_channel_pending(self, app, caplog):
         hook = make_channel('Hook')
@@ -409,14 +469,13 @@ class TestNotDelivered:
         teams = make_channel('Teams IT', channel_type='teams')
         query = make_query(email_recipients='ops@x.it', channels=[teams])
         failing = {'success': False, 'message': 'HTTP 503 Service Unavailable'}
-        run_check(query, email_result={'success': False, 'message': 'Connection refused', 'email_unavailable': True},
-                  channel_result=failing)
+        # The address refused: the attempts run out, for the channel that did not answer too
+        run_check(query, email_result=REFUSED_RESULT, channel_result=failing)
         error = ErrorRecord.query.filter_by(query_id=query.id).one()
         error.notify_attempts = 4   # as if the first four had failed
         error.notify_retry_at = None
         db.session.commit()
-        run_check(query, email_result={'success': False, 'message': 'Connection refused', 'email_unavailable': True},
-                  channel_result=failing)
+        run_check(query, email_result=REFUSED_RESULT, channel_result=failing)
         return query, error
 
     def test_stays_active_and_is_not_retried(self, app):
@@ -441,7 +500,7 @@ class TestNotDelivered:
         # Visible text, not only a tooltip
         assert 'Not delivered</span>' in html
         assert re.search(r'>\s*to ops@x\.it, Teams IT\s*<', html)
-        assert re.search(r'>\s*Not delivered after 5 attempts: [^<]*Connection refused', html)
+        assert re.search(r'>\s*Not delivered after 5 attempts: [^<]*User unknown', html)
         listed = re.compile(r'class="query-name">\s*Other\s*</a>')
         failed = client.get('/errors?delivery=failed').get_data(as_text=True)
         assert re.search(r'class="query-name">\s*Critical\s*</a>', failed) and not listed.search(failed)
@@ -521,14 +580,16 @@ class TestQueryEveryFiveMinutes:
         ]
         assert all(not e.notify_pending and e.email_sent for e in records(query).values())
 
-    def test_server_down_for_more_than_an_hour(self, file_app, scheduler_pool):
-        query, events = five_minute_query(100, errors_from={1: 0}, server_up_from=999,
+    def test_server_down_for_hours_the_error_goes_out_when_it_is_back(self, file_app, scheduler_pool):
+        query, events = five_minute_query(205, errors_from={1: 0}, server_up_from=150,
                                           app=file_app, pool=scheduler_pool)
-        assert [e[0] for e in events if e[1] == 'failed'] == [0, 1, 6, 21, 81]
-        assert [e[0] for e in events if e[1] == 'check'] == list(range(0, 100, 5))
+        # 1, 5, 15 and 60 minutes, then one attempt an hour while the server does not answer
+        assert [e[0] for e in events if e[1] == 'failed'] == [0, 1, 6, 21, 81, 141]
+        assert [e[0] for e in events if e[1] == 'sent'] == [201]
+        assert [e[0] for e in events if e[1] == 'check'] == list(range(0, 205, 5))
         error = records(query)[1]
-        assert not error.notify_pending and error.notify_attempts == 5
-        assert error.get_undeliverable()['recipients'] == ['ops@x.it'] and error.resolved_at is None
+        assert not error.notify_pending and error.email_sent and not error.undeliverable
+        assert error.get_notified_to() == ['ops@x.it'] and error.resolved_at is None
 
 
 REFUSED = {'bad@x.it': (550, b'5.1.1 User unknown')}

@@ -83,6 +83,11 @@
                 </tr>
                 {% endfor %}
             </table>
+            {% if errors_not_listed %}
+            <div style="margin-top:12px; font-size:13px; color:#666;">
+                + {{ errors_not_listed }} more not listed here: the dashboard shows them all.
+            </div>
+            {% endif %}
         </td>
     </tr>
 

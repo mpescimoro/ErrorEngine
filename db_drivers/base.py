@@ -53,16 +53,29 @@ def call_with_deadline(fn, seconds: float, what: str = 'Operation', on_late_resu
     return outcome['value']
 
 
+class TooManyRows(Exception):
+    """A source returned more rows than MAX_ROWS: the check fails, and creates or resolves no error."""
+
+    def __init__(self, limit: int):
+        super().__init__(f"The source returned more than {limit} rows, the most MAX_ROWS allows: no error was "
+                         "created or resolved. Narrow the query, or raise MAX_ROWS in .env")
+        self.limit = limit
+
+
 class DatabaseDriver(ABC):
     """Common interface for all databases."""
 
     name = "base"
     default_port = None
+    # True where the connection saves each statement as it runs: then run has nothing to commit or roll back
+    autocommit = False
 
-    def __init__(self, connect_timeout: float = None, query_timeout: float = None):
+    def __init__(self, connect_timeout: float = None, query_timeout: float = None, max_rows: int = None):
         # Seconds; None = no limit (the library's behaviour)
         self.connect_timeout = connect_timeout or None
         self.query_timeout = query_timeout or None
+        # Most rows a query may return (MAX_ROWS); None = no limit
+        self.max_rows = max_rows or None
 
     @abstractmethod
     def connect(self, host: str, port: int, database: str, username: str, password: str):
@@ -80,14 +93,30 @@ class DatabaseDriver(ABC):
     def run(self, connection, sql: str, writes: bool) -> tuple:
         """
         execute_query, then commit where the connection allows writes; elsewhere roll back, for what gets
-        past the check of the text (a function that writes, called from a SELECT).
+        past the check of the text (a function that writes, called from a SELECT), after asking the database
+        to refuse it where the driver can (read_only). Every driver goes through here, autocommit ones too.
         """
+        if not writes:
+            self.read_only(connection)
         columns, rows = self.execute_query(connection, sql)
+        # Two columns with the same name would be one in the rows, with the value of the last: say it instead
+        repeated = next((name for i, name in enumerate(columns) if name in columns[:i]), None)
+        if repeated is not None:
+            raise ValueError(f"The query returns more than one column named {repeated}: give each its own name, "
+                             f"with AS")
+        if self.autocommit:
+            return columns, rows
         if writes:
             connection.commit()
         else:
             connection.rollback()
         return columns, rows
+
+    def read_only(self, connection):
+        """
+        Before the query of a connection that does not allow writes: makes the database refuse what changes
+        data, where the driver can. Here nothing, and the rollback of run undoes what gets through.
+        """
 
     def open(self, host: str, port: int, database: str, username: str, password: str):
         """connect() with a guaranteed time limit for the whole connection phase."""
@@ -118,6 +147,19 @@ class DatabaseDriver(ABC):
             return {'status': 'ok', 'message': 'Connection successful'}
         except Exception as e:
             return {'status': 'error', 'message': redact_secrets(str(e))}
+
+    def _fetch_rows(self, cursor) -> list:
+        """The rows of a DB-API cursor: past max_rows TooManyRows, without reading the rest."""
+        if not self.max_rows:
+            return cursor.fetchall()
+        rows = cursor.fetchmany(self.max_rows + 1)
+        self._check_row_count(len(rows))
+        return rows
+
+    def _check_row_count(self, count: int):
+        """For the drivers that read the rows one at a time: TooManyRows once count is past max_rows."""
+        if self.max_rows and count > self.max_rows:
+            raise TooManyRows(self.max_rows)
 
     def _safe_value(self, value):
         """Converts a value to a JSON-safe type."""

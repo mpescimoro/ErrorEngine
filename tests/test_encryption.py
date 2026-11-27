@@ -517,3 +517,48 @@ class TestConnectionForm:
         html = client.post(f'/connections/{connection.id}/edit',
                            data=connection_form(password='typed-password', port='x')).get_data(as_text=True)
         assert 'typed-password' not in html and '(type it again)' in html
+
+
+class TestEncryptedTextTyped:
+    """
+    A secret as ErrorEngine saves it, encrypted (copied from a backup or from the database), typed in a form is
+    refused: saved as it is, it would be decrypted and the secret sent to the server of that form.
+    """
+
+    @pytest.fixture
+    def saved(self, app):
+        connection, query, hook, bot, teams = save_everything()
+        source, channel = query.stored_source_config(), hook.stored_config()
+        return {'password': connection._password, 'token': source['auth_token'], 'header': source['headers']['X-Key'],
+                'hook_header': channel['headers']['Authorization'], 'bot_token': bot.stored_config()['bot_token'],
+                'teams_url': teams.stored_config()['webhook_url']}
+
+    @staticmethod
+    def refused(response, label):
+        assert (f'{label}: that is a secret as ErrorEngine saves it, encrypted: type the secret itself'
+                in response.get_data(as_text=True))
+
+    def test_a_connection(self, client, saved):
+        self.refused(client.post('/connections/new', data=connection_form(
+            name='Copy', host='collector.example.net', password=saved['password'])), 'Password')
+        assert DatabaseConnection.query.filter_by(name='Copy').count() == 0
+
+    def test_the_token_and_a_header_of_an_http_query(self, client, saved):
+        address = {'name': 'Copy', 'source_url': 'https://collector.example.net/x'}
+        self.refused(client.post('/queries/new', data=http_form(**address, source_auth_token=saved['token'])),
+                     'Token/Key')
+        self.refused(client.post('/queries/new', data=http_form(
+            **address, source_headers=json.dumps({'X-Key': saved['header']}))), 'Header X-Key')
+        assert MonitoredQuery.query.filter_by(name='Copy').count() == 0
+
+    def test_the_secrets_of_a_channel(self, client, saved):
+        self.refused(client.post('/channels/new', data=channel_form(
+            'webhook', name='Copy', webhook_url='https://collector.example.net/x',
+            webhook_headers=json.dumps({'Authorization': saved['hook_header']}))), 'Header Authorization')
+        self.refused(client.post('/channels/new', data=channel_form(
+            'telegram', name='Copy', telegram_bot_token=saved['bot_token'])), 'Bot token')
+        # An address must start with https:// already
+        html = client.post('/channels/new', data=channel_form(
+            'teams', name='Copy', teams_webhook_url=saved['teams_url'])).get_data(as_text=True)
+        assert 'Teams: the webhook URL, which starts with https://' in html
+        assert NotificationChannel.query.filter_by(name='Copy').count() == 0

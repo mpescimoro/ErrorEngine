@@ -29,6 +29,7 @@ A rule can be paused by unticking **Rule active**. **Stop on match** skips the r
 - A rule without conditions always matches
 - With routing on, errors no longer go to the query's **Recipients**: each one goes to the recipients of the rules it matches, and one that matches no rule goes to the default recipients, or to nobody
 - Routing applies to email only: notification channels receive every error
+- Reminders follow the latest row of the error: with a rule on a field that changes, a status for example, they go to the recipients the row matches now
 
 ## Operators
 

@@ -5,6 +5,7 @@ Runs the queries periodically, with conditional routing and reminders.
 import logging
 from datetime import timedelta
 from flask import current_app
+from sqlalchemy.exc import IntegrityError
 from utils import get_utc_now, format_local, redact_secrets
 import time
 from collections import defaultdict
@@ -18,6 +19,8 @@ logger = logging.getLogger(__name__)
 # Minutes before trying a notification again, after the first failed attempt, the second...
 # (the last one again beyond these)
 RETRY_WAITS = (1, 5, 15, 60)
+# Longest wait, in minutes, before reading again a source that keeps failing (see _failure_retry_at)
+FAILURE_MAX_WAIT = 60
 
 
 class MonitorService:
@@ -113,9 +116,9 @@ class MonitorService:
                 ).all()
             }
             
-            # New, resolved and continuing errors
+            # New, missing (resolved, or waiting to be) and continuing errors
             new_error_hashes = set(current_errors.keys()) - set(existing_errors.keys())
-            resolved_hashes = set(existing_errors.keys()) - set(current_errors.keys())
+            missing_hashes = set(existing_errors.keys()) - set(current_errors.keys())
             continuing_hashes = set(current_errors.keys()) & set(existing_errors.keys())
             
             # New errors (in row order), to notify
@@ -134,22 +137,35 @@ class MonitorService:
                 new_records.append(new_record)
                 result['new_errors'] += 1
 
-            # Resolved errors
-            for hash_val in resolved_hashes:
+            # Errors no longer returned: resolved after resolve_after_checks checks in a row without them
+            needed = query.resolve_after_checks or 1
+            for hash_val in missing_hashes:
                 error = existing_errors[hash_val]
+                error.missing_checks = (error.missing_checks or 0) + 1
+                if error.missing_checks < needed:
+                    continue
                 error.resolved_at = get_utc_now()
                 error.notify_pending = False
                 result['resolved_errors'] += 1
 
-            # Errors still present
+            # Errors still present: their data follow the source, the fields outside the key may have changed
             for hash_val in continuing_hashes:
                 error = existing_errors[hash_val]
                 error.last_seen_at = get_utc_now()
                 error.occurrence_count += 1
+                error.missing_checks = 0
+                error.set_error_data(current_errors[hash_val])
 
             # Saved before any delivery: the DB is not locked while sending, and a
             # delivery problem does not lose the errors found
-            db.session.commit()
+            try:
+                db.session.commit()
+            except IntegrityError:
+                # One active error per identity (migration 1): another check of this query, running at the same
+                # time after taking over the lock, saved the same errors first
+                db.session.rollback()
+                raise RuntimeError('Another check of this query saved the same errors at the same time: this one '
+                                   'stops, and the next one goes on from there') from None
 
             # Notifications and reminders: a problem here is not a failed source read
             try:
@@ -376,7 +392,8 @@ class MonitorService:
         """
         Sends the notifications not yet delivered (new errors or deliveries that
         failed earlier), only to the recipients and channels still missing. Failed
-        ones are tried again after the RETRY_WAITS, NOTIFY_ATTEMPTS times in all, then given up.
+        ones are tried again after the RETRY_WAITS, NOTIFY_ATTEMPTS times in all, then given up;
+        not while the only failures are an email service or a channel that does not answer.
         Returns (emails sent, channel deliveries).
         """
         errors = [record.get_error_data() for record in records]
@@ -417,6 +434,9 @@ class MonitorService:
         delivered_channels = defaultdict(list)  # error -> channels reached now
         refused_channels = defaultdict(list)    # error -> channels that refused it for good (4xx)
         failures = defaultdict(list)            # error -> reasons for failed deliveries
+        # Errors with a failure that is not a service or channel that did not answer (an address refused, an email
+        # the service would not take): only these use up their attempts (see the end of this method)
+        refusals = set()
         emails_sent = 0
 
         email_down = False
@@ -440,8 +460,12 @@ class MonitorService:
                 elif not refused:
                     failures[i].append(f"{', '.join(recipients_list)}: "
                                        f"{email_result.get('message', 'delivery failed')}")
+                    if email_result.get('email_unavailable') is not True:
+                        refusals.add(i)
                 # Whether the others got it or not, the server's reason for each address it refused
                 failures[i].extend(f"{address}: {reason}" for address, reason in refused.items())
+                if refused:
+                    refusals.add(i)
             if email_result.get('success'):
                 emails_sent += 1
             else:
@@ -462,6 +486,7 @@ class MonitorService:
                     logger.error(f"Notification channels error: {e}")
                     for i in idxs:
                         failures[i].append(f"channels: {redact_secrets(str(e))}")
+                        refusals.add(i)
                     continue
                 channels_sent += channels_result.get('success', 0)
                 reached = self._channels_delivered(channels_result, requested)
@@ -502,7 +527,10 @@ class MonitorService:
 
             if still_missing:
                 record.notify_attempts = (record.notify_attempts or 0) + 1
-                if record.notify_attempts >= max_attempts:
+                # A service that did not answer has not refused the notification: if nothing else went wrong it
+                # waits, one attempt an hour, instead of being given up for good (with 1 attempt, no retries)
+                waits_for_the_service = max_attempts > 1 and i not in refusals
+                if record.notify_attempts >= max_attempts and not waits_for_the_service:
                     # Tried enough: given up, shown as not delivered
                     record.add_undeliverable(channels=[c.id for c in missing_channels_now], recipients=missing_now)
                     record.notify_pending = False
@@ -698,18 +726,33 @@ class MonitorService:
     def _failure_threshold(query: MonitoredQuery) -> int:
         """
         Failures in a row before the alert (0 = alerts off).
-        After a failure the scheduler retries every minute, whatever the interval,
-        so the threshold is roughly the minutes without a successful check.
+        The first retries come at the next round and after 1 and 2 minutes (_failure_retry_at),
+        so with 3 the alert comes about 2 minutes after the first failure, whatever the interval.
         """
         configured = int(current_app.config.get('MONITOR_FAILURE_THRESHOLD', 3) or 0)
         return max(configured, 0)
 
+    @staticmethod
+    def _failure_retry_at(query: MonitoredQuery):
+        """
+        When to read a failing source again: at the next round after the first failure, then after 1, 2, 4,
+        8... minutes, never less often than the query's interval and at least once every FAILURE_MAX_WAIT
+        minutes. None: at the next round.
+        """
+        failures = query.consecutive_failures or 0
+        if failures < 2:
+            return None
+        wait = min(2 ** (failures - 2), query.check_interval_minutes or FAILURE_MAX_WAIT, FAILURE_MAX_WAIT)
+        # From the minute of the failure: the scheduler works in whole minutes
+        return get_utc_now().replace(second=0, microsecond=0) + timedelta(minutes=wait)
+
     def _mark_failure(self, query: MonitoredQuery, message: str) -> bool:
-        """Counts a failed run. True when it is time to send the alert."""
+        """Counts a failed run and sets the wait before the next one. True when it is time to send the alert."""
         query.consecutive_failures = (query.consecutive_failures or 0) + 1
         if not query.failing_since:
             query.failing_since = get_utc_now()
         query.last_failure_message = (message or '')[:2000]
+        query.failure_retry_at = self._failure_retry_at(query)
         if query.failure_alerted_at:
             return False  # already alerted for this streak of failures
         threshold = self._failure_threshold(query)
@@ -721,11 +764,12 @@ class MonitorService:
         recovery = None
         if query.failure_alerted_at:
             recovery = {'failures': query.consecutive_failures or 0, 'failing_since': query.failing_since}
-        if query.consecutive_failures or query.failing_since or query.failure_alerted_at:
+        if query.consecutive_failures or query.failing_since or query.failure_alerted_at or query.failure_retry_at:
             query.consecutive_failures = 0
             query.failing_since = None
             query.failure_alerted_at = None
             query.last_failure_message = None
+            query.failure_retry_at = None
         return recovery
 
     @staticmethod

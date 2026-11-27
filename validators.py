@@ -47,6 +47,11 @@ def validate_email_list(emails_str: str) -> Tuple[bool, str, List[str]]:
 # Quoted text and comments run nothing: in a single pass, so that '--' in a string is not a comment.
 # MySQL runs what /*! */ holds (MariaDB also /*M! */): only its opening goes, the rest is read as code
 _SQL_NOT_CODE = re.compile(r"'(?:[^']|'')*'|\"[^\"]*\"|\[[^\]]*\]|`[^`]*`|/\*M?!\d*|/\*.*?\*/|--[^\n]*", re.S)
+# PostgreSQL text also between $$ or $name$, where ' and -- are text, and in E'...', where \' does not close it;
+# not after a letter, digit, _ or $ (a name: x$$). Only there: in SQL Server $x$ and E'\' are code and plain text
+_POSTGRES_NOT_CODE = re.compile(
+    r"(?<![\w$\u0080-\U0010FFFF])(?:\$((?:[^\W\d]\w*)?)\$.*?\$\1\$|[Ee]'(?:[^'\\]|\\.|'')*')|"
+    + _SQL_NOT_CODE.pattern, re.S)
 # Wherever they are: a CTE with DELETE, SELECT ... INTO, a procedure that can write
 _WRITE_WORDS = re.compile(r'\b(INSERT|UPDATE|DELETE|MERGE|UPSERT|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|'
                           r'RENAME|EXEC|EXECUTE|CALL|INTO)\b')
@@ -60,14 +65,16 @@ _READ_SETTINGS = re.compile(r'\s*SET\s+(?:NOCOUNT\s+(?:ON|OFF)|DATEFORMAT\s+(?:M
 _HASH_COMMENTS = re.compile(r'\s*(?:#[^\n]*(?:\n|$)\s*)+')
 
 
-def write_statement_keyword(sql: str):
+def write_statement_keyword(sql: str, db_type: str = None):
     """
     The word that lets the query change data (e.g. 'DELETE'); None for a read query. Every statement
     must start with SELECT, WITH or DECLARE, after SET NOCOUNT, SET DATEFORMAT and SET TRANSACTION
     ISOLATION LEVEL, and contain none of those words. It reads the text: a function that writes, called
-    from a SELECT, still gets through, a database user that can only read does not.
+    from a SELECT, still gets through, a database user that can only read does not. db_type, the type of
+    the connection: 'postgres' also knows the text between $$.
     """
-    text = _SQL_NOT_CODE.sub(' ', sql or '').upper()
+    not_code = _POSTGRES_NOT_CODE if db_type == 'postgres' else _SQL_NOT_CODE
+    text = not_code.sub(' ', sql or '').upper()
     for statement in text.split(';'):
         while (skip := _READ_SETTINGS.match(statement) or _HASH_COMMENTS.match(statement)):
             statement = statement[skip.end():]
