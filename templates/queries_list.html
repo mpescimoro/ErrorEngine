@@ -43,9 +43,9 @@
     {% for query in queries %}
     <div class="card">
         <div class="card-body">
-            <div class="flex justify-between items-start gap-lg">
+            <div class="flex flex-wrap justify-between items-start gap-lg">
                 <div class="flex-1">
-                    <div class="flex items-center gap-md mb-sm">
+                    <div class="flex flex-wrap items-center gap-md mb-sm">
                         <a href="{{ url_for('main.query_detail', query_id=query.id) }}" class="query-name" style="font-size: 1.125rem;">
                             {{ query.name }}
                         </a>
@@ -98,7 +98,7 @@
                     <p class="text-muted mb-md">{{ query.description }}</p>
                     {% endif %}
                     
-                    <div class="flex items-center gap-lg text-muted" style="font-size: 0.875rem;">
+                    <div class="flex flex-wrap items-center gap-lg text-muted" style="font-size: 0.875rem;">
                         <span>
                             <i class="bi bi-clock"></i>
 							Every {% if query.check_interval_minutes >= 60 and query.check_interval_minutes % 60 == 0 %}{{ query.check_interval_minutes // 60 }} h{% else %}{{ query.check_interval_minutes }} min{% endif %}

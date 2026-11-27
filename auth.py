@@ -31,9 +31,10 @@ auth_bp = Blueprint('auth', __name__)
 PUBLIC_ENDPOINTS = {'auth.login', 'static', 'api.api_health'}
 # Methods of the requests that change something: they need the CSRF token
 UNSAFE_METHODS = {'POST', 'PUT', 'PATCH', 'DELETE'}
-# What the API token can change, the actions in docs/api-reference.md: it runs and tests what is saved and
-# resolves errors. The other requests that change something are those of the pages: only with the session
+# What the API token can change, the actions in docs/api-reference.md: it runs and tests what is saved, resolves
+# errors, sets their state and pauses the notifications. The other changes are made by the pages, with the session
 TOKEN_ACTIONS = {'api.api_run_query', 'api.api_test_query', 'api.api_test_routing', 'api.api_resolve_error',
+                 'api.api_error_state', 'api.api_pause_notifications', 'api.api_resume_notifications',
                  'api.api_connection_test', 'api.api_channel_test'}
 # The API token: a shorter one is too easy to guess
 MIN_TOKEN_LENGTH = 32

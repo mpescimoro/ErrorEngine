@@ -1,0 +1,34 @@
+{# What was made of an error: assigned to someone, or ignored #}
+{% macro error_state(error) %}
+{% if error.state == 'assigned' %}
+<span class="badge badge-info error-state" title="Since {{ error.state_changed_at|localtime('%d/%m/%Y %H:%M') }}">Assigned to {{ error.assigned_to }}</span>
+{% elif error.state == 'ignored' %}
+<span class="badge badge-secondary error-state" title="Since {{ error.state_changed_at|localtime('%d/%m/%Y %H:%M') }}">Ignored</span>
+{% endif %}
+{% endmacro %}
+
+{# Resolve, and under it the other actions, small: the rows of the list stay short #}
+{% macro error_actions(error, style='btn-secondary') %}
+<div class="error-actions">
+    <button type="button" class="btn btn-sm {{ style }}" onclick="errorManager.resolve({{ error.id }})"
+            title="Mark as resolved" aria-label="Resolve error">
+        <i class="bi bi-check-lg"></i> Resolve
+    </button>
+    <div class="error-more">
+        {% if error.state == 'ignored' %}
+        <button type="button" onclick="errorManager.setState({{ error.id }}, null)"
+                title="Back among the active errors, with its notifications and reminders">Stop ignoring</button>
+        {% else %}
+        <button type="button" data-assigned-to="{{ error.assigned_to or '' }}"
+                onclick="errorManager.assign({{ error.id }}, this.dataset.assignedTo)"
+                title="Who is on it: no more reminders">{{ 'Reassign' if error.state == 'assigned' else 'Assign' }}</button>
+        {% if error.state == 'assigned' %}
+        <button type="button" onclick="errorManager.setState({{ error.id }}, null)"
+                title="Nobody on it: the reminders start again">Unassign</button>
+        {% endif %}
+        <button type="button" onclick="errorManager.ignore({{ error.id }})"
+                title="Out of the list, with no notifications or reminders, until it is resolved">Ignore</button>
+        {% endif %}
+    </div>
+</div>
+{% endmacro %}

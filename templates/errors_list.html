@@ -1,23 +1,35 @@
 {% extends "base.html" %}
 {% from "_delivery.html" import delivery_state %}
+{% from "_pagination.html" import page_links %}
+{% from "_error_actions.html" import error_state, error_actions %}
 {% set live_reload = true %}  {# reload the page when errors change #}
 
-{% block title %}Active errors - ErrorEngine{% endblock %}
+{% set view_title = {'assigned': 'Assigned errors', 'ignored': 'Ignored errors'}.get(selected_state, 'Active errors') %}
+{% block title %}{{ view_title }} - ErrorEngine{% endblock %}
 
 {% block content %}
 <!-- Page Header -->
 <div class="page-header">
     <h1 class="page-title">
         <i class="bi bi-exclamation-triangle"></i>
-        Active errors
+        {{ view_title }}
         {% if errors %}
-        <span class="badge badge-danger">{{ errors|length }}</span>
+        <span class="badge badge-danger">{{ pagination.total }}</span>
         {% endif %}
     </h1>
     
-    <!-- Filter: only queries with active errors (hidden when there are none) -->
-    {% if queries %}
-    <form method="GET" class="flex items-center gap-sm">
+    <!-- Filters: the views, the queries with errors in the view, the notifications (none for the ignored errors) -->
+    {% if queries or state_counts.assigned or state_counts.ignored or selected_state %}
+    <form method="GET" class="flex flex-wrap items-center gap-sm">
+        {% if state_counts.assigned or state_counts.ignored or selected_state %}
+        <select name="state" class="form-control form-select" onchange="this.form.submit()" style="width: auto;"
+                aria-label="Filter by state">
+            <option value="">Active ({{ state_counts[''] }})</option>
+            <option value="assigned" {{ 'selected' if selected_state == 'assigned' }}>Assigned ({{ state_counts.assigned }})</option>
+            <option value="ignored" {{ 'selected' if selected_state == 'ignored' }}>Ignored ({{ state_counts.ignored }})</option>
+        </select>
+        {% endif %}
+        {% if queries %}
         <select name="query_id" class="form-control form-select" onchange="this.form.submit()" style="width: auto;"
                 aria-label="Filter by query">
             <option value="">All queries ({{ total_errors }})</option>
@@ -25,7 +37,8 @@
             <option value="{{ q.id }}" {{ 'selected' if selected_query_id == q.id }}>{{ q.name }} ({{ error_counts.get(q.id, 0) }})</option>
             {% endfor %}
         </select>
-        {% if delivery_counts.pending or delivery_counts.failed or selected_delivery %}
+        {% endif %}
+        {% if queries and selected_state != 'ignored' and (delivery_counts.pending or delivery_counts.failed or selected_delivery) %}
         <select name="delivery" class="form-control form-select" onchange="this.form.submit()" style="width: auto;"
                 aria-label="Filter by notification">
             <option value="">All notifications</option>
@@ -144,14 +157,8 @@
                         {% endif %}
                     </td>
                     <td class="text-right">
-                        <button type="button" 
-                                class="btn btn-sm btn-secondary"
-                                onclick="errorManager.resolve({{ error.id }})"
-                                title="Mark as resolved"
-                                aria-label="Resolve error">
-                            <i class="bi bi-check-lg"></i>
-                            Resolve
-                        </button>
+                        {{ error_state(error) }}
+                        {{ error_actions(error) }}
                     </td>
                 </tr>
                 {% endfor %}
@@ -159,15 +166,18 @@
         </table>
     </div>
 </div>
+{{ page_links(pagination) }}
 {% else %}
 <div class="card">
     <div class="empty-state">
         <div class="empty-state-icon text-success">
             <i class="bi bi-emoji-smile"></i>
         </div>
-        <h3 class="empty-state-title">No active errors</h3>
+        <h3 class="empty-state-title">No {{ view_title|lower }}</h3>
         <p class="empty-state-description">
-            {% if selected_query_id %}
+            {% if selected_state %}
+            None of the active errors is {{ selected_state }}{{ ' for this query' if selected_query_id }}.
+            {% elif selected_query_id %}
             There are no active errors for this query.
             {% else %}
             Great! There are no errors to resolve right now.

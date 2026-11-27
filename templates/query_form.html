@@ -5,7 +5,7 @@
 {% block content %}
 <!-- Breadcrumb -->
 <nav aria-label="Breadcrumb" class="mb-lg">
-    <ol class="flex items-center gap-sm text-muted" style="list-style: none; padding: 0; margin: 0;">
+    <ol class="flex flex-wrap items-center gap-sm text-muted" style="list-style: none; padding: 0; margin: 0;">
         <li><a href="{{ url_for('main.queries_list') }}" class="text-muted">Queries</a></li>
         <li><i class="bi bi-chevron-right"></i></li>
         <li aria-current="page">{{ 'Edit' if editing else 'New' }}</li>
@@ -22,7 +22,7 @@
 
 <form method="POST" id="queryForm" data-validate data-query-id="{{ query.id if editing else '' }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <div class="grid" style="grid-template-columns: 2fr 1fr; gap: var(--space-xl); align-items: start;">
+    <div class="grid grid-main-side">
         
         <!-- Main Column -->
         <div>
@@ -34,7 +34,7 @@
                 </div>
                 <div class="card-body">
                     <div class="grid grid-cols-2 gap-md">
-                        <div class="form-group" style="grid-column: span 2;">
+                        <div class="form-group" style="grid-column: 1 / -1;">
                             <label for="name" class="form-label">
                                 Query name <span class="required">*</span>
                             </label>
@@ -185,7 +185,7 @@
                 </div>
                 <div class="card-body">
                     <div class="grid grid-cols-2 gap-md">
-                        <div class="form-group" style="grid-column: span 2;">
+                        <div class="form-group" style="grid-column: 1 / -1;">
                             <label for="source_url" class="form-label">URL</label>
                             <input type="url" 
                                    class="form-control" 
@@ -213,7 +213,7 @@
                             </select>
                         </div>
                         
-                        <div class="form-group" style="grid-column: span 2;">
+                        <div class="form-group" style="grid-column: 1 / -1;">
                             <label for="source_auth_token" class="form-label">
                                 Token/Key
                                 {% if token_hint == 'typed' %}<span class="text-muted">(type it again)</span>
@@ -247,7 +247,7 @@
                             <div class="form-text">Query string: added to the URL when the request is sent, saved encrypted as the token.</div>
                         </div>
 
-                        <div class="form-group" style="grid-column: span 2;">
+                        <div class="form-group" style="grid-column: 1 / -1;">
                             <label for="source_headers" class="form-label">Headers</label>
                             <textarea class="form-control font-mono"
                                       id="source_headers"
@@ -257,7 +257,7 @@
                             <div class="form-text">Other headers to send, as a JSON object. Optional. The saved values are shown as <code>(saved)</code>: left so, they stay.</div>
                         </div>
                         
-                        <div class="form-group" style="grid-column: span 2;">
+                        <div class="form-group" style="grid-column: 1 / -1;">
                             <label for="source_response_path" class="form-label">JSON response path</label>
                             <input type="text" 
                                    class="form-control" 
@@ -466,7 +466,7 @@
                 </div>
                 <div class="card-body">
                     <div class="grid grid-cols-2 gap-md mb-lg">
-                        <div class="form-group mb-0" style="grid-column: span 2;">
+                        <div class="form-group mb-0" style="grid-column: 1 / -1;">
                             <label for="routing_default_recipients" class="form-label">Default recipients</label>
                             <input type="text" 
                                    class="form-control" 

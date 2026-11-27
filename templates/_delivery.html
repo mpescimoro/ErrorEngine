@@ -1,12 +1,18 @@
 {# Notification state of an error: still being retried, or given up (to whom, and why) #}
 {% macro delivery_state(error, channel_names) %}
-{% if error.notify_pending %}
-<span class="badge badge-warning" title="{{ error.last_notify_error or 'Will be retried' }}">
-    Delivery pending{% if error.notify_attempts %} · {{ error.notify_attempts }} {{ 'attempt' if error.notify_attempts == 1 else 'attempts' }}{% endif %}
+{% if error.notify_pending and error.state == 'ignored' %}
+<span class="badge badge-secondary badge-wrap" title="Nothing is sent while it is ignored">Not sent: ignored</span>
+{% elif error.notify_pending and error.held_until %}
+<span class="badge badge-warning badge-wrap" title="Notifications were paused: it is sent when the pause ends, if still open">
+    Not sent: notifications paused
+</span>
+{% elif error.notify_pending %}
+<span class="badge badge-warning badge-wrap" title="{{ error.last_notify_error or 'Will be retried' }}">
+    Delivery pending{% if error.notify_attempts %} <span style="white-space: nowrap;">· {{ error.notify_attempts }} {{ 'attempt' if error.notify_attempts == 1 else 'attempts' }}</span>{% endif %}
 </span>
 {% endif %}
 {% if error.undeliverable %}
-<span class="badge badge-danger">Not delivered</span>
+<span class="badge badge-danger badge-wrap">Not delivered</span>
 <div class="text-danger" style="font-size: 0.8125rem;">to {{ error.undelivered_to(channel_names)|join(', ') }}</div>
 {% if error.last_notify_error %}
 <div class="text-muted truncate" style="font-size: 0.8125rem; max-width: 240px;" title="{{ error.last_notify_error }}">{{ error.last_notify_error }}</div>

@@ -5,7 +5,7 @@
 {% block content %}
 <!-- Breadcrumb -->
 <nav aria-label="Breadcrumb" class="mb-lg">
-    <ol class="flex items-center gap-sm text-muted" style="list-style: none; padding: 0; margin: 0;">
+    <ol class="flex flex-wrap items-center gap-sm text-muted" style="list-style: none; padding: 0; margin: 0;">
         <li><a href="{{ url_for('main.connections_list') }}" class="text-muted">Connections</a></li>
         <li><i class="bi bi-chevron-right"></i></li>
         <li aria-current="page">{{ 'Edit' if editing else 'New' }}</li>
@@ -22,7 +22,7 @@
 
 <form method="POST" id="connectionForm">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <div class="grid" style="grid-template-columns: 2fr 1fr; gap: var(--space-xl); align-items: start;">
+    <div class="grid grid-main-side">
         
         <!-- Main Column -->
         <div>

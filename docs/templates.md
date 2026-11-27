@@ -26,6 +26,7 @@ Templates use [Jinja](https://jinja.palletsprojects.com/templates/) and see thes
 | `error_count` | Number of errors, also those not listed |
 | `errors` | The errors: a list of rows, each a dictionary column → value; the first `EMAIL_MAX_ROWS` |
 | `errors_not_listed` | How many errors are beyond `EMAIL_MAX_ROWS`, not in `errors` (`0` when they are all there) |
+| `attachment` | Name of the CSV file attached to the email with all the errors when some are not listed, e.g. `Orders.csv`; empty when there is none, also when the file would be over 2 MB |
 | `columns` | Column names, in query order |
 | `email_type` | `new_errors` or `reminder` |
 

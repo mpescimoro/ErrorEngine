@@ -558,6 +558,14 @@ class ErrorRecord(db.Model):
     occurrence_count = db.Column(db.Integer, default=1)
     # Checks in a row that did not return it, while it waits to be resolved (see resolve_after_checks)
     missing_checks = db.Column(db.Integer, default=0)
+
+    # What the person who handles the errors made of it: 'ignored' (out of the lists and counts, nothing sent) or
+    # 'assigned' (assigned_to is on it); empty, an open error. Both stop the reminders
+    state = db.Column(db.String(20))
+    assigned_to = db.Column(db.String(100))
+    state_changed_at = db.Column(db.DateTime)
+    # Held by a pause of the notifications, ending then: it goes out at the end, if still open
+    held_until = db.Column(db.DateTime)
     
     # Composite index for efficient lookups
     __table_args__ = (
@@ -622,6 +630,9 @@ class ErrorRecord(db.Model):
         # Not returned by the last check: waiting to be resolved, not still active
         if self.missing_checks:
             return False
+        # Someone is on it, or it was ignored: nobody needs reminding
+        if self.state:
+            return False
         if self.reminder_count >= query.reminder_max_count:
             return False
         last_notification = self.last_reminder_at or self.email_sent_at
@@ -652,14 +663,19 @@ class ErrorRecord(db.Model):
         return hashlib.sha256(hash_string.encode()).hexdigest()
     
     @classmethod
+    def listed(cls):
+        """The errors of the lists and counts: all but the ignored ones, which have a view of their own."""
+        return db.func.coalesce(cls.state, '') != 'ignored'
+
+    @classmethod
     def active_summary(cls) -> dict:
         """
-        Summary for the automatic page refresh: number of active errors
-        and a signature that changes when an error appears or is resolved
+        Summary for the automatic page refresh: number of active errors, the ignored ones apart,
+        and a signature that changes when an error appears, is resolved or ignored
         (not when a known error is just seen again).
         """
         active, last_id, last_resolved = db.session.query(
-            db.func.coalesce(db.func.sum(db.case((cls.resolved_at.is_(None), 1), else_=0)), 0),
+            db.func.coalesce(db.func.sum(db.case((db.and_(cls.resolved_at.is_(None), cls.listed()), 1), else_=0)), 0),
             db.func.max(cls.id),
             db.func.max(cls.resolved_at),
         ).one()
@@ -733,6 +749,15 @@ class EmailLog(db.Model):
         return f'<EmailLog {self.id} status={self.status}>'
 
 
+class NotificationPause(db.Model):
+    """The pause of the notifications for planned work, in one row: paused while until is ahead."""
+    __tablename__ = 'notification_pause'
+
+    id = db.Column(db.Integer, primary_key=True)
+    started_at = db.Column(db.DateTime)
+    until = db.Column(db.DateTime, nullable=False)
+
+
 class SchemaMigration(db.Model):
     """A numbered migration of the database that has run (migrations.py): each runs once."""
     __tablename__ = 'schema_migrations'
@@ -759,6 +784,10 @@ NEW_COLUMNS = [
     ('monitored_queries', 'failure_retry_at'),
     ('monitored_queries', 'resolve_after_checks'),
     ('error_records', 'missing_checks'),
+    ('error_records', 'state'),
+    ('error_records', 'assigned_to'),
+    ('error_records', 'state_changed_at'),
+    ('error_records', 'held_until'),
 ]
 
 

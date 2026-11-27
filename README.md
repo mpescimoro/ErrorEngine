@@ -16,7 +16,8 @@ You write a query that returns the problems: ErrorEngine runs it on a schedule a
 ## Features
 
 - **Databases and APIs** — Oracle, PostgreSQL, MySQL/MariaDB, SQL Server, SQLite, IBM i (AS/400), HTTP/JSON sources
-- **Notifications** — Email (any SMTP server or Microsoft 365), webhook, Telegram, Microsoft Teams; reminders while an error stays open
+- **Notifications** — Email (any SMTP server or Microsoft 365), webhook, Telegram, Microsoft Teams; reminders while an error stays open; a pause for planned work
+- **Triage** — Assign an error to who is on it, or ignore it
 - **Conditional routing** — Different recipients depending on the content of each error
 - **Scheduling** — Intervals, time windows, days of the week
 - **Reliable delivery** — Failed notifications are retried; an alert when a query cannot read its source; health check for external monitors

@@ -10,6 +10,7 @@ from utils import get_utc_now, format_local, redact_secrets
 import time
 from collections import defaultdict
 from models import db, MonitoredQuery, ErrorRecord, QueryLog
+from notification_pause import paused_until
 from data_sources import execute_query_source
 from routing_service import apply_routing_rules
 from email_service import email_service
@@ -175,6 +176,7 @@ class MonitorService:
                 pending = new_records + [
                     existing_errors[h] for h in current_errors
                     if h in continuing_hashes and existing_errors[h].notify_pending
+                    and existing_errors[h].state != 'ignored'
                     and (existing_errors[h].notify_retry_at is None or existing_errors[h].notify_retry_at <= now)
                 ]
                 with email_service.batch():
@@ -194,7 +196,11 @@ class MonitorService:
                 result['error_message'] = f"Notifications not completed: {redact_secrets(str(e))}"
 
             # Query statistics
+            alerted_at = query.failure_alerted_at
             recovery = self._mark_success(query)
+            if recovery and paused_until():
+                # Its last alert says it fails: told at the first check that works after the pause
+                query.failure_alerted_at, recovery = alerted_at, None
             query.last_check_at = get_utc_now()
             query.locked_at = None  # Release the lock
             query.total_errors_found += result['new_errors']
@@ -396,6 +402,17 @@ class MonitorService:
         not while the only failures are an email service or a channel that does not answer.
         Returns (emails sent, channel deliveries).
         """
+        until = paused_until()
+        if until:
+            # Paused for planned work: held without using up an attempt, they go out when the pause ends
+            for record in records:
+                record.notify_pending, record.held_until, record.notify_retry_at = True, until, until
+            db.session.commit()
+            logger.info(f"Query {query.name}: {len(records)} {'notification' if len(records) == 1 else 'notifications'}"
+                        f" held, notifications paused until {format_local(until)}")
+            return 0, 0
+        for record in records:
+            record.held_until = None
         errors = [record.get_error_data() for record in records]
         position = {id(error): i for i, error in enumerate(errors)}
         routing_result = apply_routing_rules(query, errors)
@@ -703,6 +720,7 @@ class MonitorService:
                 .filter(ErrorRecord.query_id == query.id,
                         ErrorRecord.resolved_at.is_(None),
                         ErrorRecord.notify_pending.is_(True),
+                        ErrorRecord.listed(),
                         db.or_(ErrorRecord.notify_retry_at.is_(None), ErrorRecord.notify_retry_at <= now))
                 .order_by(ErrorRecord.id)
                 .all()
@@ -789,6 +807,10 @@ class MonitorService:
         Alerts that the query cannot read its source ('failed')
         or that it works again ('recovered'). True if it reached someone.
         """
+        if paused_until():
+            # Not marked as sent: if the source still fails after the pause, the alert goes out then
+            logger.info(f"Query {query.name}: '{event}' alert not sent, notifications paused")
+            return False
         since = format_local(failing_since) if failing_since else None
         if event == 'failed':
             subject = f"[ErrorEngine] Query failing: {query.name}"
@@ -803,8 +825,8 @@ class MonitorService:
             subject = f"[ErrorEngine] Query recovered: {query.name}"
             title = f"The query \"{query.name}\" works again"
             lines = [
-                f"The check works again after {failures} failed runs"
-                + (f" (failing since {since})." if since else "."),
+                f"The check works again after {failures} failed runs" + (f" (failing since {since})." if since else ".")
+                if failures else "The check works again: it recovered while the notifications were paused.",
             ]
             email_type, channel_event = 'monitor_recovered', 'monitor_recovered'
 
@@ -830,6 +852,9 @@ class MonitorService:
         Reminders for unresolved errors, except those just (re)notified (exclude_ids).
         Returns (reminder emails sent, channels reached).
         """
+        if paused_until():
+            # Paused for planned work: the reminders due go out at the first check after the pause
+            return 0, 0
         errors_needing_reminder = []
         error_records = []
 
@@ -896,11 +921,11 @@ class MonitorService:
         if not query:
             return {'error': 'Query not found'}
         
-        # Active errors
+        # Active errors, the ignored ones apart as in the pages
         active_errors = ErrorRecord.query.filter_by(
             query_id=query_id,
             resolved_at=None
-        ).count()
+        ).filter(ErrorRecord.listed()).count()
         
         # Errors with pending reminders
         pending_reminders = 0
@@ -940,12 +965,13 @@ class MonitorService:
             } if last_log else None
         }
     
-    def get_active_errors(self, query_id: int = None, include_data: bool = True) -> list:
+    def get_active_errors(self, query_id: int = None, include_data: bool = True, state: str = None) -> list:
         """
-        Active (unresolved) errors, of one query if query_id is given;
-        include_data=False leaves out the rows.
+        Active (unresolved) errors, of one query if query_id is given; include_data=False leaves out the rows.
+        Without a state the ignored ones are left out, as in the pages; with one, only the errors in that state.
         """
         errors_query = ErrorRecord.query.filter_by(resolved_at=None)
+        errors_query = errors_query.filter_by(state=state) if state else errors_query.filter(ErrorRecord.listed())
         
         if query_id:
             errors_query = errors_query.filter_by(query_id=query_id)
@@ -964,7 +990,9 @@ class MonitorService:
             'email_sent': e.email_sent,
             'email_sent_at': e.email_sent_at,
             'reminder_count': e.reminder_count,
-            'last_reminder_at': e.last_reminder_at
+            'last_reminder_at': e.last_reminder_at,
+            'state': e.state,
+            'assigned_to': e.assigned_to
         } for e in errors]
     
     def get_query_available_fields(self, query_id: int) -> list:

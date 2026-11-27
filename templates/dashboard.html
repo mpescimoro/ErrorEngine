@@ -10,10 +10,57 @@
         <i class="bi bi-speedometer2"></i>
         Dashboard
     </h1>
-    <a href="{{ url_for('main.query_create') }}" class="btn btn-primary">
-        <i class="bi bi-plus-lg"></i>
-        <span>New query</span>
-    </a>
+    <div class="flex flex-wrap items-center gap-sm">
+        <button type="button" class="btn btn-secondary" onclick="modal.open('pauseModal')">
+            <i class="bi bi-pause-circle"></i>
+            <span>{{ 'Change the pause' if pause_until else 'Pause notifications' }}</span>
+        </button>
+        <a href="{{ url_for('main.query_create') }}" class="btn btn-primary">
+            <i class="bi bi-plus-lg"></i>
+            <span>New query</span>
+        </a>
+    </div>
+</div>
+
+<!-- Pause of the notifications, for planned work -->
+<div class="modal" id="pauseModal" role="dialog" aria-labelledby="pauseTitle" aria-modal="true">
+    <div class="modal-dialog">
+        <div class="modal-header">
+            <h3 class="modal-title" id="pauseTitle">
+                <i class="bi bi-pause-circle"></i>
+                Pause notifications
+            </h3>
+            <button type="button" class="btn btn-ghost btn-icon" onclick="modal.close()" aria-label="Close">
+                <i class="bi bi-x-lg"></i>
+            </button>
+        </div>
+        <div class="modal-body">
+            <p>For planned work: the checks go on, and nothing is sent, neither the notifications of the errors
+               found, nor the reminders, nor the alerts about the sources. At the end, the errors still open are
+               sent.</p>
+            <label for="pauseMinutes" class="form-label">{{ 'From now, for' if pause_until else 'For' }}</label>
+            <select id="pauseMinutes" class="form-control form-select">
+                <option value="30">30 minutes</option>
+                <option value="60" selected>1 hour</option>
+                <option value="120">2 hours</option>
+                <option value="240">4 hours</option>
+                <option value="480">8 hours</option>
+                <option value="1440">1 day</option>
+                <option value="4320">3 days</option>
+            </select>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" onclick="modal.close()">
+                <i class="bi bi-x-lg"></i>
+                Cancel
+            </button>
+            <button type="button" class="btn btn-primary"
+                    onclick="notificationPause.start(Number(document.getElementById('pauseMinutes').value))">
+                <i class="bi bi-pause-fill"></i>
+                Pause
+            </button>
+        </div>
+    </div>
 </div>
 
 <!-- Stats Grid -->

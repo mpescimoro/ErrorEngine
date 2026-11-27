@@ -58,7 +58,7 @@ def test_every_route_that_changes_something_refuses_a_request_without_the_token(
                 # Back to the page with the form, which says what happened
                 assert response.status_code == 302 and response.location.endswith('/queries'), (method, url)
             checked += 1
-    assert checked == 26
+    assert checked == 29
     # Nothing was changed or deleted
     assert (MonitoredQuery.query.count(), DatabaseConnection.query.count(),
             NotificationChannel.query.count()) == (1, 1, 1)

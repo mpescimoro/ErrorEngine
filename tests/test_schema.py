@@ -93,3 +93,24 @@ def test_resolve_after_checks_and_missing_checks_added_to_existing_databases(app
         assert connection.execute(text('SELECT resolve_after_checks FROM monitored_queries')).scalar() == 0
         assert connection.execute(text('SELECT missing_checks FROM error_records')).scalar() == 0
     assert ensure_schema() == []
+
+
+def test_the_state_of_the_errors_and_the_pause_added_to_existing_databases(app):
+    """The errors of an upgraded database arrive open, with nobody assigned and not held; the pause gets its table."""
+    from notification_pause import paused_until, pause_notifications
+    with db.engine.begin() as connection:
+        for column in ('state', 'assigned_to', 'state_changed_at', 'held_until'):
+            connection.execute(text(f'ALTER TABLE error_records DROP COLUMN {column}'))
+        connection.execute(text('DROP TABLE notification_pause'))
+        connection.execute(text(
+            "INSERT INTO monitored_queries (name, sql_query, key_fields) VALUES ('Old', 'SELECT 1', 'ID')"))
+        connection.execute(text(
+            "INSERT INTO error_records (query_id, error_hash, error_data) VALUES (1, 'h1', '{\"ID\": 1}')"))
+    assert ensure_schema() == ['error_records.state', 'error_records.assigned_to', 'error_records.state_changed_at',
+                               'error_records.held_until']
+    with db.engine.connect() as connection:
+        assert connection.execute(text('SELECT state, assigned_to, held_until FROM error_records')).one() == (
+            None, None, None)
+    assert ensure_schema() == []
+    db.create_all()   # as at the start
+    assert paused_until() is None and pause_notifications(30) == paused_until()

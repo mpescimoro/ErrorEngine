@@ -11,6 +11,7 @@ from models import (db, MonitoredQuery, ErrorRecord, QueryLog, EmailLog,
 from encryption import PREFIX, decrypt
 from routing_service import get_operators_list
 from utils import local_day_start_utc, server_log_info
+from notification_pause import paused_until
 from email_service import email_service, subject_warning
 from validators import write_statement_keyword, validate_email_list
 
@@ -29,6 +30,7 @@ def inject_global_data():
     return {
         'error_count': summary['active'],
         'errors_signature': summary['signature'],
+        'pause_until': paused_until(),
         'driver_labels': DRIVER_LABELS,
     }
 
@@ -347,19 +349,41 @@ def warn_about_the_subject(query):
         flash(warning, 'warning')
 
 
+# Rows in a page of the errors list and of the run log
+PER_PAGE = 50
+
+
 def channel_names() -> dict:
     """{id: name} of every channel: read once for a page, not once per error."""
     return dict(db.session.query(NotificationChannel.id, NotificationChannel.name))
 
 
-def active_error_counts() -> dict:
-    """Active errors per query: {query_id: count}, with a single query."""
+def active_error_counts(state=None) -> dict:
+    """Active errors per query, {query_id: count}, with a single query: the ignored ones apart, or those in state."""
+    in_view = ErrorRecord.state == state if state else ErrorRecord.listed()
     return dict(
         db.session.query(ErrorRecord.query_id, db.func.count(ErrorRecord.id))
-        .filter(ErrorRecord.resolved_at.is_(None))
+        .filter(ErrorRecord.resolved_at.is_(None), in_view)
         .group_by(ErrorRecord.query_id)
         .all()
     )
+
+
+def one_page(query, per_page: int = PER_PAGE):
+    """The page of the list asked for with ?page=, kept between the first and the last that exist."""
+    asked = max(request.args.get('page', 1, type=int), 1)
+    page = query.paginate(page=asked, per_page=per_page, error_out=False)
+    if page.pages and asked > page.pages:
+        page = query.paginate(page=page.pages, per_page=per_page, error_out=False)
+    return page
+
+
+@main_bp.app_template_global()
+def page_url(number: int) -> str:
+    """The address of another page of the same list, with the filters of this one."""
+    args = request.args.to_dict()
+    args['page'] = number
+    return url_for(request.endpoint, **args)
 
 
 def problems_first(queries, error_counts: dict) -> list:
@@ -404,7 +428,7 @@ def dashboard():
         'total_queries': len(queries),
         'active_queries': sum(1 for q in queries if q.is_active),
         'total_active_errors': sum(error_counts.values()),
-        'undelivered_errors': ErrorRecord.query.filter(ErrorRecord.resolved_at.is_(None),
+        'undelivered_errors': ErrorRecord.query.filter(ErrorRecord.resolved_at.is_(None), ErrorRecord.listed(),
                                                        ErrorRecord.undeliverable.isnot(None)).count(),
         'emails_sent_today': emails_today.get('sent', 0),
         'emails_failed_today': emails_today.get('failed', 0),
@@ -467,9 +491,12 @@ def query_create():
 def query_detail(query_id):
     query = db.get_or_404(MonitoredQuery, query_id)
 
-    # Active errors: the real count, the 10 most recent on the page (the rest on the Errors page)
-    active = ErrorRecord.query.filter_by(query_id=query_id, resolved_at=None)
+    # Active errors: the real count, the 10 most recent on the page (the rest on the Errors page);
+    # the ignored ones only counted, with a link to their view
+    errors_of_query = ErrorRecord.query.filter_by(query_id=query_id, resolved_at=None)
+    active = errors_of_query.filter(ErrorRecord.listed())
     active_error_count = active.count()
+    ignored_count = errors_of_query.filter(ErrorRecord.state == 'ignored').count()
     active_errors = active.order_by(ErrorRecord.first_seen_at.desc()).limit(10).all()
     undelivered_count = active.filter(ErrorRecord.undeliverable.isnot(None)).count()
 
@@ -482,6 +509,7 @@ def query_detail(query_id):
         query=query,
         active_errors=active_errors,
         active_error_count=active_error_count,
+        ignored_count=ignored_count,
         undelivered_count=undelivered_count,
         channel_names=channel_names(),
         recent_logs=recent_logs,
@@ -535,9 +563,15 @@ def query_delete(query_id):
 @main_bp.route('/errors')
 def errors_list():
     query_id = request.args.get('query_id', type=int)
-    delivery = request.args.get('delivery', '')
+    # The errors assigned to someone, or the ignored ones, which the list leaves out
+    state = request.args.get('state', '')
+    if state not in ('assigned', 'ignored'):
+        state = ''
+    # Nothing is sent for the ignored ones: their view has no filter on the notifications
+    delivery = request.args.get('delivery', '') if state != 'ignored' else ''
     
     errors_query = ErrorRecord.query.filter_by(resolved_at=None)
+    errors_query = errors_query.filter_by(state=state) if state else errors_query.filter(ErrorRecord.listed())
     if query_id:
         errors_query = errors_query.filter_by(query_id=query_id)
 
@@ -548,15 +582,14 @@ def errors_list():
     if delivery in ('pending', 'failed'):
         errors_query = errors_query.filter(pending if delivery == 'pending' else failed)
     
-    errors = errors_query.order_by(ErrorRecord.first_seen_at.desc()).all()
+    page = one_page(errors_query.order_by(ErrorRecord.first_seen_at.desc(), ErrorRecord.id.desc()))
 
-    # Active errors per query: {query_id: number of errors}
-    error_counts = dict(
-        db.session.query(ErrorRecord.query_id, db.func.count(ErrorRecord.id))
-        .filter(ErrorRecord.resolved_at.is_(None))
-        .group_by(ErrorRecord.query_id)
-        .all()
-    )
+    # Errors per query in this view, {query_id: number of errors}, and how many in each view, of the query chosen
+    error_counts = active_error_counts(state or None)
+    state_counts = {}
+    for name in ('', 'assigned', 'ignored'):
+        counts = error_counts if name == state else active_error_counts(name or None)
+        state_counts[name] = counts.get(query_id, 0) if query_id else sum(counts.values())
 
     # The filter lists only queries with active errors. The selected one stays
     # in the list even if its errors have all been resolved in the meantime.
@@ -568,10 +601,11 @@ def errors_list():
         .order_by(MonitoredQuery.name).all()
     ) if filter_ids else []
 
-    return render_template('errors_list.html', errors=errors, queries=queries,
+    return render_template('errors_list.html', errors=page.items, pagination=page, queries=queries,
                           selected_query_id=query_id, error_counts=error_counts,
                           total_errors=sum(error_counts.values()),
                           delivery_counts=delivery_counts, selected_delivery=delivery,
+                          state_counts=state_counts, selected_state=state,
                           channel_names=channel_names())
 
 
@@ -583,10 +617,10 @@ def logs_list():
     if query_id:
         logs_query = logs_query.filter_by(query_id=query_id)
     
-    logs = logs_query.order_by(QueryLog.executed_at.desc()).limit(100).all()
+    page = one_page(logs_query.order_by(QueryLog.executed_at.desc(), QueryLog.id.desc()))
     queries = MonitoredQuery.query.order_by(MonitoredQuery.name).all()
     
-    return render_template('logs_list.html', logs=logs, queries=queries, 
+    return render_template('logs_list.html', logs=page.items, pagination=page, queries=queries,
                           selected_query_id=query_id)
 
 

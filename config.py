@@ -48,6 +48,15 @@ def flag(name: str) -> bool:
     raise SystemExit(1)
 
 
+def _csv_separator() -> str:
+    """, or ; from .env, the comma when the setting is empty. Anything else stops ErrorEngine, as whole_number does."""
+    text = (os.environ.get('CSV_SEPARATOR') or '').strip()
+    if text in ('', ',', ';'):
+        return text or ','
+    logger.critical(f"CSV_SEPARATOR={text} in .env is not , or ;: correct it, or remove it for the default (,)")
+    raise SystemExit(1)
+
+
 def _mail_security():
     """starttls, ssl or none; without MAIL_SECURITY, ssl on port 465 and starttls on the others."""
     value = (os.environ.get('MAIL_SECURITY') or '').strip().lower()
@@ -141,6 +150,8 @@ class Config:
     # Most errors listed in a notification email: beyond, it lists the first ones and says how many
     # more there are (thousands of rows made emails that servers refuse and mail programs cut); 0 = all
     EMAIL_MAX_ROWS = whole_number('EMAIL_MAX_ROWS', 100, between=(0, 100000))
+    # Between the values of the CSV attached beyond them: ; for Excel where the comma is the decimal separator
+    CSV_SEPARATOR = _csv_separator()
 
 
     # Scheduler: the Flask-APScheduler REST API stays off (it would allow registering

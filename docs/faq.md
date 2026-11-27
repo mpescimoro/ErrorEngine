@@ -38,6 +38,14 @@ An address the mail server refuses counts as not reached too, with the server's 
 
 It closes the error by hand. If the query still returns that row, at the next check it comes back as a new error and is notified again: resolve an error when its cause is fixed. Errors the query no longer returns are resolved by themselves.
 
+### What do Assign and Ignore do?
+
+**Assign** records who is on an error: the name shows in the errors list and on the page of the query, and the reminders stop. **Ignore** takes an error out of the list and of the counts, and nothing is sent for it: the errors page shows the ignored ones in a view of their own, where **Stop ignoring** brings one back. Both last as long as the error: if it resolves and comes back, it is a new error, and is notified. Scripts set them through the [API](api-reference.md).
+
+### How do I stop the notifications during planned work?
+
+With **Pause notifications** on the Dashboard, for up to 3 days, or through the [API](api-reference.md), which a script can call around the work. The checks go on, and nothing is sent: neither the notifications of the errors found, which show **Not sent: notifications paused**, nor the reminders, nor the alerts about the sources. A bar on every page says until when, with **Resume now**. At the end the errors still open go out, within a minute; those notified before the pause are not sent again, and those resolved during it are not sent. A source that still fails after the pause gets its alert at the next failure; one alerted as failing that works again during the pause gets its recovery alert at the first check after it.
+
 ---
 
 ## Troubleshooting
@@ -92,7 +100,7 @@ Stop ErrorEngine and copy the database (with the `-wal` and `-shm` files if pres
 
 ### Can I export the errors?
 
-The active ones, through the API: `GET /api/errors`, see [API](api-reference.md). Exporting the resolved ones is planned, see the [roadmap](../ROADMAP.md).
+The active ones, through the API: `GET /api/errors`, see [API](api-reference.md). A notification email with more errors than `EMAIL_MAX_ROWS` attaches them all in a CSV file. Exporting the resolved ones is planned, see the [roadmap](../ROADMAP.md).
 
 ---
 

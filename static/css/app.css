@@ -128,6 +128,8 @@ h4 { font-size: 1.125rem; }
 
 .main-content {
     flex: 1;
+    /* Not as wide as the widest table: the tables scroll in their box, and the page stays as wide as the screen */
+    min-width: 0;
     margin-left: var(--sidebar-width);
     padding: var(--space-xl);
     transition: margin-left var(--transition-base);
@@ -137,6 +139,8 @@ h4 { font-size: 1.125rem; }
     .main-content {
         margin-left: 0;
         padding: var(--space-lg);
+        /* The end of the page can scroll above the menu button, which stays on the screen */
+        padding-bottom: calc(50px + 2 * var(--space-lg));
     }
 }
 
@@ -553,6 +557,7 @@ h4 { font-size: 1.125rem; }
 .form-control {
     display: block;
     width: 100%;
+    max-width: 100%;
     padding: 0.625rem 0.875rem;
     font-family: inherit;
     font-size: 0.9375rem;
@@ -784,6 +789,70 @@ textarea.form-control {
 .table-container {
     overflow-x: auto;
     border-radius: var(--radius-lg);
+}
+
+.error-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: var(--space-xs);
+    margin-top: var(--space-xs);
+}
+
+/* The name of who is on an error wraps, instead of widening the table; in the narrow main column of a query page,
+   the state of its notification too */
+.badge.error-state,
+.grid-main-side .badge.badge-wrap {
+    display: inline-block;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.3;
+}
+
+.error-more {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0 var(--space-sm);
+    font-size: 0.8125rem;
+}
+
+.error-more button {
+    padding: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    color: var(--color-text-muted);
+    cursor: pointer;
+}
+
+.error-more button:hover {
+    color: var(--color-primary);
+    text-decoration: underline;
+}
+
+.pause-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-sm) var(--space-md);
+    margin-bottom: var(--space-lg);
+    padding: var(--space-sm) var(--space-md);
+    border-radius: var(--radius-lg);
+    background: var(--color-warning-bg);
+    color: #92400e;
+}
+
+.pause-bar-text {
+    flex: 1 1 16rem;
+}
+
+.pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-md);
+    margin-top: var(--space-md);
 }
 
 .table {
@@ -1196,6 +1265,8 @@ a.badge:hover {
    Utility Classes
    ============================================ */
 .flex { display: flex; }
+.flex-wrap { flex-wrap: wrap; }
+.flex-1 { flex: 1 1 auto; min-width: 0; }
 .items-center { align-items: center; }
 .items-start { align-items: flex-start; }
 .justify-center { justify-content: center; }
@@ -1206,19 +1277,29 @@ a.badge:hover {
 .gap-lg { gap: var(--space-lg); }
 
 .grid { display: grid; }
-.grid-cols-2 { grid-template-columns: repeat(2, 1fr); }
-.grid-cols-3 { grid-template-columns: repeat(3, 1fr); }
-.grid-cols-4 { grid-template-columns: repeat(4, 1fr); }
+/* Columns of the same width, which a long name does not widen beyond the screen */
+.grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 
+/* The main column and the side one of the forms, of a query and of the statistics: a wide table in the main one
+   scrolls in its box instead of pushing the side one out of the screen */
+.grid-main-side {
+    grid-template-columns: minmax(0, 2fr) 1fr;
+    gap: var(--space-xl);
+    align-items: start;
+}
+
+/* On phones one column, which a wide table or a long word does not widen beyond the screen */
 @media (max-width: 767.98px) {
-    .grid-cols-2, .grid-cols-3, .grid-cols-4 {
-        grid-template-columns: 1fr;
+    .grid-cols-2, .grid-cols-3, .grid-cols-4, .grid-main-side {
+        grid-template-columns: minmax(0, 1fr);
     }
 }
 
 @media (min-width: 768px) and (max-width: 991.98px) {
     .grid-cols-3, .grid-cols-4 {
-        grid-template-columns: repeat(2, 1fr);
+        grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 }
 
@@ -1332,6 +1413,13 @@ a.badge:hover {
     gap: var(--space-md);
     margin-bottom: var(--space-xl);
     flex-wrap: wrap;
+}
+
+/* Filters and buttons no wider than the page: a menu with a long query name stays inside the screen */
+.page-header > form,
+.page-header > div {
+    min-width: 0;
+    max-width: 100%;
 }
 
 .page-title {

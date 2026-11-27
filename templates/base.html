@@ -146,6 +146,19 @@
                     {% endfor %}
                 {% endif %}
             {% endwith %}
+
+            {% if pause_until %}
+            <div class="pause-bar" role="status">
+                <div class="pause-bar-text">
+                    <i class="bi bi-pause-circle-fill"></i>
+                    Notifications paused until <strong>{{ pause_until|localtime('%d/%m %H:%M') }}</strong>:
+                    the checks go on, and what they find is sent at the end, if still open.
+                </div>
+                <button type="button" class="btn btn-sm btn-secondary" onclick="notificationPause.resume()">
+                    <i class="bi bi-play-fill"></i> Resume now
+                </button>
+            </div>
+            {% endif %}
             
             {% block content %}{% endblock %}
         </main>

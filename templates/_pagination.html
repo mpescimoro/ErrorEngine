@@ -1,0 +1,18 @@
+{# Links to the other pages of a list, with the filters of this one: only when there is more than one page #}
+{% macro page_links(pagination) %}
+{% if pagination.pages > 1 %}
+<nav class="pagination" aria-label="Pages">
+    {% if pagination.has_prev %}
+    <a class="btn btn-sm btn-secondary" href="{{ page_url(pagination.prev_num) }}" rel="prev">
+        <i class="bi bi-chevron-left"></i> Previous
+    </a>
+    {% endif %}
+    <span class="text-muted">Page {{ pagination.page }} of {{ pagination.pages }}</span>
+    {% if pagination.has_next %}
+    <a class="btn btn-sm btn-secondary" href="{{ page_url(pagination.next_num) }}" rel="next">
+        Next <i class="bi bi-chevron-right"></i>
+    </a>
+    {% endif %}
+</nav>
+{% endif %}
+{% endmacro %}

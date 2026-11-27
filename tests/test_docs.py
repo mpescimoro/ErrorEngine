@@ -123,7 +123,7 @@ def test_docs_use_the_interface_labels():
         for label in re.findall(r'\*\*([A-Z][A-Za-z ]+?)\*\*', page.read_text(encoding='utf-8')):
             if label in ('Required', 'Log', 'Network access', 'External monitoring', 'Backup',
                          'Requirements', 'Windows', 'Linux', 'Databases and APIs', 'Notifications',
-                         'Conditional routing', 'Scheduling', 'Reliable delivery', 'Self', 'Self-hosted',
+                         'Conditional routing', 'Triage', 'Scheduling', 'Reliable delivery', 'Self', 'Self-hosted',
                          'Windows service or scheduled task', 'Java', 'JPype', 'jt400', 'ibm_db', 'pyodbc'):
                 continue
             assert label in templates, f'{page.name}: **{label}**'

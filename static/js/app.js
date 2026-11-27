@@ -457,6 +457,60 @@ const errorManager = {
         } catch (error) {
             toast.error(`Error: ${error.message}`);
         }
+    },
+
+    // Who is on it: the name typed, shown in the lists; no more reminders for the error
+    async assign(errorId, current = '') {
+        const name = prompt('Who is on it?', current);
+        if (name === null) return;
+        if (!name.trim()) {
+            toast.error('Type the name of who is on it');
+            return;
+        }
+        await this.setState(errorId, 'assigned', name.trim());
+    },
+
+    async ignore(errorId) {
+        if (!confirm('Ignore this error?\n\nIt leaves the list and gets no notifications or reminders. If it '
+                     + 'resolves and comes back, it is a new error and is notified.')) return;
+        await this.setState(errorId, 'ignored');
+    },
+
+    // state null: back to an open error
+    async setState(errorId, state, assignedTo = null) {
+        try {
+            await api.post(`/api/errors/${errorId}/state`, {state, assigned_to: assignedTo});
+            toast.success(state === 'ignored' ? 'Error ignored' : state === 'assigned' ? `Assigned to ${assignedTo}`
+                          : 'Error open again');
+            setTimeout(() => location.reload(), 500);
+        } catch (error) {
+            toast.error(`Error: ${error.message}`);
+        }
+    }
+};
+
+// --- Pause of the notifications ---
+
+const notificationPause = {
+    async start(minutes) {
+        try {
+            await api.post('/api/notifications/pause', {minutes});
+            modal.close();
+            toast.success('Notifications paused');
+            setTimeout(() => location.reload(), 500);
+        } catch (error) {
+            toast.error(`Error: ${error.message}`);
+        }
+    },
+
+    async resume() {
+        try {
+            await api.delete('/api/notifications/pause');
+            toast.success('Notifications resumed: what the pause held goes out within a minute');
+            setTimeout(() => location.reload(), 800);
+        } catch (error) {
+            toast.error(`Error: ${error.message}`);
+        }
     }
 };
 

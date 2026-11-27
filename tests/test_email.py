@@ -588,6 +588,13 @@ def send_sample(client, **form):
 class TestSampleEmail:
     """The email of the query form, before saving: its subject, template and sample rows."""
 
+    def test_past_the_limit_the_csv_too(self, app, client):
+        app.config['EMAIL_MAX_ROWS'] = 1
+        answer, deliver = send_sample(client, columns=['ID'], rows=[{'ID': 'R-1'}, {'ID': 'R-2'}])
+        assert answer.get_json()['success'] is True
+        name, data = deliver.call_args.kwargs['attachment']
+        assert name == 'Draft.csv' and data.decode('utf-8-sig').splitlines() == ['ID', 'R-1', 'R-2']
+
     def test_what_the_form_shows(self, app, client):
         answer, deliver = send_sample(
             client, email_subject='{query_name}: {error_count} rows',

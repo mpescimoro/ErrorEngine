@@ -4,11 +4,6 @@ Planned work, in order. Released versions are in [CHANGELOG.md](CHANGELOG.md).
 
 ## Next
 
-- [ ] The rows past the limit of a notification in a CSV attachment; the rows in the plain-text part of the emails too, which today has only a summary
-- [ ] Errors list and logs split into pages
-- [ ] Make all pages usable on phone screens.
-- [ ] Error states: Ignored (out of the errors list, in a menu of its own) and Assigned (someone is on it); both stop the reminders, and an error that resolves and comes back is a normal error again
-- [ ] **Pause notifications** for planned work, from the Dashboard and the API: for a set time, up to 3 days, with a bar on every page while it lasts; the queries keep running and each error records that it was not sent; at the end, what is still open is sent, unless it was notified before the pause
 - [ ] Routing rules for channels too; the rule tester in the query form (the API has it already)
 - [ ] Slack integration
 - [ ] Run now and Test do not hold a server thread

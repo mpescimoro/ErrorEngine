@@ -4,6 +4,9 @@ Microsoft Graph. With neither configured, email is off and the notifications go
 only to the channels.
 Supports conditional routing and reminders.
 """
+import base64
+import csv
+import io
 import re
 import smtplib
 import ssl
@@ -11,6 +14,9 @@ import logging
 import os
 import threading
 import time
+import unicodedata
+from email import encoders
+from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formatdate, make_msgid, parseaddr
@@ -38,6 +44,73 @@ _SUBJECT_FIELD_RE = re.compile(r'\{([^{}]*)\}')
 
 # The SMTP connection shared by the emails of a check (see EmailService.batch), per thread
 _batch = threading.local()
+
+# The largest CSV attached: Microsoft 365 takes emails up to 4 MB, and an attachment grows by a third on the way
+CSV_MAX_BYTES = 2 * 1024 * 1024
+# A text that starts so is a formula for spreadsheet programs, which would run it when the file is opened
+FORMULA_START = ('=', '+', '-', '@', '\t', '\r')
+# A decimal number as the saved data has it, 1.500 or -0.25
+DECIMAL = re.compile(r'-?\d+\.\d+')
+
+
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+        return True
+    except ValueError:
+        return False
+
+
+def csv_cell(value, separator: str = ',') -> str:
+    """
+    A value for the CSV: empty for none, a quote in front of a text that would be run as a formula. With ; the
+    decimal numbers get the comma: Excel set for a comma decimal separator reads 1.500 as 1500, 1.5 as a text.
+    """
+    if value is None:
+        return ''
+    text = str(value)
+    if separator == ';' and DECIMAL.fullmatch(text):
+        return text.replace('.', ',')
+    if isinstance(value, str) and text.startswith(FORMULA_START) and not _is_number(text):
+        return "'" + text
+    return text
+
+
+def errors_csv(errors: list, columns: list, separator: str) -> bytes:
+    """The errors as a CSV file, in UTF-8 with the mark that tells Excel so (the accents stay right)."""
+    out = io.StringIO()
+    writer = csv.writer(out, delimiter=separator)
+    writer.writerow([csv_cell(column, separator) for column in columns])
+    writer.writerows([csv_cell(row.get(column), separator) for column in columns] for row in errors)
+    return out.getvalue().encode('utf-8-sig')
+
+
+def attachment_name(query_name: str) -> str:
+    """The name of the CSV, from that of the query, in the characters that every mail program keeps (à as a)."""
+    plain = unicodedata.normalize('NFKD', query_name).encode('ascii', 'ignore').decode('ascii')
+    return (re.sub(r'[^A-Za-z0-9_]+', '-', plain).strip('-') or 'errors') + '.csv'
+
+
+def notification_text(query, errors: list, listed: list, columns: list, email_type: str, attachment) -> str:
+    """The plain-text part, for mail programs that show only text: the rows of the HTML, one line each."""
+    reminder = email_type == 'reminder'
+    lines = [f"{'[REMINDER] ' if reminder else ''}Errors detected - {query.name}", '',
+             f"Query: {query.name}",
+             f"Description: {query.description or 'N/A'}",
+             f"Check time: {format_local_now()}",
+             f"{'Errors still active (REMINDER)' if reminder else 'New errors'}: {len(errors)}", '']
+    if reminder:
+        lines += ['⚠️ This is a reminder - these errors have not been resolved yet.', '']
+    lines += [' | '.join(f"{column}: {'—' if row.get(column) is None else row.get(column)}" for column in columns)
+              for row in listed]
+    not_listed = len(errors) - len(listed)
+    if not_listed and attachment:
+        lines += ['', f"+ {not_listed} more not listed here: all {len(errors)} are in the attached file "
+                      f"{attachment[0]}, and on the dashboard."]
+    elif not_listed:
+        lines += ['', f"+ {not_listed} more not listed here, too many for an attachment: "
+                      "the dashboard shows them all."]
+    return '\n'.join(lines) + '\n'
 
 
 def format_subject(subject: str, **values) -> str:
@@ -241,8 +314,8 @@ class GraphMailer:
             self._expires_at = time.monotonic() + max(int(data.get('expires_in') or 3600) - 300, 60)
             return self._token
 
-    def send(self, config, sender: str, recipients: list, subject: str, html: str):
-        """Sends one email; raises EmailUnavailable when no email can go out now."""
+    def send(self, config, sender: str, recipients: list, subject: str, html: str, attachment=None):
+        """Sends one email, with attachment (name, bytes) if any; raises EmailUnavailable when none can go out now."""
         timeout = config.get('MAIL_TIMEOUT_SECONDS', 30)
         credentials = (config['M365_TENANT_ID'], config['M365_CLIENT_ID'], config['M365_CLIENT_SECRET'], timeout)
         payload = {'message': {
@@ -250,6 +323,10 @@ class GraphMailer:
             'body': {'contentType': 'HTML', 'content': html},
             'toRecipients': [{'emailAddress': {'address': address}} for address in recipients],
         }}
+        if attachment:
+            payload['message']['attachments'] = [{
+                '@odata.type': '#microsoft.graph.fileAttachment', 'name': attachment[0], 'contentType': 'text/csv',
+                'contentBytes': base64.b64encode(attachment[1]).decode('ascii')}]
         url = self.SEND_URL.format(sender=quote(sender, safe='@'))
         for attempt in (1, 2):
             token = self._access_token(*credentials, renew=attempt == 2)
@@ -386,11 +463,11 @@ class EmailService:
             logger.debug(f"SMTP connection error: {e}")
             raise EmailUnavailable(str(e)) from e
 
-    def _deliver(self, recipients: list, subject: str, html: str, text: str = None) -> dict:
+    def _deliver(self, recipients: list, subject: str, html: str, text: str = None, attachment=None) -> dict:
         """
-        Sends one email with the configured method. Raises EmailOff, EmailUnavailable (nothing
-        can go out now), RecipientsRefused (every address refused) or another error for this
-        email only. Returns the addresses the SMTP server refused while it took the others:
+        Sends one email with the configured method, with attachment (name, bytes) if any. Raises EmailOff,
+        EmailUnavailable (nothing can go out now), RecipientsRefused (every address refused) or another error
+        for this email only. Returns the addresses the SMTP server refused while it took the others:
         {address: reason}. Microsoft 365 does not say it here: its refusals come back later as
         emails to the sender.
         """
@@ -401,19 +478,28 @@ class EmailService:
         if not sender:
             raise EmailUnavailable('MAIL_DEFAULT_SENDER is missing: the address the emails are sent from')
         if method == 'microsoft365':
-            graph_mailer.send(current_app.config, sender, recipients, subject, html)
+            graph_mailer.send(current_app.config, sender, recipients, subject, html, attachment)
             return {}
 
-        message = MIMEMultipart('alternative')
+        body = MIMEMultipart('alternative')
+        if text:
+            body.attach(MIMEText(text, 'plain'))
+        body.attach(MIMEText(html, 'html'))
+        message = body
+        if attachment:
+            message = MIMEMultipart('mixed')
+            message.attach(body)
+            csv_part = MIMEBase('text', 'csv', charset='utf-8')
+            csv_part.set_payload(attachment[1])
+            encoders.encode_base64(csv_part)
+            csv_part.add_header('Content-Disposition', 'attachment', filename=attachment[0])
+            message.attach(csv_part)
         message['Subject'] = subject
         message['From'] = sender
         message['To'] = ', '.join(recipients)
         # Not every server adds them, and spam filters count emails without them against the sender
         message['Date'] = formatdate(localtime=True)
         message['Message-ID'] = make_msgid(domain=parseaddr(sender)[1].rpartition('@')[2] or None)
-        if text:
-            message.attach(MIMEText(text, 'plain'))
-        message.attach(MIMEText(html, 'html'))
 
         if not getattr(_batch, 'active', False):
             # A single email: its own connection, always closed, even on errors
@@ -468,12 +554,18 @@ class EmailService:
     def render_notification(self, query, errors: list, columns: list, email_type: str = 'new_errors',
                             strict: bool = False) -> tuple:
         """
-        HTML and plain text of a notification email. A custom template that cannot be used
+        HTML, plain text and attachment of a notification email. A custom template that cannot be used
         gives way to the default one, so the notification still goes out; strict raises instead.
-        Past EMAIL_MAX_ROWS errors the email lists the first ones and says how many more there are.
+        Past EMAIL_MAX_ROWS errors the email lists the first ones, says how many more there are and
+        attaches them all as CSV, (name, bytes); None when it lists them all, or the file would be too large.
         """
         limit = current_app.config.get('EMAIL_MAX_ROWS', 100)
         listed = errors[:limit] if limit else errors
+        attachment = None
+        if len(listed) < len(errors):
+            data = errors_csv(errors, columns, current_app.config.get('CSV_SEPARATOR', ','))
+            if len(data) <= CSV_MAX_BYTES:
+                attachment = (attachment_name(query.name), data)
         context = dict(
             query_name=query.name,
             query_description=query.description,
@@ -481,6 +573,7 @@ class EmailService:
             error_count=len(errors),
             errors=listed,
             errors_not_listed=len(errors) - len(listed),
+            attachment=attachment[0] if attachment else '',
             columns=columns,
             email_type=email_type
         )
@@ -492,20 +585,7 @@ class EmailService:
             logger.warning(f"Email template not usable for {query.name} ({template_error}): using the default")
             html_content = render_email_template(load_email_template('default'), **context)
 
-        error_type_text = 'Errors still active (REMINDER)' if email_type == 'reminder' else 'New errors'
-        plain_text = f"""
-{'[REMINDER] ' if email_type == 'reminder' else ''}Errors detected - {query.name}
-
-Query: {query.name}
-Description: {query.description or 'N/A'}
-Check time: {format_local_now()}
-{error_type_text}: {len(errors)}
-
-{'⚠️ This is a reminder - these errors have not been resolved yet.' if email_type == 'reminder' else ''}
-
-Open the dashboard to see the details.
-            """
-        return html_content, plain_text
+        return html_content, notification_text(query, errors, listed, columns, email_type, attachment), attachment
 
     def send_error_notification(self, query, errors: list, columns: list,
                                 recipients_override: list = None,
@@ -543,8 +623,8 @@ Open the dashboard to see the details.
         subject = notification_subject(query, len(errors), email_type)
 
         try:
-            html_content, plain_text = self.render_notification(query, errors, columns, email_type)
-            refused = self._deliver(recipients, subject, html_content, plain_text)
+            html_content, plain_text, attachment = self.render_notification(query, errors, columns, email_type)
+            refused = self._deliver(recipients, subject, html_content, plain_text, attachment=attachment)
             reached = [r for r in recipients if r not in refused]
 
             email_log = EmailLog(
@@ -606,14 +686,14 @@ Open the dashboard to see the details.
         if not self.is_enabled():
             return {'success': False, 'message': EMAIL_OFF_MESSAGE}
         try:
-            html_content, plain_text = self.render_notification(query, errors, columns, strict=True)
+            html_content, plain_text, attachment = self.render_notification(query, errors, columns, strict=True)
         except Exception as e:
             message = (f"The email template cannot be used: {str(e).rstrip('.')}. "
                        "Until it is fixed, the notifications go out with the default template.")
             return {'success': False, 'message': message}
         try:
             refused = self._deliver(recipients, '[Sample] ' + notification_subject(query, len(errors)),
-                                    html_content, plain_text)
+                                    html_content, plain_text, attachment=attachment)
         except Exception as e:
             return {'success': False, 'message': redact_secrets(str(e))}
         reached = [r for r in recipients if r not in refused]

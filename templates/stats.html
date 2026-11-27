@@ -9,7 +9,7 @@
         <i class="bi bi-graph-up"></i>
         Statistics
     </h1>
-    <div class="flex items-center gap-sm">
+    <div class="flex flex-wrap items-center gap-sm">
         <select id="queryFilter" class="form-control form-select" style="width: auto;" aria-label="Query"
                 onchange="statsPage.selectQuery(this.value)">
             <option value="">All queries</option>
@@ -98,7 +98,7 @@
 </div>
 
 <!-- Chart + Top Queries -->
-<div class="grid" style="grid-template-columns: 2fr 1fr; gap: var(--space-xl); align-items: start;">
+<div class="grid grid-main-side">
     <!-- Timeline Chart -->
     <div class="card">
         <div class="card-header">
@@ -273,13 +273,13 @@ var statsPage = {
             if (maxCount < 1) maxCount = 1;
             var chartHeight = 220;
 
-            // Smart label interval
-            var showEvery = data.length > 28 ? 4 : (data.length > 14 ? 2 : 1);
+            // A date every so many bars, as many as the width holds without overlapping (about 34 px each)
+            var showEvery = Math.max(1, Math.ceil(data.length * 34 / Math.max(container.clientWidth - 28, 1)));
 
             var barsHtml = '';
             data.forEach(function(d, i) {
                 var barHeight = Math.max(Math.round((d.count / maxCount) * chartHeight), d.count > 0 ? 4 : 0);
-                var showLabel = (i % showEvery === 0) || (i === data.length - 1);
+                var showLabel = (data.length - 1 - i) % showEvery === 0;   // today always
                 var countLabel = d.count > 0
                     ? '<span style="font-size: 0.7rem; color: var(--color-text-muted); margin-bottom: 2px;">' + d.count + '</span>'
                     : '';

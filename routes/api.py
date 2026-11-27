@@ -18,7 +18,9 @@ from routing_service import apply_routing_rules, get_routing_summary
 from data_sources import test_query_source
 from validators import (validate_email, validate_email_list, validate_routing_rule, sanitize_string,
                         write_statement_keyword)
-from utils import (get_utc_now, get_local_now, format_local, local_day_start_utc, local_to_utc, redact_secrets)
+from utils import (get_utc_now, get_local_now, format_local, local_day_start_utc, local_to_utc, redact_secrets,
+                   utc_iso)
+from notification_pause import MAX_PAUSE_MINUTES, paused_until, pause_notifications, resume_notifications
 from version import __version__
 
 
@@ -260,11 +262,18 @@ def api_test_routing(query_id):
 
 # --- Errors ---
 
+# The states an error can be put in, from its page or by a script; null takes it back to an open error
+ERROR_STATES = ('ignored', 'assigned')
+
+
 @api_bp.route('/errors', methods=['GET'])
 def api_errors_list():
+    """Active errors, the ignored ones apart (?state=ignored lists them, ?state=assigned the assigned ones)."""
     query_id = request.args.get('query_id', type=int)
-    errors = monitor_service.get_active_errors(query_id)
-    return jsonify(errors)
+    state = request.args.get('state') or None
+    if state not in (None, *ERROR_STATES):
+        abort(400, 'state: ignored or assigned')
+    return jsonify(monitor_service.get_active_errors(query_id, state=state))
 
 
 @api_bp.route('/errors/summary', methods=['GET'])
@@ -286,6 +295,57 @@ def api_resolve_error(error_id):
         'id': error.id,
         'resolved_at': error.resolved_at.isoformat()
     })
+
+
+@api_bp.route('/errors/<int:error_id>/state', methods=['POST'])
+def api_error_state(error_id):
+    """Ignored, assigned to someone, or back to an open error: {"state": ..., "assigned_to": "name"}."""
+    error = db.get_or_404(ErrorRecord, error_id)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or 'state' not in data or data['state'] not in (*ERROR_STATES, None):
+        abort(400, 'state: ignored, assigned or null')
+    if error.resolved_at is not None:
+        abort(400, 'The error is resolved: it has no state to change')
+    name = data.get('assigned_to')
+    if data['state'] == 'assigned' and not (isinstance(name, str) and 0 < len(name.strip()) <= 100):
+        abort(400, 'assigned_to: the name of who is on it, up to 100 characters')
+    error.state = data['state']
+    error.assigned_to = name.strip() if data['state'] == 'assigned' else None
+    error.state_changed_at = get_utc_now()
+    db.session.commit()
+    return jsonify({'id': error.id, 'state': error.state, 'assigned_to': error.assigned_to,
+                    'state_changed_at': utc_iso(error.state_changed_at)})
+
+
+# --- Pause of the notifications, for planned work ---
+
+def pause_answer():
+    until = paused_until()
+    return jsonify({'paused': until is not None, 'until': utc_iso(until) if until else None})
+
+
+@api_bp.route('/notifications/pause', methods=['GET'])
+def api_get_pause():
+    """Whether the notifications are paused, and until when."""
+    return pause_answer()
+
+
+@api_bp.route('/notifications/pause', methods=['POST'])
+def api_pause_notifications():
+    """Starts the pause, or sets a new end, from now: {"minutes": N}."""
+    data = request.get_json(silent=True)
+    minutes = data.get('minutes') if isinstance(data, dict) else None
+    if isinstance(minutes, bool) or not isinstance(minutes, int) or not 1 <= minutes <= MAX_PAUSE_MINUTES:
+        abort(400, f'minutes: a whole number from 1 to {MAX_PAUSE_MINUTES}, 3 days')
+    pause_notifications(minutes)
+    return pause_answer()
+
+
+@api_bp.route('/notifications/pause', methods=['DELETE'])
+def api_resume_notifications():
+    """Ends the pause now: what it held goes out at the next round of the scheduler, within a minute."""
+    resume_notifications()
+    return pause_answer()
 
 
 # --- Database connections ---
@@ -441,7 +501,7 @@ def api_stats_overview():
     else:
         trend_percent = 100 if errors_period > 0 else 0
     
-    errors_active = count_errors(ErrorRecord.resolved_at.is_(None))
+    errors_active = count_errors(ErrorRecord.resolved_at.is_(None), ErrorRecord.listed())
     
     # Of the errors resolved in the last 30 days, computed by the database (julianday, in days): reading them
     # one by one took seconds with some months of errors
@@ -540,7 +600,8 @@ def api_stats_by_query():
     
     active_errors = ErrorRecord.query.filter(
         ErrorRecord.query_id == query_id,
-        ErrorRecord.resolved_at == None
+        ErrorRecord.resolved_at.is_(None),
+        ErrorRecord.listed()
     ).count()
     
     daily = errors_per_local_day(days, query_id)
@@ -569,7 +630,7 @@ def api_stats_all_queries():
         func.count(ErrorRecord.id).label('error_count'),
         func.sum(
             db.case(
-                (ErrorRecord.resolved_at == None, 1),
+                (db.and_(ErrorRecord.resolved_at.is_(None), ErrorRecord.listed()), 1),
                 else_=0
             )
         ).label('active_count'),
@@ -658,7 +719,8 @@ def api_stats():
     return jsonify({
         'total_queries': MonitoredQuery.query.count(),
         'active_queries': MonitoredQuery.query.filter_by(is_active=True).count(),
-        'total_active_errors': ErrorRecord.query.filter_by(resolved_at=None).count(),
+        'total_active_errors': ErrorRecord.query.filter(ErrorRecord.resolved_at.is_(None),
+                                                        ErrorRecord.listed()).count(),
         'total_resolved_errors': ErrorRecord.query.filter(ErrorRecord.resolved_at.isnot(None)).count(),
         'total_emails_sent': EmailLog.query.filter_by(status='sent').count(),
         'queries_with_routing': MonitoredQuery.query.filter_by(routing_enabled=True).count()
@@ -759,6 +821,8 @@ def api_health():
                 'queries_waiting': sched['waiting'],
                 'connections_configured': connections_count
             })
+            until = paused_until() if db_ok else None
+            body['notifications_paused_until'] = utc_iso(until) if until else None
         return jsonify(body), 200 if (db_ok and scheduler_ok) else 503
         
     except Exception as e:

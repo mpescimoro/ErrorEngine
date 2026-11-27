@@ -92,6 +92,7 @@ def queries_with_due_retries(exclude=()) -> list:
         .filter(MonitoredQuery.is_active.is_(True),
                 ErrorRecord.resolved_at.is_(None),
                 ErrorRecord.notify_pending.is_(True),
+                ErrorRecord.listed(),
                 db.or_(ErrorRecord.notify_retry_at.is_(None), ErrorRecord.notify_retry_at <= get_utc_now()))
         .distinct()
         .order_by(ErrorRecord.query_id)

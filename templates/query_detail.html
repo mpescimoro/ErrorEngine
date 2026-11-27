@@ -1,12 +1,13 @@
 {% extends "base.html" %}
 {% from "_delivery.html" import delivery_state %}
+{% from "_error_actions.html" import error_state, error_actions %}
 
 {% block title %}{{ query.name }} - ErrorEngine{% endblock %}
 
 {% block content %}
 <!-- Breadcrumb -->
 <nav aria-label="Breadcrumb" class="mb-lg">
-    <ol class="flex items-center gap-sm text-muted" style="list-style: none; padding: 0; margin: 0;">
+    <ol class="flex flex-wrap items-center gap-sm text-muted" style="list-style: none; padding: 0; margin: 0;">
         <li><a href="{{ url_for('main.queries_list') }}" class="text-muted">Queries</a></li>
         <li><i class="bi bi-chevron-right"></i></li>
         <li aria-current="page">{{ query.name }}</li>
@@ -45,7 +46,7 @@
         {% endif %}
     </div>
     
-    <div class="flex items-center gap-sm">
+    <div class="flex flex-wrap items-center gap-sm">
         <button type="button" 
                 class="btn btn-primary"
                 onclick="queryManager.run({{ query.id }})">
@@ -157,7 +158,7 @@
     </div>
 </div>
 
-<div class="grid" style="grid-template-columns: 2fr 1fr; gap: var(--space-xl); align-items: start;">
+<div class="grid grid-main-side">
     <!-- Main Column -->
     <div>
         <!-- Active Errors -->
@@ -172,6 +173,11 @@
                     {% if undelivered_count %}
                     <a href="{{ url_for('main.errors_list', query_id=query.id, delivery='failed') }}" class="text-danger">
                         {{ undelivered_count }} not delivered
+                    </a>
+                    {% endif %}
+                    {% if ignored_count %}
+                    <a href="{{ url_for('main.errors_list', query_id=query.id, state='ignored') }}" class="text-muted">
+                        {{ ignored_count }} ignored
                     </a>
                     {% endif %}
                 </div>
@@ -243,12 +249,8 @@
                                 <span class="badge badge-secondary">{{ error.occurrence_count }}x</span>
                             </td>
                             <td class="text-right">
-                                <button type="button" 
-                                        class="btn btn-sm btn-ghost"
-                                        onclick="errorManager.resolve({{ error.id }})">
-                                    <i class="bi bi-check-lg"></i>
-                                    Resolve
-                                </button>
+                                {{ error_state(error) }}
+                                {{ error_actions(error, 'btn-ghost') }}
                             </td>
                         </tr>
                         {% endfor %}

@@ -27,7 +27,8 @@ Settings live in `.env` in the project folder: copy `.env.example`, which has th
 | `M365_CLIENT_SECRET` | — | Client secret of that application |
 | `MAIL_TIMEOUT_SECONDS` | `30` | Maximum wait for the email server |
 | `MAIL_CA_FILE` | — | CA, or certificate, of an internal SMTP server (PEM). The certificate is always checked |
-| `EMAIL_MAX_ROWS` | `100` | Most errors listed in a notification email. Beyond, the email lists the first ones, in the order of the query, and says how many more there are, all on the dashboard; the subject and the count give the total. `0`: all of them |
+| `EMAIL_MAX_ROWS` | `100` | Most errors listed in a notification email. Beyond, the email lists the first ones, in the order of the query, says how many more there are and attaches them all in a CSV file named after the query, up to 2 MB (beyond, they are all on the dashboard); the subject and the count give the total. `0`: all of them, without the file |
+| `CSV_SEPARATOR` | `,` | Separator of the values in that CSV file: `,` or `;`, what Excel expects where the comma is the decimal separator, as in Italy; with `;` the decimal numbers are written with the comma, `1,5`. A text that starts with `=`, `+`, `-` or `@` gets a `'` in front, so that spreadsheet programs do not run it as a formula |
 | `DB_CONNECT_TIMEOUT_SECONDS` | `15` | Maximum wait to connect to a monitored database |
 | `DB_QUERY_TIMEOUT_SECONDS` | `300` | Maximum duration of a query |
 | `MAX_ROWS` | `10000` | Most rows a query, or an HTTP source, may return. Beyond, the check fails as when the source cannot be read: no error is created or resolved, and the log of the check and the alert of `MONITOR_FAILURE_THRESHOLD` give the reason. `0`: no limit |
